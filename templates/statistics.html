@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}支出统计 - haruka{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+  <div><h1 class="text-xl font-bold">支出统计</h1><p class="text-sm text-gray-500 mt-1">按分类和付款账户查看支出排行。</p></div>
+  <div class="flex rounded border border-gray-200 overflow-hidden bg-white">
+    <a href="/statistics?period=30d" class="text-sm px-3 py-1.5 {% if period == "30d" %}bg-blue-600 text-white{% else %}text-gray-600{% endif %}">近 30 天</a>
+    <a href="/statistics?period=365d" class="text-sm px-3 py-1.5 {% if period == "365d" %}bg-blue-600 text-white{% else %}text-gray-600{% endif %}">近 365 天</a>
+    <a href="/statistics?period=all" class="text-sm px-3 py-1.5 {% if period == "all" %}bg-blue-600 text-white{% else %}text-gray-600{% endif %}">全部</a>
+  </div>
+</div>
+
+<div class="grid grid-cols-3 gap-3 mb-5 text-center">
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">{{ period_label }}总支出</div><div class="font-mono text-red-600 text-lg mt-1">{{ total_expense }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">支出笔数</div><div class="font-mono text-lg mt-1">{{ expense_count }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">平均每笔</div><div class="font-mono text-lg mt-1">{{ average_expense }}</div></div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+  <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <div class="px-4 py-3 border-b border-gray-100"><h2 class="font-medium">支出分类排行</h2></div>
+    {% if category_rankings.is_empty() %}<p class="text-sm text-gray-500 p-4">当前范围内没有支出。</p>{% else %}
+    <div class="divide-y divide-gray-100">{% for row in category_rankings %}<div class="p-4"><div class="flex items-center gap-3"><span class="text-xs text-gray-400 w-5">{{ row.rank }}</span><span class="flex-1 text-sm">{{ row.name }}</span><span class="font-mono text-sm">{{ row.amount }}</span></div><div class="ml-8 mt-2 flex items-center gap-2"><div class="flex-1 h-1.5 bg-gray-100 rounded overflow-hidden"><div class="h-full bg-red-500 rounded" style="width: {{ row.share }}%"></div></div><span class="text-xs text-gray-500 w-24 text-right">{{ row.share }}% · {{ row.count }} 笔</span></div></div>{% endfor %}</div>
+    {% endif %}
+  </section>
+  <section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+    <div class="px-4 py-3 border-b border-gray-100"><h2 class="font-medium">付款账户排行</h2></div>
+    {% if account_rankings.is_empty() %}<p class="text-sm text-gray-500 p-4">当前范围内没有支出。</p>{% else %}
+    <div class="divide-y divide-gray-100">{% for row in account_rankings %}<div class="p-4"><div class="flex items-center gap-3"><span class="text-xs text-gray-400 w-5">{{ row.rank }}</span><span class="flex-1 text-sm">{{ row.name }}</span><span class="font-mono text-sm">{{ row.amount }}</span></div><div class="ml-8 mt-2 flex items-center gap-2"><div class="flex-1 h-1.5 bg-gray-100 rounded overflow-hidden"><div class="h-full bg-blue-500 rounded" style="width: {{ row.share }}%"></div></div><span class="text-xs text-gray-500 w-24 text-right">{{ row.share }}% · {{ row.count }} 笔</span></div></div>{% endfor %}</div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

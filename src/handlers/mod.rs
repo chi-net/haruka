@@ -4,6 +4,7 @@ pub mod bills;
 pub mod dashboard;
 pub mod debts;
 pub mod settings;
+pub mod statistics;
 pub mod subscriptions;
 pub mod transfers;
 

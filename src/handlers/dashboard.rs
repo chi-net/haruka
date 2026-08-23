@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::{Html, Redirect},
 };
-use chrono::{Datelike, Duration, Months, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike};
 use rust_decimal::Decimal;
 use sea_orm::{EntityTrait, QueryOrder};
 use serde::Serialize;
@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use crate::{
     crypto,
-    entity::{account, account_detail, bill, debt_person, debt_record, transfer},
+    entity::{account, account_detail, bill, category, debt_person, debt_record, transfer},
     AppState, SessionDek,
 };
 
@@ -37,6 +37,11 @@ struct AccountSummary {
 
 struct PersonOption {
     id: i64,
+    name: String,
+}
+
+struct CategoryOption {
+    kind: String,
     name: String,
 }
 
@@ -68,7 +73,7 @@ struct Reports {
 }
 
 struct BillValue {
-    date: NaiveDate,
+    happened_at: NaiveDateTime,
     kind: String,
     amount: i64,
     is_food: bool,
@@ -80,6 +85,7 @@ struct DashboardTemplate {
     accounts: Vec<AccountOption>,
     account_summaries: Vec<AccountSummary>,
     people: Vec<PersonOption>,
+    categories: Vec<CategoryOption>,
     activities: Vec<ActivityRow>,
     happened_at: String,
     net_assets: String,
@@ -126,100 +132,51 @@ fn add_value(series: &mut ReportSeries, index: usize, bill: &BillValue) -> Handl
     Ok(())
 }
 
-fn build_reports(today: NaiveDate, bills: &[BillValue]) -> HandlerResult<Reports> {
-    let daily_dates = (0..14)
-        .map(|offset| today - Duration::days(13 - offset))
+fn build_date_series(
+    today: NaiveDate,
+    days: i64,
+    bills: &[BillValue],
+) -> HandlerResult<ReportSeries> {
+    let dates = (0..days)
+        .map(|offset| today - Duration::days(days - 1 - offset))
         .collect::<Vec<_>>();
-    let mut daily = ReportSeries {
-        labels: daily_dates
+    let mut series = ReportSeries {
+        labels: dates
             .iter()
             .map(|date| date.format("%m-%d").to_string())
             .collect(),
-        income: vec![0; daily_dates.len()],
-        expense: vec![0; daily_dates.len()],
+        income: vec![0; dates.len()],
+        expense: vec![0; dates.len()],
     };
-    let daily_indexes: HashMap<NaiveDate, usize> = daily_dates
+    let indexes: HashMap<NaiveDate, usize> = dates
         .iter()
         .enumerate()
         .map(|(index, date)| (*date, index))
         .collect();
-
-    let this_monday = today - Duration::days(today.weekday().num_days_from_monday().into());
-    let weekly_dates = (0..12)
-        .map(|offset| this_monday - Duration::weeks(11 - offset))
-        .collect::<Vec<_>>();
-    let mut weekly = ReportSeries {
-        labels: weekly_dates
-            .iter()
-            .map(|date| date.format("%m-%d").to_string())
-            .collect(),
-        income: vec![0; weekly_dates.len()],
-        expense: vec![0; weekly_dates.len()],
-    };
-    let weekly_indexes: HashMap<NaiveDate, usize> = weekly_dates
-        .iter()
-        .enumerate()
-        .map(|(index, date)| (*date, index))
-        .collect();
-
-    let this_month = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
-        .ok_or_else(|| err500("当前日期无效"))?;
-    let first_month = this_month
-        .checked_sub_months(Months::new(11))
-        .ok_or_else(|| err500("报表日期超出范围"))?;
-    let monthly_dates = (0..12)
-        .map(|offset| {
-            first_month
-                .checked_add_months(Months::new(offset))
-                .ok_or_else(|| err500("报表日期超出范围"))
-        })
-        .collect::<HandlerResult<Vec<_>>>()?;
-    let mut monthly = ReportSeries {
-        labels: monthly_dates
-            .iter()
-            .map(|date| date.format("%Y-%m").to_string())
-            .collect(),
-        income: vec![0; monthly_dates.len()],
-        expense: vec![0; monthly_dates.len()],
-    };
-    let monthly_indexes: HashMap<(i32, u32), usize> = monthly_dates
-        .iter()
-        .enumerate()
-        .map(|(index, date)| ((date.year(), date.month()), index))
-        .collect();
-
-    let yearly_values = ((today.year() - 4)..=today.year()).collect::<Vec<_>>();
-    let mut yearly = ReportSeries {
-        labels: yearly_values.iter().map(i32::to_string).collect(),
-        income: vec![0; yearly_values.len()],
-        expense: vec![0; yearly_values.len()],
-    };
-    let yearly_indexes: HashMap<i32, usize> = yearly_values
-        .iter()
-        .enumerate()
-        .map(|(index, year)| (*year, index))
-        .collect();
-
     for bill in bills {
-        if let Some(index) = daily_indexes.get(&bill.date) {
-            add_value(&mut daily, *index, bill)?;
+        if let Some(index) = indexes.get(&bill.happened_at.date()) {
+            add_value(&mut series, *index, bill)?;
         }
-        let monday = bill.date - Duration::days(bill.date.weekday().num_days_from_monday().into());
-        if let Some(index) = weekly_indexes.get(&monday) {
-            add_value(&mut weekly, *index, bill)?;
-        }
-        if let Some(index) = monthly_indexes.get(&(bill.date.year(), bill.date.month())) {
-            add_value(&mut monthly, *index, bill)?;
-        }
-        if let Some(index) = yearly_indexes.get(&bill.date.year()) {
-            add_value(&mut yearly, *index, bill)?;
+    }
+    Ok(series)
+}
+
+fn build_reports(today: NaiveDate, bills: &[BillValue]) -> HandlerResult<Reports> {
+    let mut daily = ReportSeries {
+        labels: (0..24).map(|hour| format!("{hour:02}:00")).collect(),
+        income: vec![0; 24],
+        expense: vec![0; 24],
+    };
+    for bill in bills {
+        if bill.happened_at.date() == today {
+            add_value(&mut daily, bill.happened_at.hour() as usize, bill)?;
         }
     }
     Ok(Reports {
         daily,
-        weekly,
-        monthly,
-        yearly,
+        weekly: build_date_series(today, 7, bills)?,
+        monthly: build_date_series(today, 30, bills)?,
+        yearly: build_date_series(today, 365, bills)?,
     })
 }
 
@@ -283,6 +240,17 @@ pub async fn show(
         .map(|person| PersonOption {
             id: person.id,
             name: person_names.get(&person.id).cloned().unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+    let categories = category::Entity::find()
+        .order_by_asc(category::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|category| CategoryOption {
+            kind: category.kind,
+            name: crypto::decrypt_string(&dek, &category.name),
         })
         .collect::<Vec<_>>();
 
@@ -387,7 +355,7 @@ pub async fn show(
         .map_err(err500)?
         .into_iter()
         .map(|bill| BillValue {
-            date: bill.happened_at.date(),
+            happened_at: bill.happened_at,
             kind: bill.kind,
             amount: crypto::decrypt_cents(&dek, &bill.amount),
             is_food: bill.is_food,
@@ -397,7 +365,8 @@ pub async fn show(
     let mut month_expense = 0i64;
     let mut food_expense = 0i64;
     for bill in &bill_values {
-        if bill.date.year() == today.year() && bill.date.month() == today.month() {
+        let date = bill.happened_at.date();
+        if date.year() == today.year() && date.month() == today.month() {
             if bill.kind == "income" {
                 month_income = month_income
                     .checked_add(bill.amount)
@@ -429,6 +398,7 @@ pub async fn show(
         accounts: account_options,
         account_summaries,
         people: people_options,
+        categories,
         activities,
         happened_at: chrono::Local::now()
             .naive_local()

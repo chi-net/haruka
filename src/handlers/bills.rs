@@ -79,6 +79,8 @@ pub struct BillFormData {
     category: String,
     note: String,
     happened_at: String,
+    #[serde(default)]
+    redirect_to: Option<String>,
 }
 
 struct ParsedBill {
@@ -88,6 +90,7 @@ struct ParsedBill {
     category: String,
     note: String,
     happened_at: NaiveDateTime,
+    redirect_to: String,
 }
 
 fn signed_amount(kind: &str, amount: i64) -> HandlerResult<i64> {
@@ -132,6 +135,11 @@ fn parse_form(form: BillFormData) -> HandlerResult<ParsedBill> {
         category: form.category.trim().to_string(),
         note: form.note.trim().to_string(),
         happened_at,
+        redirect_to: if form.redirect_to.as_deref() == Some("/dashboard") {
+            "/dashboard".into()
+        } else {
+            "/bills".into()
+        },
     })
 }
 
@@ -322,6 +330,7 @@ pub async fn create(
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
     let parsed = parse_form(form)?;
+    let redirect_to = parsed.redirect_to.clone();
     let is_food = category_is_food(&state, &dek, &parsed.kind, &parsed.category).await?;
     super::accounts::ensure_balance_delta(
         &state,
@@ -344,7 +353,7 @@ pub async fn create(
     .insert(&state.db)
     .await
     .map_err(err500)?;
-    Ok(Redirect::to("/bills"))
+    Ok(Redirect::to(&redirect_to))
 }
 
 pub async fn edit_form(

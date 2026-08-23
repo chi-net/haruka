@@ -170,6 +170,7 @@ async fn main() {
             post(handlers::debts::delete_person),
         )
         .route("/settings", get(handlers::settings::show))
+        .route("/statistics", get(handlers::statistics::show))
         .route(
             "/settings/categories",
             post(handlers::settings::create_category),
