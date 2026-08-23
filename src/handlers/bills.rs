@@ -17,8 +17,8 @@ use std::{collections::HashMap, str::FromStr};
 use crate::{
     crypto, currency,
     entity::{
-        account, account_detail, bill, category, debt_person, debt_record, installment_plan,
-        transfer,
+        account, account_detail, bill, category, debt_person, debt_record, installment_item,
+        installment_plan, transfer,
     },
     AppState, SessionDek,
 };
@@ -791,18 +791,12 @@ async fn render_list(
     let net = total_income
         .checked_sub(total_expense)
         .ok_or_else(|| err500("汇总金额超出范围"))?;
-    let per_page = match query.per_page {
-        100 => 100,
-        200 => 200,
-        _ => 50,
-    };
     let total_records = all_records.len();
-    let total_pages = total_records.max(1).div_ceil(per_page);
-    let page = query.page.max(1).min(total_pages);
+    let pagination = super::pagination(total_records, query.page, query.per_page);
     let records = all_records
         .into_iter()
-        .skip((page - 1) * per_page)
-        .take(per_page)
+        .skip(pagination.start)
+        .take(pagination.per_page)
         .collect::<Vec<_>>();
     let search_categories = if advanced_search {
         category_options(state, dek).await?
@@ -838,9 +832,9 @@ async fn render_list(
         has_filters,
         search_categories,
         default_currency,
-        page,
-        per_page,
-        total_pages,
+        page: pagination.page,
+        per_page: pagination.per_page,
+        total_pages: pagination.total_pages,
         total_records,
     }
     .render()
@@ -948,6 +942,17 @@ pub async fn edit_form(
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
+    if installment_item::Entity::find()
+        .filter(installment_item::Column::ChargeBillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "分期还款费用流水不能单独编辑，请在分期详情中撤销后重新还款",
+        ));
+    }
     if installment_plan::Entity::find()
         .filter(installment_plan::Column::BillId.eq(id))
         .one(&state.db)
@@ -990,6 +995,17 @@ pub async fn update(
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
+    if installment_item::Entity::find()
+        .filter(installment_item::Column::ChargeBillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "分期还款费用流水不能单独编辑，请在分期详情中撤销后重新还款",
+        ));
+    }
     if installment_plan::Entity::find()
         .filter(installment_plan::Column::BillId.eq(id))
         .one(&state.db)
@@ -1047,11 +1063,41 @@ pub async fn delete(
     Form(form): Form<DeleteFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
+    if installment_item::Entity::find()
+        .filter(installment_item::Column::ChargeBillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "分期还款费用流水不能单独删除，请在分期详情中撤销对应还款",
+        ));
+    }
     let b = bill::Entity::find_by_id(id)
         .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
+    if let Some(plan) = installment_plan::Entity::find()
+        .filter(installment_plan::Column::BillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+    {
+        if installment_item::Entity::find()
+            .filter(installment_item::Column::PlanId.eq(plan.id))
+            .filter(installment_item::Column::PaidAt.is_not_null())
+            .one(&state.db)
+            .await
+            .map_err(err500)?
+            .is_some()
+        {
+            return Err(bad_request(
+                "该分期已有实际还款，请先在分期详情逐期撤销还款，再删除原账单",
+            ));
+        }
+    }
     let signed = signed_amount(&b.kind, crypto::decrypt_cents(&dek, &b.amount))?;
     super::accounts::ensure_balance_delta(
         &state,

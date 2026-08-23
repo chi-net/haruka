@@ -13,8 +13,11 @@ pub struct Model {
     pub interest: String,
     pub fee: String,
     pub total: String,
-    /// 仅记录计划状态，不自动生成资金流水。
     pub paid_at: Option<DateTimeUtc>,
+    /// 实际还款使用的非信用账户，以及自动生成的本金转账和费用账单。
+    pub repayment_account_id: Option<i64>,
+    pub principal_transfer_id: Option<i64>,
+    pub charge_bill_id: Option<i64>,
     pub created_at: DateTimeUtc,
 }
 

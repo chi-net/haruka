@@ -99,6 +99,14 @@ pub const CURRENCIES: &[CurrencyOption] = &[
         code: "AED",
         name: "阿联酋迪拉姆",
     },
+    CurrencyOption {
+        code: "TRY",
+        name: "土耳其里拉",
+    },
+    CurrencyOption {
+        code: "RUB",
+        name: "俄罗斯卢布",
+    },
 ];
 
 pub fn valid(code: &str) -> bool {
@@ -128,19 +136,29 @@ fn cache_id(date: NaiveDate, base: &str, quote: &str) -> String {
     format!("{date}:{base}:{quote}")
 }
 
+pub struct RateInfo {
+    pub rate: Decimal,
+    pub rate_date: NaiveDate,
+    pub fetched_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 async fn cached_rate(
     state: &AppState,
     date: NaiveDate,
     base: &str,
     quote: &str,
-) -> Result<Option<(Decimal, NaiveDate, chrono::DateTime<chrono::Utc>)>, String> {
+) -> Result<Option<RateInfo>, String> {
     let row = exchange_rate::Entity::find_by_id(cache_id(date, base, quote))
         .one(&state.db)
         .await
         .map_err(|error| error.to_string())?;
     row.map(|row| {
         Decimal::from_str(&row.rate)
-            .map(|rate| (rate, row.rate_date, row.fetched_at))
+            .map(|rate| RateInfo {
+                rate,
+                rate_date: row.rate_date,
+                fetched_at: Some(row.fetched_at),
+            })
             .map_err(|error| error.to_string())
     })
     .transpose()
@@ -161,7 +179,7 @@ async fn latest_cached_rate(
     date: NaiveDate,
     base: &str,
     quote: &str,
-) -> Result<Option<Decimal>, String> {
+) -> Result<Option<RateInfo>, String> {
     let row = exchange_rate::Entity::find()
         .filter(exchange_rate::Column::BaseCurrency.eq(base))
         .filter(exchange_rate::Column::QuoteCurrency.eq(quote))
@@ -170,36 +188,52 @@ async fn latest_cached_rate(
         .one(&state.db)
         .await
         .map_err(|error| error.to_string())?;
-    row.map(|row| Decimal::from_str(&row.rate).map_err(|error| error.to_string()))
-        .transpose()
+    row.map(|row| {
+        Decimal::from_str(&row.rate)
+            .map(|rate| RateInfo {
+                rate,
+                rate_date: row.rate_date,
+                fetched_at: Some(row.fetched_at),
+            })
+            .map_err(|error| error.to_string())
+    })
+    .transpose()
 }
 
-pub async fn rate(
+pub async fn rate_with_info(
     state: &AppState,
     base: &str,
     quote: &str,
     requested_date: NaiveDate,
-) -> Result<Decimal, String> {
+) -> Result<RateInfo, String> {
     if base == quote {
-        return Ok(Decimal::ONE);
+        return Ok(RateInfo {
+            rate: Decimal::ONE,
+            rate_date: requested_date,
+            fetched_at: None,
+        });
     }
     if !valid(base) || !valid(quote) {
         return Err(format!("不支持的货币：{base}/{quote}"));
     }
-    if let Some((rate, rate_date, fetched_at)) =
-        cached_rate(state, requested_date, base, quote).await?
-    {
-        if cache_is_fresh(requested_date, rate_date, fetched_at) {
-            return Ok(rate);
+    if let Some(info) = cached_rate(state, requested_date, base, quote).await? {
+        if cache_is_fresh(
+            requested_date,
+            info.rate_date,
+            info.fetched_at.expect("缓存汇率必须有抓取时间"),
+        ) {
+            return Ok(info);
         }
     }
 
     let _fetch_guard = state.fx_fetches.lock().await;
-    if let Some((rate, rate_date, fetched_at)) =
-        cached_rate(state, requested_date, base, quote).await?
-    {
-        if cache_is_fresh(requested_date, rate_date, fetched_at) {
-            return Ok(rate);
+    if let Some(info) = cached_rate(state, requested_date, base, quote).await? {
+        if cache_is_fresh(
+            requested_date,
+            info.rate_date,
+            info.fetched_at.expect("缓存汇率必须有抓取时间"),
+        ) {
+            return Ok(info);
         }
     }
 
@@ -217,6 +251,7 @@ pub async fn rate(
                         if parsed <= Decimal::ZERO {
                             return Err("汇率必须大于 0".into());
                         }
+                        let fetched_at = chrono::Utc::now();
                         exchange_rate::Entity::insert(exchange_rate::ActiveModel {
                             id: Set(cache_id(requested_date, base, quote)),
                             requested_date: Set(requested_date),
@@ -224,7 +259,7 @@ pub async fn rate(
                             base_currency: Set(base.to_string()),
                             quote_currency: Set(quote.to_string()),
                             rate: Set(parsed.to_string()),
-                            fetched_at: Set(chrono::Utc::now()),
+                            fetched_at: Set(fetched_at),
                         })
                         .on_conflict(
                             OnConflict::column(exchange_rate::Column::Id)
@@ -238,7 +273,11 @@ pub async fn rate(
                         .exec(&state.db)
                         .await
                         .map_err(|error| error.to_string())?;
-                        return Ok(parsed);
+                        return Ok(RateInfo {
+                            rate: parsed,
+                            rate_date: response.date,
+                            fetched_at: Some(fetched_at),
+                        });
                     }
                     Err(error) => last_error = error.to_string(),
                 }
@@ -248,12 +287,23 @@ pub async fn rate(
         }
     }
 
-    if let Some(rate) = latest_cached_rate(state, requested_date, base, quote).await? {
-        return Ok(rate);
+    if let Some(info) = latest_cached_rate(state, requested_date, base, quote).await? {
+        return Ok(info);
     }
     Err(format!(
         "无法取得 {requested_date} 的 {base}/{quote} 汇率，且没有可用缓存：{last_error}"
     ))
+}
+
+pub async fn rate(
+    state: &AppState,
+    base: &str,
+    quote: &str,
+    requested_date: NaiveDate,
+) -> Result<Decimal, String> {
+    Ok(rate_with_info(state, base, quote, requested_date)
+        .await?
+        .rate)
 }
 
 pub async fn convert_cents(

@@ -1,6 +1,6 @@
 use askama::Template;
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::{Html, Redirect},
     Form,
@@ -49,16 +49,37 @@ struct SubscriptionRow {
     expired: bool,
     due_soon: bool,
     status: String,
+    period: String,
+    currency: String,
+    expires_at_value: NaiveDateTime,
 }
 
 #[derive(Template)]
 #[template(path = "subscriptions.html")]
 struct SubscriptionsTemplate {
+    page_heading: String,
+    advanced_search: bool,
+    search_action: String,
     subscriptions: Vec<SubscriptionRow>,
     accounts: Vec<AccountOption>,
     total_count: usize,
     due_soon_count: usize,
     expired_count: usize,
+    mode: String,
+    keyword: String,
+    status: String,
+    period: String,
+    currency: String,
+    category: String,
+    start_date: String,
+    end_date: String,
+    has_filters: bool,
+    categories: Vec<CategoryOption>,
+    currencies: &'static [currency::CurrencyOption],
+    page: usize,
+    per_page: usize,
+    total_pages: usize,
+    total_records: usize,
 }
 
 #[derive(Template)]
@@ -91,6 +112,30 @@ pub struct SubscriptionFormData {
 #[derive(Deserialize)]
 pub struct CreateExpenseFormData {
     account_id: i64,
+}
+
+#[derive(Default, Deserialize)]
+pub struct SubscriptionsQuery {
+    #[serde(default)]
+    page: usize,
+    #[serde(default)]
+    per_page: usize,
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    keyword: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    period: String,
+    #[serde(default)]
+    currency: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    start_date: String,
+    #[serde(default)]
+    end_date: String,
 }
 
 struct ParsedSubscription {
@@ -213,11 +258,79 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
 pub async fn list(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Query(query): Query<SubscriptionsQuery>,
 ) -> HandlerResult<Html<String>> {
+    render_list(&state, &dek, query, false).await
+}
+
+pub async fn advanced_search(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Query(query): Query<SubscriptionsQuery>,
+) -> HandlerResult<Html<String>> {
+    render_list(&state, &dek, query, true).await
+}
+
+async fn render_list(
+    state: &AppState,
+    dek: &crypto::Dek,
+    mut query: SubscriptionsQuery,
+    advanced_search: bool,
+) -> HandlerResult<Html<String>> {
+    if !advanced_search {
+        query.mode = "and".into();
+        query.status.clear();
+        query.period.clear();
+        query.currency.clear();
+        query.category.clear();
+        query.start_date.clear();
+        query.end_date.clear();
+    }
+    let start_date = if query.start_date.trim().is_empty() {
+        None
+    } else {
+        Some(
+            chrono::NaiveDate::parse_from_str(query.start_date.trim(), "%Y-%m-%d")
+                .map_err(|_| bad_request("开始日期格式不正确"))?,
+        )
+    };
+    let end_date = if query.end_date.trim().is_empty() {
+        None
+    } else {
+        Some(
+            chrono::NaiveDate::parse_from_str(query.end_date.trim(), "%Y-%m-%d")
+                .map_err(|_| bad_request("结束日期格式不正确"))?,
+        )
+    };
+    if start_date
+        .zip(end_date)
+        .is_some_and(|(start, end)| start > end)
+    {
+        return Err(bad_request("开始日期不能晚于结束日期"));
+    }
+    if !query.status.is_empty()
+        && !matches!(query.status.as_str(), "active" | "due_soon" | "expired")
+    {
+        query.status.clear();
+    }
+    if !query.period.is_empty() && !valid_period(&query.period) {
+        query.period.clear();
+    }
+    if !query.currency.is_empty() && !currency::valid(&query.currency) {
+        query.currency.clear();
+    }
     let now = chrono::Local::now().naive_local();
     let soon = now + Duration::days(7);
-    let mut expired_count = 0;
-    let mut due_soon_count = 0;
+    let keyword = query.keyword.trim().to_lowercase();
+    let category_filter = query.category.trim().to_lowercase();
+    let mode_or = query.mode == "or";
+    let has_filters = !keyword.is_empty()
+        || !query.status.is_empty()
+        || !query.period.is_empty()
+        || !query.currency.is_empty()
+        || !category_filter.is_empty()
+        || start_date.is_some()
+        || end_date.is_some();
     let subscriptions = subscription::Entity::find()
         .order_by_asc(subscription::Column::ExpiresAt)
         .order_by_asc(subscription::Column::Id)
@@ -228,11 +341,6 @@ pub async fn list(
         .map(|subscription| {
             let expired = subscription.expires_at < now;
             let due_soon = !expired && subscription.expires_at <= soon;
-            if expired {
-                expired_count += 1;
-            } else if due_soon {
-                due_soon_count += 1;
-            }
             let status = if expired {
                 "已到期"
             } else if due_soon {
@@ -240,29 +348,119 @@ pub async fn list(
             } else {
                 "有效"
             };
+            let category = crypto::decrypt_string(dek, &subscription.category);
             SubscriptionRow {
                 id: subscription.id,
-                name: crypto::decrypt_string(&dek, &subscription.name),
+                name: crypto::decrypt_string(dek, &subscription.name),
                 amount: currency::format(
-                    crypto::decrypt_cents(&dek, &subscription.amount),
+                    crypto::decrypt_cents(dek, &subscription.amount),
                     &subscription.currency,
                 ),
-                category: crypto::decrypt_string(&dek, &subscription.category),
+                category,
                 period_label: period_label(&subscription.period).into(),
                 expires_at: subscription.expires_at.format(DISPLAY_FMT).to_string(),
-                note: crypto::decrypt_string(&dek, &subscription.note),
+                note: crypto::decrypt_string(dek, &subscription.note),
                 expired,
                 due_soon,
                 status: status.into(),
+                period: subscription.period,
+                currency: subscription.currency,
+                expires_at_value: subscription.expires_at,
+            }
+        })
+        .filter(|row| {
+            let mut conditions = Vec::new();
+            if !keyword.is_empty() {
+                conditions.push(
+                    format!(
+                        "{} {} {} {} {} {}",
+                        row.name,
+                        row.category,
+                        row.note,
+                        row.period_label,
+                        row.currency,
+                        row.status
+                    )
+                    .to_lowercase()
+                    .contains(&keyword),
+                );
+            }
+            if !query.status.is_empty() {
+                conditions.push(match query.status.as_str() {
+                    "expired" => row.expired,
+                    "due_soon" => row.due_soon,
+                    "active" => !row.expired && !row.due_soon,
+                    _ => true,
+                });
+            }
+            if !query.period.is_empty() {
+                conditions.push(row.period == query.period);
+            }
+            if !query.currency.is_empty() {
+                conditions.push(row.currency == query.currency);
+            }
+            if !category_filter.is_empty() {
+                conditions.push(row.category.to_lowercase() == category_filter);
+            }
+            if start_date.is_some() || end_date.is_some() {
+                let date = row.expires_at_value.date();
+                conditions.push(
+                    start_date.is_none_or(|start| date >= start)
+                        && end_date.is_none_or(|end| date <= end),
+                );
+            }
+            if conditions.is_empty() {
+                true
+            } else if mode_or {
+                conditions.into_iter().any(|matched| matched)
+            } else {
+                conditions.into_iter().all(|matched| matched)
             }
         })
         .collect::<Vec<_>>();
+    let total_records = subscriptions.len();
+    let expired_count = subscriptions.iter().filter(|row| row.expired).count();
+    let due_soon_count = subscriptions.iter().filter(|row| row.due_soon).count();
+    let pagination = super::pagination(total_records, query.page, query.per_page);
+    let subscriptions = subscriptions
+        .into_iter()
+        .skip(pagination.start)
+        .take(pagination.per_page)
+        .collect();
     let html = SubscriptionsTemplate {
-        total_count: subscriptions.len(),
+        page_heading: if advanced_search {
+            "订阅高级搜索"
+        } else {
+            "订阅服务"
+        }
+        .into(),
+        advanced_search,
+        search_action: if advanced_search {
+            "/subscriptions/search"
+        } else {
+            "/subscriptions"
+        }
+        .into(),
+        total_count: total_records,
         subscriptions,
-        accounts: account_options(&state, &dek).await?,
+        accounts: account_options(state, dek).await?,
         due_soon_count,
         expired_count,
+        mode: if mode_or { "or" } else { "and" }.into(),
+        keyword: query.keyword,
+        status: query.status,
+        period: query.period,
+        currency: query.currency,
+        category: query.category,
+        start_date: query.start_date,
+        end_date: query.end_date,
+        has_filters,
+        categories: expense_categories(state, dek).await?,
+        currencies: currency::CURRENCIES,
+        page: pagination.page,
+        per_page: pagination.per_page,
+        total_pages: pagination.total_pages,
+        total_records,
     }
     .render()
     .map_err(err500)?;

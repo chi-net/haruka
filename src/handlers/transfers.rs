@@ -6,13 +6,13 @@ use axum::{
 };
 use chrono::NaiveDateTime;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
-use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 use crate::{
     crypto, currency,
-    entity::{account, transfer},
+    entity::{account, installment_item, transfer},
     AppState, SessionDek,
 };
 
@@ -187,6 +187,17 @@ pub async fn delete(
     Form(form): Form<DeleteFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
+    if installment_item::Entity::find()
+        .filter(installment_item::Column::PrincipalTransferId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "分期还款本金流水不能单独删除，请在分期详情中撤销对应还款",
+        ));
+    }
     let transfer = transfer::Entity::find_by_id(id)
         .one(&state.db)
         .await

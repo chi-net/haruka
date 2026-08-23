@@ -1,6 +1,6 @@
 use askama::Template;
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::{Html, Redirect},
     Form,
@@ -36,12 +36,30 @@ struct DebtPersonRow {
     note: String,
     receivable: String,
     payable: String,
+    receivable_cents: i64,
+    payable_cents: i64,
 }
 
 #[derive(Template)]
 #[template(path = "debt_people.html")]
 struct DebtPeopleTemplate {
+    page_heading: String,
+    advanced_search: bool,
+    search_action: String,
     people: Vec<DebtPersonRow>,
+    default_currency: String,
+    mode: String,
+    keyword: String,
+    relationship: String,
+    min_receivable: String,
+    max_receivable: String,
+    min_payable: String,
+    max_payable: String,
+    has_filters: bool,
+    page: usize,
+    per_page: usize,
+    total_pages: usize,
+    total_records: usize,
 }
 
 #[derive(Template)]
@@ -77,6 +95,28 @@ pub struct DebtPersonFormData {
     note: String,
 }
 
+#[derive(Default, Deserialize)]
+pub struct DebtPeopleQuery {
+    #[serde(default)]
+    page: usize,
+    #[serde(default)]
+    per_page: usize,
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    keyword: String,
+    #[serde(default)]
+    relationship: String,
+    #[serde(default)]
+    min_receivable: String,
+    #[serde(default)]
+    max_receivable: String,
+    #[serde(default)]
+    min_payable: String,
+    #[serde(default)]
+    max_payable: String,
+}
+
 fn valid_kind(kind: &str) -> bool {
     matches!(
         kind,
@@ -104,6 +144,22 @@ fn parse_amount(value: &str) -> HandlerResult<i64> {
     (decimal * Decimal::from(100))
         .to_i64()
         .ok_or_else(|| bad_request("金额超出范围"))
+}
+
+fn parse_optional_amount(value: &str, label: &str) -> HandlerResult<Option<i64>> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    let decimal = Decimal::from_str(value.trim())
+        .map_err(|_| bad_request(&format!("{label}格式不正确")))?
+        .round_dp(2);
+    if decimal < Decimal::ZERO {
+        return Err(bad_request(&format!("{label}不能小于 0")));
+    }
+    (decimal * Decimal::from(100))
+        .to_i64()
+        .map(Some)
+        .ok_or_else(|| bad_request(&format!("{label}超出范围")))
 }
 
 fn apply_outstanding(
@@ -291,7 +347,57 @@ pub async fn delete_record(
 pub async fn people(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Query(query): Query<DebtPeopleQuery>,
 ) -> HandlerResult<Html<String>> {
+    render_people(&state, &dek, query, false).await
+}
+
+pub async fn advanced_people_search(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Query(query): Query<DebtPeopleQuery>,
+) -> HandlerResult<Html<String>> {
+    render_people(&state, &dek, query, true).await
+}
+
+async fn render_people(
+    state: &AppState,
+    dek: &crypto::Dek,
+    mut query: DebtPeopleQuery,
+    advanced_search: bool,
+) -> HandlerResult<Html<String>> {
+    if !advanced_search {
+        query.mode = "and".into();
+        query.relationship.clear();
+        query.min_receivable.clear();
+        query.max_receivable.clear();
+        query.min_payable.clear();
+        query.max_payable.clear();
+    }
+    if !query.relationship.is_empty()
+        && !matches!(
+            query.relationship.as_str(),
+            "receivable" | "payable" | "both" | "settled"
+        )
+    {
+        query.relationship.clear();
+    }
+    let min_receivable = parse_optional_amount(&query.min_receivable, "最低应收")?;
+    let max_receivable = parse_optional_amount(&query.max_receivable, "最高应收")?;
+    let min_payable = parse_optional_amount(&query.min_payable, "最低应付")?;
+    let max_payable = parse_optional_amount(&query.max_payable, "最高应付")?;
+    if min_receivable
+        .zip(max_receivable)
+        .is_some_and(|(min, max)| min > max)
+    {
+        return Err(bad_request("最低应收不能大于最高应收"));
+    }
+    if min_payable
+        .zip(max_payable)
+        .is_some_and(|(min, max)| min > max)
+    {
+        return Err(bad_request("最低应付不能大于最高应付"));
+    }
     let people = debt_person::Entity::find()
         .order_by_asc(debt_person::Column::Id)
         .all(&state.db)
@@ -309,9 +415,9 @@ pub async fn people(
         .iter()
         .map(|account| (account.id, account.currency.clone()))
         .collect();
-    let default_currency = currency::default_currency(&state).await.map_err(err500)?;
+    let default_currency = currency::default_currency(state).await.map_err(err500)?;
     let rates = currency::RateTable::load(
-        &state,
+        state,
         accounts
             .into_iter()
             .map(|account| account.currency)
@@ -344,16 +450,102 @@ pub async fn people(
             let (receivable, payable) = outstanding.get(&person.id).copied().unwrap_or_default();
             DebtPersonRow {
                 id: person.id,
-                name: crypto::decrypt_string(&dek, &person.name),
-                note: crypto::decrypt_string(&dek, &person.note),
+                name: crypto::decrypt_string(dek, &person.name),
+                note: crypto::decrypt_string(dek, &person.note),
                 receivable: currency::format(receivable, &default_currency),
                 payable: currency::format(payable, &default_currency),
+                receivable_cents: receivable,
+                payable_cents: payable,
             }
         })
+        .collect::<Vec<_>>();
+    let keyword = query.keyword.trim().to_lowercase();
+    let mode_or = query.mode == "or";
+    let has_filters = !keyword.is_empty()
+        || !query.relationship.is_empty()
+        || min_receivable.is_some()
+        || max_receivable.is_some()
+        || min_payable.is_some()
+        || max_payable.is_some();
+    let rows = rows
+        .into_iter()
+        .filter(|row| {
+            let mut conditions = Vec::new();
+            if !keyword.is_empty() {
+                conditions.push(
+                    format!("{} {}", row.name, row.note)
+                        .to_lowercase()
+                        .contains(&keyword),
+                );
+            }
+            if !query.relationship.is_empty() {
+                conditions.push(match query.relationship.as_str() {
+                    "receivable" => row.receivable_cents > 0,
+                    "payable" => row.payable_cents > 0,
+                    "both" => row.receivable_cents > 0 && row.payable_cents > 0,
+                    "settled" => row.receivable_cents == 0 && row.payable_cents == 0,
+                    _ => true,
+                });
+            }
+            if min_receivable.is_some() || max_receivable.is_some() {
+                conditions.push(
+                    min_receivable.is_none_or(|min| row.receivable_cents >= min)
+                        && max_receivable.is_none_or(|max| row.receivable_cents <= max),
+                );
+            }
+            if min_payable.is_some() || max_payable.is_some() {
+                conditions.push(
+                    min_payable.is_none_or(|min| row.payable_cents >= min)
+                        && max_payable.is_none_or(|max| row.payable_cents <= max),
+                );
+            }
+            if conditions.is_empty() {
+                true
+            } else if mode_or {
+                conditions.into_iter().any(|matched| matched)
+            } else {
+                conditions.into_iter().all(|matched| matched)
+            }
+        })
+        .collect::<Vec<_>>();
+    let total_records = rows.len();
+    let pagination = super::pagination(total_records, query.page, query.per_page);
+    let rows = rows
+        .into_iter()
+        .skip(pagination.start)
+        .take(pagination.per_page)
         .collect();
-    let html = DebtPeopleTemplate { people: rows }
-        .render()
-        .map_err(err500)?;
+    let html = DebtPeopleTemplate {
+        page_heading: if advanced_search {
+            "借贷对象高级搜索"
+        } else {
+            "借贷对象"
+        }
+        .into(),
+        advanced_search,
+        search_action: if advanced_search {
+            "/debt-people/search"
+        } else {
+            "/debt-people"
+        }
+        .into(),
+        people: rows,
+        default_currency,
+        mode: if mode_or { "or" } else { "and" }.into(),
+        keyword: query.keyword,
+        relationship: query.relationship,
+        min_receivable: query.min_receivable,
+        max_receivable: query.max_receivable,
+        min_payable: query.min_payable,
+        max_payable: query.max_payable,
+        has_filters,
+        page: pagination.page,
+        per_page: pagination.per_page,
+        total_pages: pagination.total_pages,
+        total_records,
+    }
+    .render()
+    .map_err(err500)?;
     Ok(Html(html))
 }
 

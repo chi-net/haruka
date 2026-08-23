@@ -1,13 +1,30 @@
 {% extends "base.html" %}
-{% block title %}分期 - haruka{% endblock %}
+{% block title %}{{ page_heading }} - haruka{% endblock %}
 {% block content %}
 <div class="mb-5">
-  <h1 class="text-xl font-bold">分期</h1>
+  <div class="flex items-start justify-between gap-3"><div><h1 class="text-xl font-bold">{{ page_heading }}</h1>
   <p class="text-sm text-gray-500 mt-1">查看信用卡和信贷产品的月供计划。新分期请从“记一笔”或仪表板的支出记账创建。</p>
+  </div>{% if advanced_search %}<a href="/installments" class="text-sm text-blue-600 hover:underline">返回分期</a>{% endif %}</div>
 </div>
 
+<form method="get" action="{{ search_action }}" class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+  <div class="flex flex-wrap items-end gap-3">
+    <div class="flex-1 min-w-48"><label class="block text-xs text-gray-500 mb-1">关键词</label><input name="keyword" value="{{ keyword }}" placeholder="账单、账户、方式或期限" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    {% if advanced_search %}
+    <div><label class="block text-xs text-gray-500 mb-1">状态</label><select name="status" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option><option value="open" {% if status == "open" %}selected{% endif %}>还款中</option><option value="due_soon" {% if status == "due_soon" %}selected{% endif %}>7 天内还款</option><option value="overdue" {% if status == "overdue" %}selected{% endif %}>有逾期</option><option value="completed" {% if status == "completed" %}selected{% endif %}>已还清</option></select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">方式</label><select name="method" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option><option value="equal_payment" {% if method == "equal_payment" %}selected{% endif %}>等额本息</option><option value="equal_principal" {% if method == "equal_principal" %}selected{% endif %}>等额本金</option><option value="flat" {% if method == "flat" %}selected{% endif %}>等本等息</option></select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">下期开始</label><input type="date" name="start_date" value="{{ start_date }}" class="border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">下期结束</label><input type="date" name="end_date" value="{{ end_date }}" class="border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">组合</label><select name="mode" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="and" {% if mode == "and" %}selected{% endif %}>全部满足</option><option value="or" {% if mode == "or" %}selected{% endif %}>任一满足</option></select></div>
+    {% endif %}
+    <select name="per_page" aria-label="每页条数" onchange="this.form.requestSubmit()" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="50" {% if per_page == 50 %}selected{% endif %}>50 条/页</option><option value="100" {% if per_page == 100 %}selected{% endif %}>100 条/页</option><option value="200" {% if per_page == 200 %}selected{% endif %}>200 条/页</option></select>
+    <button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">搜索</button><a href="{{ search_action }}" class="text-sm text-gray-600 hover:underline">清除</a>
+    {% if !advanced_search %}<a href="/installments/search" class="text-sm text-blue-600 hover:underline">高级搜索</a>{% endif %}
+  </div>
+</form>
+
 {% if plans.is_empty() %}
-<div class="bg-white rounded-lg border border-gray-200 p-6 text-sm text-gray-500">还没有分期计划。</div>
+<div class="bg-white rounded-lg border border-gray-200 p-6 text-sm text-gray-500">{% if has_filters %}没有符合条件的分期计划。{% else %}还没有分期计划。{% endif %}</div>
 {% else %}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
   {% for plan in plans %}
@@ -27,5 +44,9 @@
   </a>
   {% endfor %}
 </div>
+<nav class="flex flex-wrap items-center justify-between gap-3 mt-4 text-sm" aria-label="分期分页"><span class="text-gray-500">共 {{ total_records }} 个 · 第 {{ page }} / {{ total_pages }} 页</span><div class="flex items-center gap-2">
+{% if page > 1 %}<form method="get" action="{{ search_action }}"><input type="hidden" name="page" value="{{ page - 1 }}"><input type="hidden" name="per_page" value="{{ per_page }}"><input type="hidden" name="mode" value="{{ mode }}"><input type="hidden" name="keyword" value="{{ keyword }}"><input type="hidden" name="status" value="{{ status }}"><input type="hidden" name="method" value="{{ method }}"><input type="hidden" name="start_date" value="{{ start_date }}"><input type="hidden" name="end_date" value="{{ end_date }}"><button class="border border-gray-300 rounded px-3 py-1.5 text-gray-600 hover:bg-gray-50">上一页</button></form>{% endif %}
+{% if page < total_pages %}<form method="get" action="{{ search_action }}"><input type="hidden" name="page" value="{{ page + 1 }}"><input type="hidden" name="per_page" value="{{ per_page }}"><input type="hidden" name="mode" value="{{ mode }}"><input type="hidden" name="keyword" value="{{ keyword }}"><input type="hidden" name="status" value="{{ status }}"><input type="hidden" name="method" value="{{ method }}"><input type="hidden" name="start_date" value="{{ start_date }}"><input type="hidden" name="end_date" value="{{ end_date }}"><button class="border border-gray-300 rounded px-3 py-1.5 text-gray-600 hover:bg-gray-50">下一页</button></form>{% endif %}
+</div></nav>
 {% endif %}
 {% endblock %}

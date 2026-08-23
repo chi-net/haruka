@@ -1,6 +1,6 @@
 use askama::Template;
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::{Html, Redirect},
     Form,
@@ -15,7 +15,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto, currency,
-    entity::{account, account_detail, bill, debt_record, transfer},
+    entity::{account, account_detail, bill, debt_record, installment_item, transfer},
     AppState, SessionDek,
 };
 
@@ -35,6 +35,10 @@ fn bad_request(msg: &str) -> (StatusCode, String) {
 #[template(path = "accounts.html")]
 struct AccountsTemplate {
     accounts: Vec<AccountRow>,
+    page: usize,
+    per_page: usize,
+    total_pages: usize,
+    total_records: usize,
 }
 
 struct AccountRow {
@@ -87,6 +91,14 @@ pub struct AccountFormData {
 #[derive(Deserialize)]
 pub struct AccountBalanceFormData {
     balance: String,
+}
+
+#[derive(Default, Deserialize)]
+pub struct AccountsQuery {
+    #[serde(default)]
+    page: usize,
+    #[serde(default)]
+    per_page: usize,
 }
 
 fn valid_account_kind(kind: &str) -> bool {
@@ -321,6 +333,7 @@ fn parse_credit_settings(kind: &str, limit: &str, day: &str) -> HandlerResult<(i
 pub async fn list(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Query(query): Query<AccountsQuery>,
 ) -> HandlerResult<Html<String>> {
     let accounts = account::Entity::find()
         .order_by_asc(account::Column::Id)
@@ -444,11 +457,25 @@ pub async fn list(
                 ),
             }
         })
+        .collect::<Vec<_>>();
+
+    let total_records = rows.len();
+    let pagination = super::pagination(total_records, query.page, query.per_page);
+    let rows = rows
+        .into_iter()
+        .skip(pagination.start)
+        .take(pagination.per_page)
         .collect();
 
-    let html = AccountsTemplate { accounts: rows }
-        .render()
-        .map_err(err500)?;
+    let html = AccountsTemplate {
+        accounts: rows,
+        page: pagination.page,
+        per_page: pagination.per_page,
+        total_pages: pagination.total_pages,
+        total_records,
+    }
+    .render()
+    .map_err(err500)?;
     Ok(Html(html))
 }
 
@@ -741,6 +768,19 @@ pub async fn delete(
     }
     for (account_id, delta) in balance_changes {
         ensure_balance_delta(&state, &dek, account_id, delta).await?;
+    }
+    for item in installment_item::Entity::find()
+        .filter(installment_item::Column::RepaymentAccountId.eq(id))
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+    {
+        let mut active = item.into_active_model();
+        active.paid_at = Set(None);
+        active.repayment_account_id = Set(None);
+        active.principal_transfer_id = Set(None);
+        active.charge_bill_id = Set(None);
+        active.update(&state.db).await.map_err(err500)?;
     }
     account::Entity::delete_by_id(id)
         .exec(&state.db)

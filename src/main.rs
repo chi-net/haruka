@@ -257,6 +257,10 @@ async fn main() {
             "/subscriptions",
             get(handlers::subscriptions::list).post(handlers::subscriptions::create),
         )
+        .route(
+            "/subscriptions/search",
+            get(handlers::subscriptions::advanced_search),
+        )
         .route("/subscriptions/new", get(handlers::subscriptions::new_form))
         .route(
             "/subscriptions/{id}/edit",
@@ -271,6 +275,10 @@ async fn main() {
             post(handlers::subscriptions::delete),
         )
         .route("/installments", get(handlers::installments::list))
+        .route(
+            "/installments/search",
+            get(handlers::installments::advanced_search),
+        )
         .route("/installments/{id}", get(handlers::installments::detail))
         .route(
             "/installments/items/{id}/paid",
@@ -291,6 +299,10 @@ async fn main() {
             "/debt-people",
             get(handlers::debts::people).post(handlers::debts::create_person),
         )
+        .route(
+            "/debt-people/search",
+            get(handlers::debts::advanced_people_search),
+        )
         .route("/debt-people/new", get(handlers::debts::new_person_form))
         .route(
             "/debt-people/{id}/edit",
@@ -306,6 +318,7 @@ async fn main() {
             post(handlers::settings::update_currency),
         )
         .route("/statistics", get(handlers::statistics::show))
+        .route("/currency-converter", get(handlers::currencies::converter))
         .route(
             "/settings/categories",
             post(handlers::settings::create_category),

@@ -26,7 +26,7 @@
   <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
     <div><h2 class="font-medium">{% if advanced_search %}高级搜索条件{% else %}搜索账单与流水{% endif %}</h2><p class="text-xs text-gray-500 mt-1">{% if advanced_search %}可按收支类型、分类及各自金额区间组合筛选，金额区间以 {{ default_currency }} 计算。{% else %}按日期范围和关键词快速查找，多个条件同时满足。{% endif %}</p></div>
     <div class="flex items-center gap-2">
-    <select name="per_page" aria-label="每页条数" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
+    <select name="per_page" aria-label="每页条数" onchange="this.form.requestSubmit()" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
       <option value="50" {% if per_page == 50 %}selected{% endif %}>50 条/页</option>
       <option value="100" {% if per_page == 100 %}selected{% endif %}>100 条/页</option>
       <option value="200" {% if per_page == 200 %}selected{% endif %}>200 条/页</option>

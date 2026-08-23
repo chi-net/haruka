@@ -1,13 +1,32 @@
 {% extends "base.html" %}
-{% block title %}订阅服务 - haruka{% endblock %}
+{% block title %}{{ page_heading }} - haruka{% endblock %}
 {% block content %}
 <div class="flex items-center justify-between mb-4">
   <div>
-    <h1 class="text-xl font-bold">订阅服务</h1>
+    <h1 class="text-xl font-bold">{{ page_heading }}</h1>
     <p class="text-sm text-gray-500 mt-1">集中查看服务到期情况，并快速记录订阅支出。</p>
   </div>
-  <a href="/subscriptions/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新增订阅</a>
+  {% if advanced_search %}<a href="/subscriptions" class="text-sm text-blue-600 hover:underline">返回订阅</a>{% else %}<a href="/subscriptions/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新增订阅</a>{% endif %}
 </div>
+
+<form method="get" action="{{ search_action }}" class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+  <div class="flex flex-wrap items-end gap-3">
+    <div class="flex-1 min-w-48"><label class="block text-xs text-gray-500 mb-1">关键词</label><input name="keyword" value="{{ keyword }}" placeholder="服务名、分类、备注或货币" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    {% if advanced_search %}
+    <div><label class="block text-xs text-gray-500 mb-1">状态</label><select name="status" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option><option value="active" {% if status == "active" %}selected{% endif %}>有效</option><option value="due_soon" {% if status == "due_soon" %}selected{% endif %}>7 天内到期</option><option value="expired" {% if status == "expired" %}selected{% endif %}>已到期</option></select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">周期</label><select name="period" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option><option value="day" {% if period == "day" %}selected{% endif %}>日</option><option value="week" {% if period == "week" %}selected{% endif %}>周</option><option value="month" {% if period == "month" %}selected{% endif %}>月</option><option value="quarter" {% if period == "quarter" %}selected{% endif %}>季</option><option value="year" {% if period == "year" %}selected{% endif %}>年</option></select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">货币</label><select name="currency" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option>{% for c in currencies %}<option value="{{ c.code }}" {% if currency == c.code %}selected{% endif %}>{{ c.code }}</option>{% endfor %}</select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">分类</label><select name="category" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option>{% for c in categories %}<option value="{{ c.name }}" {% if category == c.name %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">到期开始</label><input type="date" name="start_date" value="{{ start_date }}" class="border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">到期结束</label><input type="date" name="end_date" value="{{ end_date }}" class="border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">组合</label><select name="mode" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="and" {% if mode == "and" %}selected{% endif %}>全部满足</option><option value="or" {% if mode == "or" %}selected{% endif %}>任一满足</option></select></div>
+    {% endif %}
+    <select name="per_page" aria-label="每页条数" onchange="this.form.requestSubmit()" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="50" {% if per_page == 50 %}selected{% endif %}>50 条/页</option><option value="100" {% if per_page == 100 %}selected{% endif %}>100 条/页</option><option value="200" {% if per_page == 200 %}selected{% endif %}>200 条/页</option></select>
+    <button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">搜索</button>
+    <a href="{{ search_action }}" class="text-sm text-gray-600 hover:underline">清除</a>
+    {% if !advanced_search %}<a href="/subscriptions/search" class="text-sm text-blue-600 hover:underline">高级搜索</a>{% endif %}
+  </div>
+</form>
 
 <div class="grid grid-cols-3 gap-3 mb-5 text-center">
   <div class="bg-white rounded-lg border border-gray-200 py-3">
@@ -29,7 +48,7 @@
 {% endif %}
 
 {% if subscriptions.is_empty() %}
-<p class="text-gray-500 text-sm">还没有订阅服务。</p>
+<p class="text-gray-500 text-sm">{% if has_filters %}没有符合条件的订阅服务。{% else %}还没有订阅服务。{% endif %}</p>
 {% else %}
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
   {% for s in subscriptions %}
@@ -63,5 +82,12 @@
   </section>
   {% endfor %}
 </div>
+<nav class="flex flex-wrap items-center justify-between gap-3 mt-4 text-sm" aria-label="订阅分页">
+  <span class="text-gray-500">共 {{ total_records }} 个 · 第 {{ page }} / {{ total_pages }} 页</span>
+  <div class="flex items-center gap-2">
+    {% if page > 1 %}<form method="get" action="{{ search_action }}"><input type="hidden" name="page" value="{{ page - 1 }}"><input type="hidden" name="per_page" value="{{ per_page }}"><input type="hidden" name="mode" value="{{ mode }}"><input type="hidden" name="keyword" value="{{ keyword }}"><input type="hidden" name="status" value="{{ status }}"><input type="hidden" name="period" value="{{ period }}"><input type="hidden" name="currency" value="{{ currency }}"><input type="hidden" name="category" value="{{ category }}"><input type="hidden" name="start_date" value="{{ start_date }}"><input type="hidden" name="end_date" value="{{ end_date }}"><button class="border border-gray-300 rounded px-3 py-1.5 text-gray-600 hover:bg-gray-50">上一页</button></form>{% endif %}
+    {% if page < total_pages %}<form method="get" action="{{ search_action }}"><input type="hidden" name="page" value="{{ page + 1 }}"><input type="hidden" name="per_page" value="{{ per_page }}"><input type="hidden" name="mode" value="{{ mode }}"><input type="hidden" name="keyword" value="{{ keyword }}"><input type="hidden" name="status" value="{{ status }}"><input type="hidden" name="period" value="{{ period }}"><input type="hidden" name="currency" value="{{ currency }}"><input type="hidden" name="category" value="{{ category }}"><input type="hidden" name="start_date" value="{{ start_date }}"><input type="hidden" name="end_date" value="{{ end_date }}"><button class="border border-gray-300 rounded px-3 py-1.5 text-gray-600 hover:bg-gray-50">下一页</button></form>{% endif %}
+  </div>
+</nav>
 {% endif %}
 {% endblock %}

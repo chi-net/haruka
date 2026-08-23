@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}货币换算 - haruka{% endblock %}
+{% block content %}
+<div class="mb-5"><h1 class="text-xl font-bold">货币换算</h1><p class="text-sm text-gray-500 mt-1">按指定日期的最近可用参考汇率换算，仅供记账参考；实际到账金额仍以支付渠道为准。</p></div>
+
+<form method="get" action="/currency-converter" class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
+    <div><label class="block text-xs text-gray-500 mb-1">金额</label><input name="amount" type="number" min="0" step="0.0001" value="{{ amount }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">从</label><select name="from" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">{% for c in currencies %}<option value="{{ c.code }}" {% if from == c.code %}selected{% endif %}>{{ c.code }} · {{ c.name }}</option>{% endfor %}</select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">换算到</label><select name="to" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">{% for c in currencies %}<option value="{{ c.code }}" {% if to == c.code %}selected{% endif %}>{{ c.code }} · {{ c.name }}</option>{% endfor %}</select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">参考日期</label><input name="date" type="date" value="{{ date }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>
+    <button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">换算</button>
+  </div>
+</form>
+
+<section class="bg-white rounded-lg border border-gray-200 p-5">
+  <div class="text-xs text-gray-500">换算结果</div><div class="text-2xl font-mono mt-1">{{ result }}</div>
+  <dl class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5 text-sm">
+    <div class="bg-gray-50 rounded p-3"><dt class="text-xs text-gray-500">参考汇率</dt><dd class="font-mono mt-1">{{ rate }}</dd></div>
+    <div class="bg-gray-50 rounded p-3"><dt class="text-xs text-gray-500">汇率数据日期</dt><dd class="font-mono mt-1">{{ rate_date }}</dd></div>
+    <div class="bg-gray-50 rounded p-3"><dt class="text-xs text-gray-500">上次汇率更新时间</dt><dd class="font-mono mt-1">{{ fetched_at }}</dd></div>
+  </dl>
+  {% if !same_currency %}<p class="text-xs text-gray-400 mt-4">参考数据来自 Frankfurter v2。休市日会采用最近可用交易日；网络失败时可能显示本地历史缓存。</p>{% endif %}
+</section>
+{% endblock %}

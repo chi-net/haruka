@@ -18,8 +18,11 @@
 </div>
 
 <section class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-sm text-blue-800">
-  标记“已还”只更新分期计划进度，不自动改变账户余额。实际还款时，请把本期本金通过“转账”转入对应信用账户，并将本期利息与手续费从还款账户记为普通支出；不要把整笔月供都转入信用账户。原消费本金已经记过支出，不能重复记账。
+  还款时必须选择一个与信用账户同币种的普通账户。系统会自动把本金转入信用账户，并把利息与手续费记为“分期费用”支出；信用卡和信贷服务不能作为还款渠道。
 </section>
+{% if repayment_accounts.is_empty() %}<p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3 mb-4">当前没有与 {{ currency }} 同币种的普通账户，暂时无法还款。请先创建或准备一个非信用账户。</p>{% endif %}
+
+<form method="get" action="/installments/{{ plan_id }}" class="flex items-center justify-end gap-2 mb-3"><span class="text-xs text-gray-500">共 {{ total_records }} 期</span><select name="per_page" aria-label="每页条数" onchange="this.form.requestSubmit()" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="50" {% if per_page == 50 %}selected{% endif %}>50 条/页</option><option value="100" {% if per_page == 100 %}selected{% endif %}>100 条/页</option><option value="200" {% if per_page == 200 %}selected{% endif %}>200 条/页</option></select></form>
 
 <div class="bg-white rounded-lg border border-gray-200 overflow-x-auto">
   <table class="w-full text-sm">
@@ -34,13 +37,18 @@
         <td class="px-4 py-2 text-right font-mono">{{ item.fee }}</td>
         <td class="px-4 py-2 text-right font-mono font-medium">{{ item.total }}</td>
         <td class="px-4 py-2 text-right whitespace-nowrap">
-          <form method="post" action="/installments/items/{{ item.id }}/paid" class="inline">
-            {% if item.paid %}<input type="hidden" name="paid" value="false"><button class="text-green-700 hover:underline" hx-confirm="撤销这一期的已还标记？">已还 · 撤销</button>{% else %}<input type="hidden" name="paid" value="true"><button class="{% if item.overdue %}text-red-700{% else %}text-blue-600{% endif %} hover:underline">{% if item.overdue %}已逾期 · 标记已还{% else %}标记已还{% endif %}</button>{% endif %}
-          </form>
+          {% if item.paid %}
+          <div class="text-xs text-gray-500 mb-1">{% if !item.repayment_account_name.is_empty() %}{{ item.repayment_account_name }}{% else %}历史手动标记{% endif %}</div>
+          <form method="post" action="/installments/items/{{ item.id }}/paid" class="inline"><input type="hidden" name="paid" value="false"><button class="text-green-700 hover:underline" hx-confirm="撤销这期还款并删除自动生成的本金转账及费用支出？">已还 · 撤销</button></form>
+          {% else if !repayment_accounts.is_empty() %}
+          <form method="post" action="/installments/items/{{ item.id }}/paid" class="flex items-center justify-end gap-2"><input type="hidden" name="paid" value="true"><select name="repayment_account_id" required aria-label="还款渠道" class="max-w-48 border border-gray-300 rounded px-2 py-1 text-xs bg-white">{% for a in repayment_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select><button class="{% if item.overdue %}text-red-700{% else %}text-blue-600{% endif %} hover:underline" hx-confirm="从所选账户扣除本期月供，并自动生成本金转账和费用支出？">{% if item.overdue %}已逾期 · 立即还款{% else %}立即还款{% endif %}</button></form>
+          {% else %}<span class="text-xs text-gray-400">无可用还款渠道</span>
+          {% endif %}
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+<nav class="flex flex-wrap items-center justify-between gap-3 mt-4 text-sm" aria-label="分期期次分页"><span class="text-gray-500">第 {{ page }} / {{ total_pages }} 页</span><div class="flex items-center gap-2">{% if page > 1 %}<a href="/installments/{{ plan_id }}?page={{ page - 1 }}&per_page={{ per_page }}" class="border border-gray-300 rounded px-3 py-1.5 text-gray-600 hover:bg-gray-50">上一页</a>{% endif %}{% if page < total_pages %}<a href="/installments/{{ plan_id }}?page={{ page + 1 }}&per_page={{ per_page }}" class="border border-gray-300 rounded px-3 py-1.5 text-gray-600 hover:bg-gray-50">下一页</a>{% endif %}</div></nav>
 {% endblock %}

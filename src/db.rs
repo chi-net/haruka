@@ -83,6 +83,9 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_installment_items.if_not_exists()))
         .await
         .expect("建表失败");
+    ensure_column(&db, "installment_items", "repayment_account_id", "INTEGER").await;
+    ensure_column(&db, "installment_items", "principal_transfer_id", "INTEGER").await;
+    ensure_column(&db, "installment_items", "charge_bill_id", "INTEGER").await;
     let mut create_transfers = schema.create_table_from_entity(transfer::Entity);
     db.execute(builder.build(create_transfers.if_not_exists()))
         .await

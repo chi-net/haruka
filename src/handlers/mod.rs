@@ -1,6 +1,7 @@
 pub mod accounts;
 pub mod auth;
 pub mod bills;
+pub mod currencies;
 pub mod dashboard;
 pub mod debts;
 pub mod installments;
@@ -141,6 +142,33 @@ pub async fn stylesheet() -> impl IntoResponse {
         ],
         include_str!("../../static/app.css"),
     )
+}
+
+pub struct Pagination {
+    pub page: usize,
+    pub per_page: usize,
+    pub total_pages: usize,
+    pub start: usize,
+}
+
+pub fn pagination(
+    total_records: usize,
+    requested_page: usize,
+    requested_per_page: usize,
+) -> Pagination {
+    let per_page = match requested_per_page {
+        100 => 100,
+        200 => 200,
+        _ => 50,
+    };
+    let total_pages = total_records.max(1).div_ceil(per_page);
+    let page = requested_page.max(1).min(total_pages);
+    Pagination {
+        page,
+        per_page,
+        total_pages,
+        start: (page - 1) * per_page,
+    }
 }
 
 /// 将分格式化为 "12.34" 形式的字符串

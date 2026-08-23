@@ -398,6 +398,7 @@ async fn ensure_default_categories(state: &AppState, dek: &crypto::Dek) -> Handl
         ("expense", "购物", false),
         ("expense", "居住", false),
         ("expense", "娱乐", false),
+        ("expense", "分期费用", false),
         ("expense", "其他支出", false),
         ("income", "工资", false),
         ("income", "其他收入", false),

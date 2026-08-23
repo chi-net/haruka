@@ -12,7 +12,10 @@ use std::collections::HashMap;
 
 use crate::{
     crypto, currency,
-    entity::{account, account_detail, bill, category, debt_person, debt_record},
+    entity::{
+        account, account_detail, bill, category, debt_person, debt_record, installment_item,
+        installment_plan, subscription,
+    },
     AppState, SessionDek,
 };
 
@@ -44,6 +47,15 @@ struct PersonOption {
 struct CategoryOption {
     kind: String,
     name: String,
+}
+
+struct ReminderRow {
+    title: String,
+    detail: String,
+    due_at: String,
+    amount: String,
+    url: String,
+    overdue: bool,
 }
 
 #[derive(Serialize)]
@@ -89,6 +101,10 @@ struct DashboardTemplate {
     reports_json: String,
     default_currency: String,
     first_due_date: String,
+    subscription_reminders: Vec<ReminderRow>,
+    installment_reminders: Vec<ReminderRow>,
+    subscription_reminder_count: usize,
+    installment_reminder_count: usize,
 }
 
 fn account_kind_label(kind: &str) -> &'static str {
@@ -210,6 +226,90 @@ pub async fn show(
             currency: account.currency.clone(),
         })
         .collect::<Vec<_>>();
+    let now = chrono::Local::now().naive_local();
+    let reminder_deadline = now + Duration::days(7);
+    let all_subscription_reminders = subscription::Entity::find()
+        .order_by_asc(subscription::Column::ExpiresAt)
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .filter(|subscription| subscription.expires_at <= reminder_deadline)
+        .map(|subscription| ReminderRow {
+            title: crypto::decrypt_string(&dek, &subscription.name),
+            detail: format!(
+                "{} · {}",
+                crypto::decrypt_string(&dek, &subscription.category),
+                subscription.currency
+            ),
+            due_at: subscription.expires_at.format("%Y-%m-%d %H:%M").to_string(),
+            amount: currency::format(
+                crypto::decrypt_cents(&dek, &subscription.amount),
+                &subscription.currency,
+            ),
+            url: "/subscriptions".into(),
+            overdue: subscription.expires_at < now,
+        })
+        .collect::<Vec<_>>();
+    let subscription_reminder_count = all_subscription_reminders.len();
+    let subscription_reminders = all_subscription_reminders.into_iter().take(10).collect();
+
+    let reminder_plans: HashMap<i64, installment_plan::Model> = installment_plan::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|plan| (plan.id, plan))
+        .collect();
+    let reminder_bills: HashMap<i64, bill::Model> = bill::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|bill| (bill.id, bill))
+        .collect();
+    let mut all_installment_reminders = Vec::new();
+    for item in installment_item::Entity::find()
+        .order_by_asc(installment_item::Column::DueDate)
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .filter(|item| item.paid_at.is_none() && item.due_date <= reminder_deadline.date())
+    {
+        let Some(plan) = reminder_plans.get(&item.plan_id) else {
+            continue;
+        };
+        let Some(plan_bill) = reminder_bills.get(&plan.bill_id) else {
+            continue;
+        };
+        let Some(plan_currency) = account_currencies.get(&plan.account_id) else {
+            continue;
+        };
+        let category = crypto::decrypt_string(&dek, &plan_bill.category);
+        let note = crypto::decrypt_string(&dek, &plan_bill.note);
+        all_installment_reminders.push(ReminderRow {
+            title: if note.is_empty() {
+                category
+            } else {
+                format!("{category} · {note}")
+            },
+            detail: format!(
+                "第 {} 期 · {}",
+                item.sequence,
+                account_names
+                    .get(&plan.account_id)
+                    .cloned()
+                    .unwrap_or_default()
+            ),
+            due_at: item.due_date.format("%Y-%m-%d").to_string(),
+            amount: currency::format(crypto::decrypt_cents(&dek, &item.total), plan_currency),
+            url: format!("/installments/{}", plan.id),
+            overdue: item.due_date < today,
+        });
+    }
+    let installment_reminder_count = all_installment_reminders.len();
+    let installment_reminders = all_installment_reminders.into_iter().take(10).collect();
     let transfer_sources = accounts
         .iter()
         .filter(|account| !matches!(account.kind.as_str(), "credit_card" | "credit_service"))
@@ -376,6 +476,10 @@ pub async fn show(
         first_due_date: (chrono::Local::now().date_naive() + chrono::Months::new(1))
             .format("%Y-%m-%d")
             .to_string(),
+        subscription_reminders,
+        installment_reminders,
+        subscription_reminder_count,
+        installment_reminder_count,
     }
     .render()
     .map_err(err500)?;
