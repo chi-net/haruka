@@ -26,6 +26,7 @@ fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
 struct AccountOption {
     id: i64,
     name: String,
+    currency: String,
 }
 
 struct AccountSummary {
@@ -203,6 +204,7 @@ pub async fn show(
         .map(|account| AccountOption {
             id: account.id,
             name: account_names.get(&account.id).cloned().unwrap_or_default(),
+            currency: account.currency.clone(),
         })
         .collect::<Vec<_>>();
     let transfer_sources = accounts
@@ -211,6 +213,7 @@ pub async fn show(
         .map(|account| AccountOption {
             id: account.id,
             name: account_names.get(&account.id).cloned().unwrap_or_default(),
+            currency: account.currency.clone(),
         })
         .collect::<Vec<_>>();
     let mut net_assets = 0i64;

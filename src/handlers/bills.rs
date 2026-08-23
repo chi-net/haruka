@@ -49,6 +49,7 @@ struct AccountOption {
     id: i64,
     name: String,
     kind: String,
+    currency: String,
 }
 
 struct CategoryOption {
@@ -84,6 +85,10 @@ struct BillsTemplate {
     has_filters: bool,
     search_categories: Vec<CategoryOption>,
     default_currency: String,
+    page: usize,
+    per_page: usize,
+    total_pages: usize,
+    total_records: usize,
 }
 
 #[derive(Template)]
@@ -133,6 +138,10 @@ pub struct DeleteFormData {
 
 #[derive(Default, Deserialize)]
 pub struct BillsQuery {
+    #[serde(default)]
+    page: usize,
+    #[serde(default)]
+    per_page: usize,
     #[serde(default)]
     mode: String,
     #[serde(default)]
@@ -393,6 +402,7 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
             id: a.id,
             name: account_display_name(dek, &a, details.get(&a.id)),
             kind: a.kind,
+            currency: a.currency,
         })
         .collect())
 }
@@ -704,14 +714,14 @@ async fn render_list(
     let filter = LedgerFilter::from_query(&query)?;
     let has_filters = filter.is_active();
     let default_currency = currency::default_currency(state).await.map_err(err500)?;
-    let records = ledger_rows(state, dek)
+    let all_records = ledger_rows(state, dek)
         .await?
         .into_iter()
         .filter(|row| filter.matches(row))
         .collect::<Vec<_>>();
     let mut total_income: i64 = 0;
     let mut total_expense: i64 = 0;
-    for row in &records {
+    for row in &all_records {
         if row.bill_kind == "income" {
             total_income = total_income
                 .checked_add(row.amount_cents)
@@ -726,6 +736,19 @@ async fn render_list(
     let net = total_income
         .checked_sub(total_expense)
         .ok_or_else(|| err500("汇总金额超出范围"))?;
+    let per_page = match query.per_page {
+        100 => 100,
+        200 => 200,
+        _ => 50,
+    };
+    let total_records = all_records.len();
+    let total_pages = total_records.max(1).div_ceil(per_page);
+    let page = query.page.max(1).min(total_pages);
+    let records = all_records
+        .into_iter()
+        .skip((page - 1) * per_page)
+        .take(per_page)
+        .collect::<Vec<_>>();
     let search_categories = if advanced_search {
         category_options(state, dek).await?
     } else {
@@ -760,6 +783,10 @@ async fn render_list(
         has_filters,
         search_categories,
         default_currency,
+        page,
+        per_page,
+        total_pages,
+        total_records,
     }
     .render()
     .map_err(err500)?;

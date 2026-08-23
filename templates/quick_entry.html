@@ -23,14 +23,15 @@
     {% if accounts.len() < 2 || transfer_sources.is_empty() %}
     <p class="text-sm text-amber-700">至少需要两个账户，且转出账户不能是信用卡或信贷服务。</p>
     {% else %}
-    <form method="post" action="/transfers" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+    <form method="post" action="/transfers" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
       <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
-      <div><label class="block text-xs text-gray-500 mb-1">转出账户</label><select name="from_account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in transfer_sources %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select><p class="text-xs text-gray-400 mt-1">信用卡和信贷服务不能转出。</p></div>
-      <div><label class="block text-xs text-gray-500 mb-1">转入账户</label><select name="to_account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select></div>
-      <div><label class="block text-xs text-gray-500 mb-1">金额（转出账户原币）</label><input name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">时间</label><input name="happened_at" type="datetime-local" value="{{ happened_at }}" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
-      <div class="sm:col-span-2 lg:col-span-4"><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
-      <div class="sm:col-span-2 lg:col-span-4"><button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">确认转账</button></div>
+      <div><label class="block text-xs text-gray-500 mb-1">转出账户</label><select id="quick-transfer-from" name="from_account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in transfer_sources %}<option value="{{ a.id }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p class="text-xs text-gray-400 mt-1">信用卡和信贷服务不能转出。</p></div>
+      <div><label class="block text-xs text-gray-500 mb-1">转入账户</label><select id="quick-transfer-to" name="to_account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select></div>
+      <div><label id="quick-transfer-amount-label" class="block text-xs text-gray-500 mb-1">转出金额</label><input id="quick-transfer-amount" name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
+      <div id="quick-transfer-to-amount-field" class="hidden"><label id="quick-transfer-to-amount-label" class="block text-xs text-gray-500 mb-1">实际转入金额</label><input id="quick-transfer-to-amount" name="to_amount" type="number" step="0.01" min="0.01" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"><p id="quick-transfer-quote-status" class="text-xs text-gray-400 mt-1">按当前可用汇率自动填写，可手动修改。</p></div>
+      <div><label class="block text-xs text-gray-500 mb-1">时间</label><input id="quick-transfer-time" name="happened_at" type="datetime-local" value="{{ happened_at }}" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+      <div class="sm:col-span-2 lg:col-span-5"><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+      <div class="sm:col-span-2 lg:col-span-5"><button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">确认转账</button></div>
     </form>
     {% endif %}
   </div>
@@ -87,5 +88,63 @@
   };
   kind.addEventListener('change', update);
   update();
+})();
+(() => {
+  const from = document.getElementById('quick-transfer-from');
+  const to = document.getElementById('quick-transfer-to');
+  const amount = document.getElementById('quick-transfer-amount');
+  const time = document.getElementById('quick-transfer-time');
+  const amountLabel = document.getElementById('quick-transfer-amount-label');
+  const toAmountField = document.getElementById('quick-transfer-to-amount-field');
+  const toAmount = document.getElementById('quick-transfer-to-amount');
+  const toAmountLabel = document.getElementById('quick-transfer-to-amount-label');
+  const status = document.getElementById('quick-transfer-quote-status');
+  if (!from || !to || !amount || !time || !toAmountField || !toAmount || !status) return;
+  let requestNumber = 0;
+  let timer;
+  const selectedCurrency = select => select.selectedOptions[0]?.dataset.currency || '';
+  const updateQuote = () => {
+    clearTimeout(timer);
+    const currentRequest = ++requestNumber;
+    const fromCurrency = selectedCurrency(from);
+    const toCurrency = selectedCurrency(to);
+    amountLabel.textContent = `转出金额（${fromCurrency}）`;
+    toAmountLabel.textContent = `实际转入金额（${toCurrency}）`;
+    const crossCurrency = fromCurrency && toCurrency && fromCurrency !== toCurrency;
+    toAmountField.classList.toggle('hidden', !crossCurrency);
+    toAmount.required = crossCurrency;
+    if (!crossCurrency) {
+      toAmount.value = '';
+      return;
+    }
+    if (!amount.value || !time.value || from.value === to.value) {
+      toAmount.value = '';
+      status.textContent = from.value === to.value ? '转出和转入账户不能相同。' : '输入转出金额后自动换算，可手动修改。';
+      return;
+    }
+    status.textContent = '正在取得当前可用汇率…';
+    timer = setTimeout(async () => {
+      const params = new URLSearchParams({
+        from_account_id: from.value,
+        to_account_id: to.value,
+        amount: amount.value,
+        happened_at: time.value
+      });
+      try {
+        const response = await fetch(`/transfers/quote?${params}`, { headers: { Accept: 'application/json' } });
+        if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+        const quote = await response.json();
+        if (currentRequest !== requestNumber) return;
+        toAmount.value = quote.to_amount;
+        status.textContent = `已按当前可用汇率换算，可按实际到账金额修改。`;
+      } catch (error) {
+        if (currentRequest !== requestNumber) return;
+        toAmount.value = '';
+        status.textContent = `自动换算失败：${error.message}`;
+      }
+    }, 250);
+  };
+  [from, to, amount, time].forEach(element => element.addEventListener(element === amount ? 'input' : 'change', updateQuote));
+  updateQuote();
 })();
 </script>

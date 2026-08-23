@@ -189,6 +189,7 @@ async fn main() {
             "/transfers",
             get(handlers::dashboard::redirect).post(handlers::transfers::create),
         )
+        .route("/transfers/quote", get(handlers::transfers::quote))
         .route("/transfers/{id}/delete", post(handlers::transfers::delete))
         .route(
             "/debts",

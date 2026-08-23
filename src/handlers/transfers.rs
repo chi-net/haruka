@@ -1,13 +1,13 @@
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::Redirect,
-    Form,
+    Form, Json,
 };
 use chrono::NaiveDateTime;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 use crate::{
@@ -32,10 +32,27 @@ pub struct TransferFormData {
     from_account_id: i64,
     to_account_id: i64,
     amount: String,
+    #[serde(default)]
+    to_amount: String,
     note: String,
     happened_at: String,
     #[serde(default)]
     redirect_to: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct QuoteQuery {
+    from_account_id: i64,
+    to_account_id: i64,
+    amount: String,
+    happened_at: String,
+}
+
+#[derive(Serialize)]
+pub struct QuoteResponse {
+    from_currency: String,
+    to_currency: String,
+    to_amount: String,
 }
 
 #[derive(Deserialize)]
@@ -54,6 +71,42 @@ fn parse_amount(value: &str) -> HandlerResult<i64> {
     (decimal * Decimal::from(100))
         .to_i64()
         .ok_or_else(|| bad_request("金额超出范围"))
+}
+
+pub async fn quote(
+    State(state): State<AppState>,
+    Query(query): Query<QuoteQuery>,
+) -> HandlerResult<Json<QuoteResponse>> {
+    if query.from_account_id == query.to_account_id {
+        return Err(bad_request("转出和转入账户不能相同"));
+    }
+    let from_account = account::Entity::find_by_id(query.from_account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("转出账户不存在"))?;
+    let to_account = account::Entity::find_by_id(query.to_account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("转入账户不存在"))?;
+    let amount = parse_amount(&query.amount)?;
+    NaiveDateTime::parse_from_str(query.happened_at.trim(), TIME_FMT)
+        .map_err(|_| bad_request("时间格式不正确"))?;
+    let to_amount = currency::convert_cents(
+        &state,
+        amount,
+        &from_account.currency,
+        &to_account.currency,
+        chrono::Local::now().date_naive(),
+    )
+    .await
+    .map_err(err500)?;
+    Ok(Json(QuoteResponse {
+        from_currency: from_account.currency,
+        to_currency: to_account.currency,
+        to_amount: super::fmt_cents(to_amount),
+    }))
 }
 
 pub async fn create(
@@ -81,15 +134,21 @@ pub async fn create(
     let amount = parse_amount(&form.amount)?;
     let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确"))?;
-    let to_amount = currency::convert_cents(
-        &state,
-        amount,
-        &from_account.currency,
-        &to_account.currency,
-        happened_at.date(),
-    )
-    .await
-    .map_err(err500)?;
+    let to_amount = if from_account.currency == to_account.currency {
+        amount
+    } else if form.to_amount.trim().is_empty() {
+        currency::convert_cents(
+            &state,
+            amount,
+            &from_account.currency,
+            &to_account.currency,
+            chrono::Local::now().date_naive(),
+        )
+        .await
+        .map_err(err500)?
+    } else {
+        parse_amount(&form.to_amount)?
+    };
     super::accounts::ensure_balance_delta(
         &state,
         &dek,
