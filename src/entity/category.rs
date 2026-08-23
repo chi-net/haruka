@@ -8,6 +8,8 @@ pub struct Model {
     /// "income" | "expense"
     pub kind: String,
     pub name: String,
+    /// 是否计入恩格尔系数的食品支出
+    pub is_food: bool,
     pub created_at: DateTimeUtc,
 }
 

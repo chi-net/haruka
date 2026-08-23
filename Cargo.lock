@@ -765,6 +765,7 @@ dependencies = [
  "rust_decimal",
  "sea-orm",
  "serde",
+ "serde_json",
  "tokio",
  "zeroize",
 ]

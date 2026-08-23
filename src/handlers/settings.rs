@@ -27,6 +27,7 @@ fn bad_request(msg: &str) -> (StatusCode, String) {
 struct CategoryRow {
     id: i64,
     name: String,
+    is_food: bool,
 }
 
 #[derive(Template)]
@@ -43,12 +44,15 @@ struct CategoryFormTemplate {
     action: String,
     name: String,
     kind: String,
+    is_food: bool,
 }
 
 #[derive(Deserialize)]
 pub struct CategoryFormData {
     name: String,
     kind: String,
+    #[serde(default)]
+    is_food: bool,
 }
 
 fn valid_kind(kind: &str) -> bool {
@@ -92,6 +96,7 @@ pub async fn show(
         let row = CategoryRow {
             id: category.id,
             name: crypto::decrypt_string(&dek, &category.name),
+            is_food: category.is_food,
         };
         if category.kind == "income" {
             income_categories.push(row);
@@ -127,9 +132,11 @@ pub async fn create_category(
         return Err(bad_request("分类类型无效"));
     }
     ensure_unique_name(&state, &dek, &form.kind, name, None).await?;
+    let is_food = form.is_food && form.kind == "expense";
     category::ActiveModel {
         kind: Set(form.kind),
         name: Set(crypto::encrypt(&dek, name.as_bytes())),
+        is_food: Set(is_food),
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
     }
@@ -153,6 +160,7 @@ pub async fn edit_category_form(
         action: format!("/settings/categories/{id}/edit"),
         name: crypto::decrypt_string(&dek, &category.name),
         kind: category.kind,
+        is_food: category.is_food,
     }
     .render()
     .map_err(err500)?;
@@ -178,9 +186,11 @@ pub async fn update_category(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "分类不存在".into()))?;
+    let is_food = form.is_food && form.kind == "expense";
     let mut active = category.into_active_model();
     active.kind = Set(form.kind);
     active.name = Set(crypto::encrypt(&dek, name.as_bytes()));
+    active.is_food = Set(is_food);
     active.update(&state.db).await.map_err(err500)?;
     Ok(Redirect::to("/settings"))
 }

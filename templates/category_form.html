@@ -5,6 +5,7 @@
 <form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-md">
   <div><label class="block text-sm text-gray-600 mb-1">类型</label><select name="kind" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="expense" {% if kind == "expense" %}selected{% endif %}>支出</option><option value="income" {% if kind == "income" %}selected{% endif %}>收入</option></select></div>
   <div><label class="block text-sm text-gray-600 mb-1">分类名称</label><input name="name" value="{{ name }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>
+  <label class="flex items-center gap-2 text-sm text-gray-600"><input type="checkbox" name="is_food" value="true" {% if is_food %}checked{% endif %}> 计入恩格尔系数的食品支出（收入分类会忽略）</label>
   <div class="flex gap-3"><button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded">保存</button><a href="/settings" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300">取消</a></div>
 </form>
 {% endblock %}

@@ -206,14 +206,25 @@ pub(crate) async fn ensure_category_exists(
     kind: &str,
     name: &str,
 ) -> HandlerResult<()> {
-    let exists = category_options(state, dek)
-        .await?
+    category_is_food(state, dek, kind, name).await.map(|_| ())
+}
+
+pub(crate) async fn category_is_food(
+    state: &AppState,
+    dek: &crypto::Dek,
+    kind: &str,
+    name: &str,
+) -> HandlerResult<bool> {
+    category::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
         .into_iter()
-        .any(|category| category.kind == kind && category.name == name);
-    if !exists {
-        return Err(bad_request("请选择设置中已有的对应收支分类"));
-    }
-    Ok(())
+        .find(|category| {
+            category.kind == kind && crypto::decrypt_string(dek, &category.name) == name
+        })
+        .map(|category| category.is_food)
+        .ok_or_else(|| bad_request("请选择设置中已有的对应收支分类"))
 }
 
 pub async fn list(
@@ -311,7 +322,7 @@ pub async fn create(
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
     let parsed = parse_form(form)?;
-    ensure_category_exists(&state, &dek, &parsed.kind, &parsed.category).await?;
+    let is_food = category_is_food(&state, &dek, &parsed.kind, &parsed.category).await?;
     super::accounts::ensure_balance_delta(
         &state,
         &dek,
@@ -324,6 +335,7 @@ pub async fn create(
         kind: Set(parsed.kind),
         amount: Set(crypto::encrypt_cents(&dek, parsed.amount)),
         category: Set(crypto::encrypt(&dek, parsed.category.as_bytes())),
+        is_food: Set(is_food),
         note: Set(crypto::encrypt(&dek, parsed.note.as_bytes())),
         happened_at: Set(parsed.happened_at),
         created_at: Set(chrono::Utc::now()),
@@ -372,7 +384,7 @@ pub async fn update(
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
     let parsed = parse_form(form)?;
-    ensure_category_exists(&state, &dek, &parsed.kind, &parsed.category).await?;
+    let is_food = category_is_food(&state, &dek, &parsed.kind, &parsed.category).await?;
     let b = bill::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -403,6 +415,7 @@ pub async fn update(
     active.kind = Set(parsed.kind);
     active.amount = Set(crypto::encrypt_cents(&dek, parsed.amount));
     active.category = Set(crypto::encrypt(&dek, parsed.category.as_bytes()));
+    active.is_food = Set(is_food);
     active.note = Set(crypto::encrypt(&dek, parsed.note.as_bytes()));
     active.happened_at = Set(parsed.happened_at);
     active.update(&state.db).await.map_err(err500)?;

@@ -11,6 +11,8 @@ pub struct Model {
     /// 金额（整数分）的密文，base64 编码
     pub amount: String,
     pub category: String,
+    /// 创建或修改账单时记录的食品类标记
+    pub is_food: bool,
     pub note: String,
     pub happened_at: DateTime,
     pub created_at: DateTimeUtc,

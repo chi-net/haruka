@@ -1,10 +1,44 @@
 pub mod accounts;
 pub mod auth;
 pub mod bills;
+pub mod dashboard;
 pub mod debts;
 pub mod settings;
 pub mod subscriptions;
 pub mod transfers;
+
+use askama::Template;
+use axum::{
+    body::to_bytes,
+    extract::Request,
+    http::StatusCode,
+    middleware::Next,
+    response::{Html, IntoResponse, Response},
+};
+
+#[derive(Template)]
+#[template(path = "error.html")]
+struct ErrorTemplate {
+    message: String,
+}
+
+pub async fn render_server_error(request: Request, next: Next) -> Response {
+    let response = next.run(request).await;
+    if response.status() != StatusCode::INTERNAL_SERVER_ERROR {
+        return response;
+    }
+    let message = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .ok()
+        .and_then(|body| String::from_utf8(body.to_vec()).ok())
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(|| "服务端发生未知错误".into());
+    eprintln!("请求处理失败: {message}");
+    let html = ErrorTemplate { message }
+        .render()
+        .unwrap_or_else(|_| "服务端发生错误，且错误页面渲染失败".into());
+    (StatusCode::INTERNAL_SERVER_ERROR, Html(html)).into_response()
+}
 
 /// 将分格式化为 "12.34" 形式的字符串
 pub fn fmt_cents(cents: i64) -> String {

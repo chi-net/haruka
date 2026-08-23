@@ -103,7 +103,8 @@ async fn main() {
     };
 
     let protected = Router::new()
-        .route("/", get(|| async { Redirect::to("/bills") }))
+        .route("/", get(handlers::dashboard::redirect))
+        .route("/dashboard", get(handlers::dashboard::show))
         .route(
             "/accounts",
             get(handlers::accounts::list).post(handlers::accounts::create),
@@ -147,12 +148,12 @@ async fn main() {
         )
         .route(
             "/transfers",
-            get(handlers::transfers::list).post(handlers::transfers::create),
+            get(handlers::dashboard::redirect).post(handlers::transfers::create),
         )
         .route("/transfers/{id}/delete", post(handlers::transfers::delete))
         .route(
             "/debts",
-            get(handlers::debts::list).post(handlers::debts::create_record),
+            get(handlers::dashboard::redirect).post(handlers::debts::create_record),
         )
         .route("/debts/{id}/delete", post(handlers::debts::delete_record))
         .route(
@@ -205,7 +206,8 @@ async fn main() {
             get(handlers::auth::recover_form).post(handlers::auth::recover),
         )
         .merge(protected)
-        .with_state(state);
+        .with_state(state)
+        .layer(middleware::from_fn(handlers::render_server_error));
 
     let addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     let listener = tokio::net::TcpListener::bind(&addr)

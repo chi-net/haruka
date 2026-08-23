@@ -1,15 +1,14 @@
-use askama::Template;
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
-    response::{Html, Redirect},
+    response::Redirect,
     Form,
 };
 use chrono::NaiveDateTime;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
-use sea_orm::{ActiveModelTrait, EntityTrait, QueryOrder, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde::Deserialize;
-use std::{collections::HashMap, str::FromStr};
+use std::str::FromStr;
 
 use crate::{
     crypto,
@@ -19,7 +18,6 @@ use crate::{
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
 const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
-const DISPLAY_FMT: &str = "%Y-%m-%d %H:%M";
 
 fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
@@ -27,28 +25,6 @@ fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
 
 fn bad_request(msg: &str) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, msg.to_string())
-}
-
-struct AccountOption {
-    id: i64,
-    name: String,
-}
-
-struct TransferRow {
-    id: i64,
-    from_account: String,
-    to_account: String,
-    amount: String,
-    note: String,
-    happened_at: String,
-}
-
-#[derive(Template)]
-#[template(path = "transfers.html")]
-struct TransfersTemplate {
-    accounts: Vec<AccountOption>,
-    transfers: Vec<TransferRow>,
-    happened_at: String,
 }
 
 #[derive(Deserialize)]
@@ -70,61 +46,6 @@ fn parse_amount(value: &str) -> HandlerResult<i64> {
     (decimal * Decimal::from(100))
         .to_i64()
         .ok_or_else(|| bad_request("金额超出范围"))
-}
-
-pub async fn list(
-    State(state): State<AppState>,
-    Extension(SessionDek(dek)): Extension<SessionDek>,
-) -> HandlerResult<Html<String>> {
-    let accounts = account::Entity::find()
-        .order_by_asc(account::Column::Id)
-        .all(&state.db)
-        .await
-        .map_err(err500)?;
-    let names: HashMap<i64, String> = accounts
-        .iter()
-        .map(|account| (account.id, crypto::decrypt_string(&dek, &account.name)))
-        .collect();
-    let account_options = accounts
-        .into_iter()
-        .map(|account| AccountOption {
-            id: account.id,
-            name: names.get(&account.id).cloned().unwrap_or_default(),
-        })
-        .collect();
-    let rows = transfer::Entity::find()
-        .order_by_desc(transfer::Column::HappenedAt)
-        .order_by_desc(transfer::Column::Id)
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-        .into_iter()
-        .map(|transfer| TransferRow {
-            id: transfer.id,
-            from_account: names
-                .get(&transfer.from_account_id)
-                .cloned()
-                .unwrap_or_else(|| "已删除账户".into()),
-            to_account: names
-                .get(&transfer.to_account_id)
-                .cloned()
-                .unwrap_or_else(|| "已删除账户".into()),
-            amount: super::fmt_cents(crypto::decrypt_cents(&dek, &transfer.amount)),
-            note: crypto::decrypt_string(&dek, &transfer.note),
-            happened_at: transfer.happened_at.format(DISPLAY_FMT).to_string(),
-        })
-        .collect();
-    let html = TransfersTemplate {
-        accounts: account_options,
-        transfers: rows,
-        happened_at: chrono::Local::now()
-            .naive_local()
-            .format(TIME_FMT)
-            .to_string(),
-    }
-    .render()
-    .map_err(err500)?;
-    Ok(Html(html))
 }
 
 pub async fn create(
@@ -170,7 +91,7 @@ pub async fn create(
     .insert(&state.db)
     .await
     .map_err(err500)?;
-    Ok(Redirect::to("/transfers"))
+    Ok(Redirect::to("/dashboard"))
 }
 
 pub async fn delete(
@@ -198,5 +119,5 @@ pub async fn delete(
         .exec(&state.db)
         .await
         .map_err(err500)?;
-    Ok(Redirect::to("/transfers"))
+    Ok(Redirect::to("/dashboard"))
 }

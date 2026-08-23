@@ -21,7 +21,6 @@ use crate::{
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
 const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
-const DISPLAY_FMT: &str = "%Y-%m-%d %H:%M";
 
 fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
@@ -31,43 +30,12 @@ fn bad_request(msg: &str) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, msg.to_string())
 }
 
-struct PersonOption {
-    id: i64,
-    name: String,
-}
-
-struct AccountOption {
-    id: i64,
-    name: String,
-}
-
-struct DebtRow {
-    id: i64,
-    person_name: String,
-    account_name: String,
-    kind_label: String,
-    money_class: String,
-    money_sign: String,
-    amount: String,
-    note: String,
-    happened_at: String,
-}
-
 struct DebtPersonRow {
     id: i64,
     name: String,
     note: String,
     receivable: String,
     payable: String,
-}
-
-#[derive(Template)]
-#[template(path = "debts.html")]
-struct DebtsTemplate {
-    people: Vec<PersonOption>,
-    accounts: Vec<AccountOption>,
-    records: Vec<DebtRow>,
-    happened_at: String,
 }
 
 #[derive(Template)]
@@ -106,23 +74,6 @@ fn valid_kind(kind: &str) -> bool {
         kind,
         "lend" | "borrow" | "repayment_received" | "repayment_paid"
     )
-}
-
-fn kind_label(kind: &str) -> &'static str {
-    match kind {
-        "lend" => "我借给对方",
-        "borrow" => "我向对方借入",
-        "repayment_received" => "对方还给我",
-        "repayment_paid" => "我还给对方",
-        _ => "未知",
-    }
-}
-
-fn account_money_direction(kind: &str) -> (&'static str, &'static str) {
-    match kind {
-        "borrow" | "repayment_received" => ("+", "text-green-600"),
-        _ => ("-", "text-red-600"),
-    }
 }
 
 fn account_delta(kind: &str, amount: i64) -> HandlerResult<i64> {
@@ -202,82 +153,6 @@ async fn person_outstanding(
     Ok((receivable, payable))
 }
 
-pub async fn list(
-    State(state): State<AppState>,
-    Extension(SessionDek(dek)): Extension<SessionDek>,
-) -> HandlerResult<Html<String>> {
-    let people = debt_person::Entity::find()
-        .order_by_asc(debt_person::Column::Id)
-        .all(&state.db)
-        .await
-        .map_err(err500)?;
-    let accounts = account::Entity::find()
-        .order_by_asc(account::Column::Id)
-        .all(&state.db)
-        .await
-        .map_err(err500)?;
-    let person_names: HashMap<i64, String> = people
-        .iter()
-        .map(|person| (person.id, crypto::decrypt_string(&dek, &person.name)))
-        .collect();
-    let account_names: HashMap<i64, String> = accounts
-        .iter()
-        .map(|account| (account.id, crypto::decrypt_string(&dek, &account.name)))
-        .collect();
-    let records = debt_record::Entity::find()
-        .order_by_desc(debt_record::Column::HappenedAt)
-        .order_by_desc(debt_record::Column::Id)
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-        .into_iter()
-        .map(|record| {
-            let (money_sign, money_class) = account_money_direction(&record.kind);
-            DebtRow {
-                id: record.id,
-                person_name: person_names
-                    .get(&record.person_id)
-                    .cloned()
-                    .unwrap_or_else(|| "已删除对象".into()),
-                account_name: account_names
-                    .get(&record.account_id)
-                    .cloned()
-                    .unwrap_or_else(|| "已删除账户".into()),
-                kind_label: kind_label(&record.kind).into(),
-                money_class: money_class.into(),
-                money_sign: money_sign.into(),
-                amount: super::fmt_cents(crypto::decrypt_cents(&dek, &record.amount)),
-                note: crypto::decrypt_string(&dek, &record.note),
-                happened_at: record.happened_at.format(DISPLAY_FMT).to_string(),
-            }
-        })
-        .collect();
-    let html = DebtsTemplate {
-        people: people
-            .into_iter()
-            .map(|person| PersonOption {
-                id: person.id,
-                name: person_names.get(&person.id).cloned().unwrap_or_default(),
-            })
-            .collect(),
-        accounts: accounts
-            .into_iter()
-            .map(|account| AccountOption {
-                id: account.id,
-                name: account_names.get(&account.id).cloned().unwrap_or_default(),
-            })
-            .collect(),
-        records,
-        happened_at: chrono::Local::now()
-            .naive_local()
-            .format(TIME_FMT)
-            .to_string(),
-    }
-    .render()
-    .map_err(err500)?;
-    Ok(Html(html))
-}
-
 pub async fn create_record(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
@@ -333,7 +208,7 @@ pub async fn create_record(
     .insert(&state.db)
     .await
     .map_err(err500)?;
-    Ok(Redirect::to("/debts"))
+    Ok(Redirect::to("/dashboard"))
 }
 
 pub async fn delete_record(
@@ -355,7 +230,7 @@ pub async fn delete_record(
         .exec(&state.db)
         .await
         .map_err(err500)?;
-    Ok(Redirect::to("/debts"))
+    Ok(Redirect::to("/dashboard"))
 }
 
 pub async fn people(

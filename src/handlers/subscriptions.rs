@@ -368,7 +368,7 @@ pub async fn create_expense(
         .ok_or((StatusCode::NOT_FOUND, "订阅不存在".into()))?;
     let amount = crypto::decrypt_cents(&dek, &subscription.amount);
     let category = crypto::decrypt_string(&dek, &subscription.category);
-    super::bills::ensure_category_exists(&state, &dek, "expense", &category).await?;
+    let is_food = super::bills::category_is_food(&state, &dek, "expense", &category).await?;
     super::accounts::ensure_balance_delta(
         &state,
         &dek,
@@ -393,6 +393,7 @@ pub async fn create_expense(
         kind: Set("expense".into()),
         amount: Set(crypto::encrypt_cents(&dek, amount)),
         category: Set(crypto::encrypt(&dek, category.as_bytes())),
+        is_food: Set(is_food),
         note: Set(crypto::encrypt(&dek, note.as_bytes())),
         happened_at: Set(now),
         created_at: Set(chrono::Utc::now()),

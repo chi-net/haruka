@@ -186,7 +186,7 @@ pub async fn setup(
     let html = RecoveryPhraseTemplate {
         heading: "保存恢复助记词".into(),
         phrase,
-        next_url: "/".into(),
+        next_url: "/dashboard".into(),
     }
     .render()
     .map_err(err500)?;
@@ -223,7 +223,7 @@ pub async fn unlock(
             ensure_default_account(&state, &dek).await?;
             state.remove_session(&headers);
             Ok(set_session_cookie(
-                Redirect::to("/").into_response(),
+                Redirect::to("/dashboard").into_response(),
                 &state,
                 &dek,
             ))
@@ -330,7 +330,7 @@ pub async fn recover(
     ensure_default_account(&state, &dek).await?;
     state.clear_sessions();
     Ok(set_session_cookie(
-        Redirect::to("/").into_response(),
+        Redirect::to("/dashboard").into_response(),
         &state,
         &dek,
     ))
@@ -377,19 +377,20 @@ async fn ensure_default_categories(state: &AppState, dek: &crypto::Dek) -> Handl
     {
         return Ok(());
     }
-    for (kind, name) in [
-        ("expense", "餐饮"),
-        ("expense", "交通"),
-        ("expense", "购物"),
-        ("expense", "居住"),
-        ("expense", "娱乐"),
-        ("expense", "其他支出"),
-        ("income", "工资"),
-        ("income", "其他收入"),
+    for (kind, name, is_food) in [
+        ("expense", "餐饮", true),
+        ("expense", "交通", false),
+        ("expense", "购物", false),
+        ("expense", "居住", false),
+        ("expense", "娱乐", false),
+        ("expense", "其他支出", false),
+        ("income", "工资", false),
+        ("income", "其他收入", false),
     ] {
         category::ActiveModel {
             kind: Set(kind.into()),
             name: Set(crypto::encrypt(dek, name.as_bytes())),
+            is_food: Set(is_food),
             created_at: Set(chrono::Utc::now()),
             ..Default::default()
         }
