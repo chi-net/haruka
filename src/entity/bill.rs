@@ -8,8 +8,8 @@ pub struct Model {
     pub account_id: i64,
     /// "income" | "expense"
     pub kind: String,
-    /// 金额，单位为分
-    pub amount: i64,
+    /// 金额（整数分）的密文，base64 编码
+    pub amount: String,
     pub category: String,
     pub note: String,
     pub happened_at: DateTime,

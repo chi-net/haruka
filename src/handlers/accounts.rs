@@ -5,13 +5,11 @@ use axum::{
     response::{Html, Redirect},
     Form,
 };
-use sea_orm::{
-    ActiveModelTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryOrder, Set,
-};
+use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QueryOrder, Set};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use crate::entity::{account, bill};
+use crate::{crypto, entity::{account, bill}, AppState};
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
 
@@ -47,17 +45,19 @@ pub struct AccountFormData {
     note: String,
 }
 
-pub async fn list(State(db): State<DatabaseConnection>) -> HandlerResult<Html<String>> {
+pub async fn list(State(state): State<AppState>) -> HandlerResult<Html<String>> {
+    let dek = state.dek()?;
     let accounts = account::Entity::find()
         .order_by_asc(account::Column::Id)
-        .all(&db)
+        .all(&state.db)
         .await
         .map_err(err500)?;
-    let bills = bill::Entity::find().all(&db).await.map_err(err500)?;
+    let bills = bill::Entity::find().all(&state.db).await.map_err(err500)?;
 
     let mut net: HashMap<i64, i64> = HashMap::new();
     for b in &bills {
-        let sign = if b.kind == "income" { b.amount } else { -b.amount };
+        let cents = crypto::decrypt_cents(&dek, &b.amount);
+        let sign = if b.kind == "income" { cents } else { -cents };
         *net.entry(b.account_id).or_default() += sign;
     }
 
@@ -65,8 +65,8 @@ pub async fn list(State(db): State<DatabaseConnection>) -> HandlerResult<Html<St
         .into_iter()
         .map(|a| AccountRow {
             id: a.id,
-            name: a.name,
-            note: a.note,
+            name: crypto::decrypt_string(&dek, &a.name),
+            note: crypto::decrypt_string(&dek, &a.note),
             balance: super::fmt_cents(net.get(&a.id).copied().unwrap_or_default()),
         })
         .collect();
@@ -88,38 +88,40 @@ pub async fn new_form() -> Html<String> {
 }
 
 pub async fn create(
-    State(db): State<DatabaseConnection>,
+    State(state): State<AppState>,
     Form(form): Form<AccountFormData>,
 ) -> HandlerResult<Redirect> {
+    let dek = state.dek()?;
     if form.name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "账户名不能为空".into()));
     }
     account::ActiveModel {
-        name: Set(form.name.trim().to_string()),
-        note: Set(form.note.trim().to_string()),
+        name: Set(crypto::encrypt(&dek, form.name.trim().as_bytes())),
+        note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
     }
-    .insert(&db)
+    .insert(&state.db)
     .await
     .map_err(err500)?;
     Ok(Redirect::to("/accounts"))
 }
 
 pub async fn edit_form(
-    State(db): State<DatabaseConnection>,
+    State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
+    let dek = state.dek()?;
     let a = account::Entity::find_by_id(id)
-        .one(&db)
+        .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     let html = AccountFormTemplate {
         heading: "编辑账户".into(),
         action: format!("/accounts/{id}/edit"),
-        name: a.name,
-        note: a.note,
+        name: crypto::decrypt_string(&dek, &a.name),
+        note: crypto::decrypt_string(&dek, &a.note),
     }
     .render()
     .map_err(err500)?;
@@ -127,31 +129,32 @@ pub async fn edit_form(
 }
 
 pub async fn update(
-    State(db): State<DatabaseConnection>,
+    State(state): State<AppState>,
     Path(id): Path<i64>,
     Form(form): Form<AccountFormData>,
 ) -> HandlerResult<Redirect> {
+    let dek = state.dek()?;
     if form.name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "账户名不能为空".into()));
     }
     let a = account::Entity::find_by_id(id)
-        .one(&db)
+        .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     let mut active = a.into_active_model();
-    active.name = Set(form.name.trim().to_string());
-    active.note = Set(form.note.trim().to_string());
-    active.update(&db).await.map_err(err500)?;
+    active.name = Set(crypto::encrypt(&dek, form.name.trim().as_bytes()));
+    active.note = Set(crypto::encrypt(&dek, form.note.trim().as_bytes()));
+    active.update(&state.db).await.map_err(err500)?;
     Ok(Redirect::to("/accounts"))
 }
 
 pub async fn delete(
-    State(db): State<DatabaseConnection>,
+    State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Redirect> {
     account::Entity::delete_by_id(id)
-        .exec(&db)
+        .exec(&state.db)
         .await
         .map_err(err500)?;
     Ok(Redirect::to("/accounts"))

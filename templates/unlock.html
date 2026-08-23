@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}解锁 - haruka{% endblock %}
+{% block content %}
+<div class="max-w-sm mx-auto mt-16">
+  <h1 class="text-xl font-bold mb-4">解锁</h1>
+  {% if !error.is_empty() %}
+  <p class="text-sm text-red-600 mb-4">{{ error }}</p>
+  {% endif %}
+  <form method="post" action="/unlock" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">主密码</label>
+      <input name="password" type="password" required autofocus class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+    <button type="submit" class="w-full bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">解锁</button>
+  </form>
+</div>
+{% endblock %}

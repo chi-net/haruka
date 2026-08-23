@@ -7,13 +7,11 @@ use axum::{
 };
 use chrono::NaiveDateTime;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
-use sea_orm::{
-    ActiveModelTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryOrder, Set,
-};
+use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QueryOrder, Set};
 use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr};
 
-use crate::entity::{account, bill};
+use crate::{crypto, entity::{account, bill}, AppState};
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
 
@@ -114,10 +112,11 @@ fn parse_form(form: BillFormData) -> HandlerResult<ParsedBill> {
     })
 }
 
-async fn account_options(db: &DatabaseConnection) -> HandlerResult<Vec<AccountOption>> {
+async fn account_options(state: &AppState) -> HandlerResult<Vec<AccountOption>> {
+    let dek = state.dek()?;
     let accounts = account::Entity::find()
         .order_by_asc(account::Column::Id)
-        .all(db)
+        .all(&state.db)
         .await
         .map_err(err500)?;
     if accounts.is_empty() {
@@ -125,36 +124,41 @@ async fn account_options(db: &DatabaseConnection) -> HandlerResult<Vec<AccountOp
     }
     Ok(accounts
         .into_iter()
-        .map(|a| AccountOption { id: a.id, name: a.name })
+        .map(|a| AccountOption { id: a.id, name: crypto::decrypt_string(&dek, &a.name) })
         .collect())
 }
 
-pub async fn list(State(db): State<DatabaseConnection>) -> HandlerResult<Html<String>> {
+pub async fn list(State(state): State<AppState>) -> HandlerResult<Html<String>> {
+    let dek = state.dek()?;
     let bills = bill::Entity::find()
         .order_by_desc(bill::Column::HappenedAt)
         .order_by_desc(bill::Column::Id)
-        .all(&db)
+        .all(&state.db)
         .await
         .map_err(err500)?;
-    let accounts = account::Entity::find().all(&db).await.map_err(err500)?;
-    let names: HashMap<i64, String> = accounts.into_iter().map(|a| (a.id, a.name)).collect();
+    let accounts = account::Entity::find().all(&state.db).await.map_err(err500)?;
+    let names: HashMap<i64, String> = accounts
+        .into_iter()
+        .map(|a| (a.id, crypto::decrypt_string(&dek, &a.name)))
+        .collect();
 
     let mut total_income: i64 = 0;
     let mut total_expense: i64 = 0;
     let mut rows = Vec::with_capacity(bills.len());
     for b in bills {
+        let cents = crypto::decrypt_cents(&dek, &b.amount);
         if b.kind == "income" {
-            total_income += b.amount;
+            total_income += cents;
         } else {
-            total_expense += b.amount;
+            total_expense += cents;
         }
         rows.push(BillRow {
             id: b.id,
             account_name: names.get(&b.account_id).cloned().unwrap_or_else(|| "已删除账户".into()),
             kind: b.kind,
-            amount: super::fmt_cents(b.amount),
-            category: b.category,
-            note: b.note,
+            amount: super::fmt_cents(cents),
+            category: crypto::decrypt_string(&dek, &b.category),
+            note: crypto::decrypt_string(&dek, &b.note),
             happened_at: b.happened_at.format(DISPLAY_FMT).to_string(),
         });
     }
@@ -170,8 +174,8 @@ pub async fn list(State(db): State<DatabaseConnection>) -> HandlerResult<Html<St
     Ok(Html(html))
 }
 
-pub async fn new_form(State(db): State<DatabaseConnection>) -> HandlerResult<Html<String>> {
-    let accounts = account_options(&db).await?;
+pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<String>> {
+    let accounts = account_options(&state).await?;
     let first_id = accounts[0].id;
     let html = BillFormTemplate {
         heading: "记一笔".into(),
@@ -190,45 +194,47 @@ pub async fn new_form(State(db): State<DatabaseConnection>) -> HandlerResult<Htm
 }
 
 pub async fn create(
-    State(db): State<DatabaseConnection>,
+    State(state): State<AppState>,
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
+    let dek = state.dek()?;
     let parsed = parse_form(form)?;
     bill::ActiveModel {
         account_id: Set(parsed.account_id),
         kind: Set(parsed.kind),
-        amount: Set(parsed.amount),
-        category: Set(parsed.category),
-        note: Set(parsed.note),
+        amount: Set(crypto::encrypt_cents(&dek, parsed.amount)),
+        category: Set(crypto::encrypt(&dek, parsed.category.as_bytes())),
+        note: Set(crypto::encrypt(&dek, parsed.note.as_bytes())),
         happened_at: Set(parsed.happened_at),
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
     }
-    .insert(&db)
+    .insert(&state.db)
     .await
     .map_err(err500)?;
     Ok(Redirect::to("/bills"))
 }
 
 pub async fn edit_form(
-    State(db): State<DatabaseConnection>,
+    State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
+    let dek = state.dek()?;
     let b = bill::Entity::find_by_id(id)
-        .one(&db)
+        .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
-    let accounts = account_options(&db).await?;
+    let accounts = account_options(&state).await?;
     let html = BillFormTemplate {
         heading: "编辑账单".into(),
         action: format!("/bills/{id}/edit"),
         accounts,
         account_id: b.account_id,
         kind: b.kind,
-        amount: super::fmt_cents(b.amount),
-        category: b.category,
-        note: b.note,
+        amount: super::fmt_cents(crypto::decrypt_cents(&dek, &b.amount)),
+        category: crypto::decrypt_string(&dek, &b.category),
+        note: crypto::decrypt_string(&dek, &b.note),
         happened_at: b.happened_at.format(TIME_FMT).to_string(),
     }
     .render()
@@ -237,33 +243,34 @@ pub async fn edit_form(
 }
 
 pub async fn update(
-    State(db): State<DatabaseConnection>,
+    State(state): State<AppState>,
     Path(id): Path<i64>,
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
+    let dek = state.dek()?;
     let parsed = parse_form(form)?;
     let b = bill::Entity::find_by_id(id)
-        .one(&db)
+        .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
     let mut active = b.into_active_model();
     active.account_id = Set(parsed.account_id);
     active.kind = Set(parsed.kind);
-    active.amount = Set(parsed.amount);
-    active.category = Set(parsed.category);
-    active.note = Set(parsed.note);
+    active.amount = Set(crypto::encrypt_cents(&dek, parsed.amount));
+    active.category = Set(crypto::encrypt(&dek, parsed.category.as_bytes()));
+    active.note = Set(crypto::encrypt(&dek, parsed.note.as_bytes()));
     active.happened_at = Set(parsed.happened_at);
-    active.update(&db).await.map_err(err500)?;
+    active.update(&state.db).await.map_err(err500)?;
     Ok(Redirect::to("/bills"))
 }
 
 pub async fn delete(
-    State(db): State<DatabaseConnection>,
+    State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Redirect> {
     bill::Entity::delete_by_id(id)
-        .exec(&db)
+        .exec(&state.db)
         .await
         .map_err(err500)?;
     Ok(Redirect::to("/bills"))
