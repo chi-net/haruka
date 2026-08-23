@@ -7,13 +7,19 @@ use axum::{
 };
 use chrono::NaiveDateTime;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
-use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QueryOrder, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
+    TransactionTrait,
+};
 use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto, currency,
-    entity::{account, account_detail, bill, category, debt_person, debt_record, transfer},
+    entity::{
+        account, account_detail, bill, category, debt_person, debt_record, installment_plan,
+        transfer,
+    },
     AppState, SessionDek,
 };
 
@@ -36,6 +42,7 @@ pub(crate) struct LedgerRow {
     pub(crate) amount: String,
     pub(crate) money_class: String,
     pub(crate) edit_url: String,
+    pub(crate) detail_url: String,
     pub(crate) delete_action: String,
     pub(crate) delete_confirm: String,
     pub(crate) sort_key: NaiveDateTime,
@@ -101,6 +108,7 @@ struct QuickEntryPageTemplate {
     happened_at: String,
     quick_entry_heading: String,
     quick_redirect_to: String,
+    first_due_date: String,
 }
 
 #[derive(Template)]
@@ -126,6 +134,18 @@ pub struct BillFormData {
     category: String,
     note: String,
     happened_at: String,
+    #[serde(default)]
+    use_installment: bool,
+    #[serde(default)]
+    installment_term: String,
+    #[serde(default)]
+    installment_method: String,
+    #[serde(default)]
+    installment_annual_rate: String,
+    #[serde(default)]
+    installment_fee: String,
+    #[serde(default)]
+    installment_first_due_date: String,
     #[serde(default)]
     redirect_to: Option<String>,
 }
@@ -328,6 +348,7 @@ struct ParsedBill {
     note: String,
     happened_at: NaiveDateTime,
     redirect_to: String,
+    installment: Option<super::installments::NewPlan>,
 }
 
 fn signed_amount(kind: &str, amount: i64) -> HandlerResult<i64> {
@@ -376,6 +397,17 @@ fn parse_form(form: BillFormData) -> HandlerResult<ParsedBill> {
             "/dashboard".into()
         } else {
             "/bills".into()
+        },
+        installment: if form.use_installment {
+            Some(super::installments::parse_input(
+                &form.installment_term,
+                &form.installment_method,
+                &form.installment_annual_rate,
+                &form.installment_fee,
+                &form.installment_first_due_date,
+            )?)
+        } else {
+            None
         },
     })
 }
@@ -496,6 +528,13 @@ pub(crate) async fn ledger_rows(
         .into_iter()
         .map(|person| (person.id, crypto::decrypt_string(dek, &person.name)))
         .collect();
+    let installment_plan_ids: HashMap<i64, i64> = installment_plan::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|plan| (plan.bill_id, plan.id))
+        .collect();
 
     let mut rows = Vec::new();
     for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
@@ -508,7 +547,13 @@ pub(crate) async fn ledger_rows(
         let converted = rates.convert(amount, bill_currency).map_err(err500)?;
         rows.push(LedgerRow {
             happened_at: bill.happened_at.format(DISPLAY_FMT).to_string(),
-            record_type: if incoming { "收入" } else { "支出" }.into(),
+            record_type: if incoming {
+                "收入".into()
+            } else if installment_plan_ids.contains_key(&bill.id) {
+                "支出 · 分期".into()
+            } else {
+                "支出".into()
+            },
             account_name: account_names
                 .get(&bill.account_id)
                 .cloned()
@@ -526,7 +571,15 @@ pub(crate) async fn ledger_rows(
                 "text-red-600"
             }
             .into(),
-            edit_url: format!("/bills/{}/edit", bill.id),
+            edit_url: if installment_plan_ids.contains_key(&bill.id) {
+                String::new()
+            } else {
+                format!("/bills/{}/edit", bill.id)
+            },
+            detail_url: installment_plan_ids
+                .get(&bill.id)
+                .map(|plan_id| format!("/installments/{plan_id}"))
+                .unwrap_or_default(),
             delete_action: format!("/bills/{}/delete", bill.id),
             delete_confirm: "确认删除这条账单？".into(),
             sort_key: bill.happened_at,
@@ -578,6 +631,7 @@ pub(crate) async fn ledger_rows(
             },
             money_class: "text-blue-600".into(),
             edit_url: String::new(),
+            detail_url: String::new(),
             delete_action: format!("/transfers/{}/delete", transfer.id),
             delete_confirm: "确认删除这条转账？".into(),
             sort_key: transfer.happened_at,
@@ -623,6 +677,7 @@ pub(crate) async fn ledger_rows(
             }
             .into(),
             edit_url: String::new(),
+            detail_url: String::new(),
             delete_action: format!("/debts/{}/delete", record.id),
             delete_confirm: "确认删除这条借还记录？".into(),
             sort_key: record.happened_at,
@@ -814,6 +869,9 @@ pub async fn new_form(
             .to_string(),
         quick_entry_heading: "记一笔".into(),
         quick_redirect_to: "/bills".into(),
+        first_due_date: (chrono::Local::now().date_naive() + chrono::Months::new(1))
+            .format("%Y-%m-%d")
+            .to_string(),
     }
     .render()
     .map_err(err500)?;
@@ -828,6 +886,17 @@ pub async fn create(
     let _balance_guard = state.balance_writes.lock().await;
     let parsed = parse_form(form)?;
     let redirect_to = parsed.redirect_to.clone();
+    let account = account::Entity::find_by_id(parsed.account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("账户不存在"))?;
+    if parsed.installment.is_some()
+        && (parsed.kind != "expense"
+            || !matches!(account.kind.as_str(), "credit_card" | "credit_service"))
+    {
+        return Err(bad_request("只有信用卡或信贷服务的支出可以设置分期"));
+    }
     let is_food = category_is_food(&state, &dek, &parsed.kind, &parsed.category).await?;
     super::accounts::ensure_balance_delta(
         &state,
@@ -836,9 +905,10 @@ pub async fn create(
         signed_amount(&parsed.kind, parsed.amount)?,
     )
     .await?;
-    bill::ActiveModel {
+    let transaction = state.db.begin().await.map_err(err500)?;
+    let created_bill = bill::ActiveModel {
         account_id: Set(parsed.account_id),
-        kind: Set(parsed.kind),
+        kind: Set(parsed.kind.clone()),
         amount: Set(crypto::encrypt_cents(&dek, parsed.amount)),
         category: Set(crypto::encrypt(&dek, parsed.category.as_bytes())),
         is_food: Set(is_food),
@@ -847,10 +917,30 @@ pub async fn create(
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
     }
-    .insert(&state.db)
+    .insert(&transaction)
     .await
     .map_err(err500)?;
-    Ok(Redirect::to(&redirect_to))
+    let plan_id = if let Some(installment) = parsed.installment {
+        Some(
+            super::installments::create_plan(
+                &transaction,
+                &dek,
+                created_bill.id,
+                parsed.account_id,
+                parsed.amount,
+                installment,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    transaction.commit().await.map_err(err500)?;
+    Ok(Redirect::to(
+        &plan_id
+            .map(|id| format!("/installments/{id}"))
+            .unwrap_or(redirect_to),
+    ))
 }
 
 pub async fn edit_form(
@@ -858,6 +948,17 @@ pub async fn edit_form(
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
+    if installment_plan::Entity::find()
+        .filter(installment_plan::Column::BillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "分期账单不能直接编辑；如需重建计划，请删除账单后重新记录",
+        ));
+    }
     let b = bill::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -889,6 +990,17 @@ pub async fn update(
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
+    if installment_plan::Entity::find()
+        .filter(installment_plan::Column::BillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "分期账单不能直接编辑；如需重建计划，请删除账单后重新记录",
+        ));
+    }
     let parsed = parse_form(form)?;
     let is_food = category_is_food(&state, &dek, &parsed.kind, &parsed.category).await?;
     let b = bill::Entity::find_by_id(id)

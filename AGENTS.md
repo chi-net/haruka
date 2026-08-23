@@ -19,7 +19,7 @@
 ## 加密（envelope）
 
 - DEK（随机 32 字节）加密数据；KEK 由 Argon2id(密码, salt) 派生并 wrap DEK；`meta` 表存 salt + nonce + wrapped_dek。密码不落盘，改密码只需重 wrap
-- 字段级加密：XChaCha20-Poly1305，每条随机 nonce，存 `base64(nonce||ct)` 于原 TEXT 列。加密字段：accounts.name/balance_offset/note、account_details.card_number/account_username/credit_limit、bills.amount/category/note、transfers.amount/note、debt_people.name/note、debt_records.amount/note、categories.name、subscriptions.name/amount/category/note、passkeys.name；账户类型、账单日、各记录 kind、账户外键、分类/账单的 is_food、happened_at、订阅周期/到期时间、Passkey 公钥凭据和时间戳为明文
+- 字段级加密：XChaCha20-Poly1305，每条随机 nonce，存 `base64(nonce||ct)` 于原 TEXT 列。加密字段：accounts.name/balance_offset/note、account_details.card_number/account_username/credit_limit、bills.amount/category/note、transfers.amount/to_amount/note、debt_people.name/note、debt_records.amount/note、categories.name、subscriptions.name/amount/category/note、passkeys.name、installment_plans.annual_rate_bps/fee、installment_items.principal/interest/fee/total；账户类型、账单日、各记录 kind、账户外键、分类/账单的 is_food、happened_at、订阅周期/到期时间、分期期限/还款方式/还款日/计划状态、Passkey 公钥凭据和时间戳为明文
 - DEK 按客户端会话仅存服务端内存（`AppState.sessions`）；浏览器只保存无过期时间的 `HttpOnly` 随机会话 Cookie，不保存密码或 DEK。Cookie 丢失、主动锁定或服务重启后需重新使用密码或 Passkey 解锁；`require_unlock` 中间件把未解锁请求重定向到 `/unlock`（无 meta 时去 `/setup`）
 - setup/unlock/recover 表单禁用 htmx boost，确保会话 Cookie 和重定向走完整浏览器导航；解锁成功直接进入 `/dashboard`
 - 密码只用于当次 Argon2id 派生并用 `Zeroizing` 尽快清除，不落盘、不进入 Cookie 或会话；恢复密码会使现有客户端会话全部失效
@@ -50,6 +50,8 @@
 - 收支分类由设置页 CRUD，存于 `categories`；新建或编辑账单只能选择对应 income/expense 类型下仍存在的分类，删除分类不改写历史账单
 - 支出分类可标记 `is_food`；创建或编辑账单时将标记快照存入 `bills.is_food`，保证分类后续改名或删除不改变历史恩格尔系数。恩格尔系数按本月食品支出 / 本月总支出计算
 - 订阅服务存于 `subscriptions`，包含服务名、每次金额、支出分类、周期（day/week/month/quarter/year）、到期时间和备注；订阅页按到期时间展示状态，一键支出时由用户选择账户并生成普通 expense 账单，成功后以到期时间和当前时间中较晚者为基准自动顺延一个周期；订阅仍可手动删除
+- 只有信用卡或信贷服务的 expense 账单可以创建分期。短期可选 3/6/9/12/24 期，24 期以上按 3/5/10/15/20/30 年选择但仍逐月生成月供；还款方式支持等额本息、等额本金、等本等息，年利率和总手续费由用户分别输入，总手续费均摊到各期。`installment_plans` 与原账单一对一，`installment_items` 固化每期本金、利息、手续费和合计；删除原账单级联删除计划，分期账单禁止直接编辑。标记已还只改变计划状态，不创建资金流水或改变余额；实际还款时，本期本金通过转账进入信用账户，本期利息与手续费从还款账户记为普通支出，禁止把整笔月供都转入信用账户或把原消费本金重复记为支出
+- `/installments` 是独立分期看板并显示在顶部导航，详情页逐月展示还款日、本金、利息、手续费、月供和逾期/已还状态；原 expense 账单在创建时立即按全部消费本金影响信用账户余额，计划利息与手续费仅用于还款计划展示，不提前计入账户余额
 - `/dashboard` 对用户统一称为“仪表板”，集中账户概览、快速记账及收支图表，底部不再显示账单流水；普通收支、转账与借还必须合并在同一“快速记账”卡片内用页签切换，不能再拆成独立操作卡片。日报按今日 24 小时、周/月/年报分别按近 7/30/365 个自然日聚合，Chart.js 使用平滑面积折线图；普通收支汇总和图表仍不包含转账与借还。`/transfers`、`/debts` 的 GET 只重定向到仪表板。借贷对象由 `/debt-people` 独立管理并显示在顶部导航
 - 仪表板与独立 `/bills/new` 页面必须共用 `templates/quick_entry.html` 的快速记账组件；账单列表页只保留“记一笔”入口，不能把整套快速记账组件嵌入列表。记一笔页面创建普通收支、转账或借还后均返回 `/bills`
 - `/bills` 的基础搜索只显示日期区间和关键词并按 AND 筛选；独立 `/bills/search` 高级搜索页增加收支类型、精确分类、收入金额区间、支出金额区间及 AND/OR 组合模式。两组金额同时启用时按各自类型匹配其中一个区间，再与其他条件组合；关键词覆盖流水类型、账户、分类/对象和备注。筛选与筛选后汇总必须在 Rust 中解密后完成

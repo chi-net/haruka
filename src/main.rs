@@ -185,6 +185,12 @@ async fn main() {
             "/subscriptions/{id}/delete",
             post(handlers::subscriptions::delete),
         )
+        .route("/installments", get(handlers::installments::list))
+        .route("/installments/{id}", get(handlers::installments::detail))
+        .route(
+            "/installments/items/{id}/paid",
+            post(handlers::installments::set_paid),
+        )
         .route(
             "/transfers",
             get(handlers::dashboard::redirect).post(handlers::transfers::create),

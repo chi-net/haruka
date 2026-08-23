@@ -26,6 +26,7 @@ fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
 struct AccountOption {
     id: i64,
     name: String,
+    kind: String,
     currency: String,
 }
 
@@ -87,6 +88,7 @@ struct DashboardTemplate {
     food_expense: String,
     reports_json: String,
     default_currency: String,
+    first_due_date: String,
 }
 
 fn account_kind_label(kind: &str) -> &'static str {
@@ -204,6 +206,7 @@ pub async fn show(
         .map(|account| AccountOption {
             id: account.id,
             name: account_names.get(&account.id).cloned().unwrap_or_default(),
+            kind: account.kind.clone(),
             currency: account.currency.clone(),
         })
         .collect::<Vec<_>>();
@@ -213,6 +216,7 @@ pub async fn show(
         .map(|account| AccountOption {
             id: account.id,
             name: account_names.get(&account.id).cloned().unwrap_or_default(),
+            kind: account.kind.clone(),
             currency: account.currency.clone(),
         })
         .collect::<Vec<_>>();
@@ -369,6 +373,9 @@ pub async fn show(
         food_expense: currency::format(food_expense, &default_currency),
         reports_json,
         default_currency,
+        first_due_date: (chrono::Local::now().date_naive() + chrono::Months::new(1))
+            .format("%Y-%m-%d")
+            .to_string(),
     }
     .render()
     .map_err(err500)?;

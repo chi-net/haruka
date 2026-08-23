@@ -84,6 +84,7 @@
       <td class="px-4 py-2 text-gray-500">{{ record.note }}</td>
       <td class="px-4 py-2 text-right font-mono whitespace-nowrap {{ record.money_class }}">{{ record.amount }}</td>
       <td class="px-4 py-2 text-right whitespace-nowrap">
+        {% if !record.detail_url.is_empty() %}<a href="{{ record.detail_url }}" class="text-blue-600 hover:underline mr-3">查看分期</a>{% endif %}
         {% if !record.edit_url.is_empty() %}<a href="{{ record.edit_url }}" class="text-blue-600 hover:underline mr-3">编辑</a>{% endif %}
         <form method="post" action="{{ record.delete_action }}" class="inline" hx-confirm="{{ record.delete_confirm }}">
           <input type="hidden" name="redirect_to" value="/bills">

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}分期详情 - haruka{% endblock %}
+{% block content %}
+<div class="flex items-start justify-between gap-3 mb-4">
+  <div><h1 class="text-xl font-bold">{{ title }}</h1><p class="text-sm text-gray-500 mt-1">{{ account_name }}</p></div>
+  <a href="/installments" class="text-sm text-blue-600 hover:underline">返回分期</a>
+</div>
+
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">分期本金</div><div class="font-mono mt-1">{{ principal }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">期限 / 方式</div><div class="mt-1">{{ term }} · {{ method }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">年利率</div><div class="font-mono mt-1">{{ annual_rate }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">首期还款日</div><div class="font-mono mt-1">{{ first_due_date }}</div></div>
+  <div class="bg-amber-50 rounded-lg border border-amber-200 p-3"><div class="text-xs text-amber-700">总利息</div><div class="font-mono text-amber-700 mt-1">{{ total_interest }}</div></div>
+  <div class="bg-amber-50 rounded-lg border border-amber-200 p-3"><div class="text-xs text-amber-700">总手续费</div><div class="font-mono text-amber-700 mt-1">{{ total_fee }}</div></div>
+  <div class="bg-blue-50 rounded-lg border border-blue-200 p-3"><div class="text-xs text-blue-700">计划总还款</div><div class="font-mono text-blue-700 mt-1">{{ total_repayment }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">计价货币</div><div class="font-mono mt-1">{{ currency }}</div></div>
+</div>
+
+<section class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-sm text-blue-800">
+  标记“已还”只更新分期计划进度，不自动改变账户余额。实际还款时，请把本期本金通过“转账”转入对应信用账户，并将本期利息与手续费从还款账户记为普通支出；不要把整笔月供都转入信用账户。原消费本金已经记过支出，不能重复记账。
+</section>
+
+<div class="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-gray-500"><tr><th class="text-left px-4 py-2 font-medium">期次</th><th class="text-left px-4 py-2 font-medium">还款日</th><th class="text-right px-4 py-2 font-medium">本金</th><th class="text-right px-4 py-2 font-medium">利息</th><th class="text-right px-4 py-2 font-medium">手续费</th><th class="text-right px-4 py-2 font-medium">月供合计</th><th class="text-right px-4 py-2 font-medium">状态</th></tr></thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for item in schedule %}
+      <tr class="{% if item.overdue %}bg-red-50{% endif %}">
+        <td class="px-4 py-2">第 {{ item.sequence }} 期</td>
+        <td class="px-4 py-2 font-mono">{{ item.due_date }}</td>
+        <td class="px-4 py-2 text-right font-mono">{{ item.principal }}</td>
+        <td class="px-4 py-2 text-right font-mono">{{ item.interest }}</td>
+        <td class="px-4 py-2 text-right font-mono">{{ item.fee }}</td>
+        <td class="px-4 py-2 text-right font-mono font-medium">{{ item.total }}</td>
+        <td class="px-4 py-2 text-right whitespace-nowrap">
+          <form method="post" action="/installments/items/{{ item.id }}/paid" class="inline">
+            {% if item.paid %}<input type="hidden" name="paid" value="false"><button class="text-green-700 hover:underline" hx-confirm="撤销这一期的已还标记？">已还 · 撤销</button>{% else %}<input type="hidden" name="paid" value="true"><button class="{% if item.overdue %}text-red-700{% else %}text-blue-600{% endif %} hover:underline">{% if item.overdue %}已逾期 · 标记已还{% else %}标记已还{% endif %}</button>{% endif %}
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

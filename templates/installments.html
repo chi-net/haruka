@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}分期 - haruka{% endblock %}
+{% block content %}
+<div class="mb-5">
+  <h1 class="text-xl font-bold">分期</h1>
+  <p class="text-sm text-gray-500 mt-1">查看信用卡和信贷产品的月供计划。新分期请从“记一笔”或仪表板的支出记账创建。</p>
+</div>
+
+{% if plans.is_empty() %}
+<div class="bg-white rounded-lg border border-gray-200 p-6 text-sm text-gray-500">还没有分期计划。</div>
+{% else %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+  {% for plan in plans %}
+  <a href="/installments/{{ plan.id }}" class="block bg-white rounded-lg border border-gray-200 p-4 hover:border-blue-300 hover:shadow-sm">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0"><h2 class="font-medium truncate">{{ plan.title }}</h2><p class="text-xs text-gray-500 mt-1 truncate">{{ plan.account_name }}</p></div>
+      {% if plan.overdue_count > 0 %}<span class="shrink-0 text-xs rounded-full px-2 py-0.5 bg-red-100 text-red-700">逾期 {{ plan.overdue_count }} 期</span>{% else %}<span class="shrink-0 text-xs rounded-full px-2 py-0.5 bg-blue-50 text-blue-700">已还 {{ plan.progress }}</span>{% endif %}
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-4 text-sm">
+      <div><div class="text-xs text-gray-400">分期本金</div><div class="font-mono mt-0.5">{{ plan.principal }}</div></div>
+      <div><div class="text-xs text-gray-400">方式 / 期限</div><div class="mt-0.5">{{ plan.method }} · {{ plan.term }}</div></div>
+      <div><div class="text-xs text-gray-400">年利率</div><div class="font-mono mt-0.5">{{ plan.annual_rate }}</div></div>
+      <div><div class="text-xs text-gray-400">总还款</div><div class="font-mono mt-0.5">{{ plan.total_repayment }}</div></div>
+      <div><div class="text-xs text-gray-400">剩余计划</div><div class="font-mono mt-0.5">{{ plan.remaining }}</div></div>
+      <div><div class="text-xs text-gray-400">下一期</div><div class="mt-0.5">{{ plan.next_due }}</div></div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

@@ -5,6 +5,8 @@ pub mod category;
 pub mod debt_person;
 pub mod debt_record;
 pub mod exchange_rate;
+pub mod installment_item;
+pub mod installment_plan;
 pub mod meta;
 pub mod passkey;
 pub mod preference;
