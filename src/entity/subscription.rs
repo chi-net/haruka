@@ -8,6 +8,7 @@ pub struct Model {
     pub name: String,
     /// 每次订阅支出金额（整数分密文）
     pub amount: String,
+    pub currency: String,
     pub category: String,
     /// "day" | "week" | "month" | "quarter" | "year"
     pub period: String,

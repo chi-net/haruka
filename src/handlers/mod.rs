@@ -47,6 +47,17 @@ pub fn fmt_cents(cents: i64) -> String {
     rust_decimal::Decimal::new(cents, 2).to_string()
 }
 
+pub fn transfer_to_cents(
+    dek: &crate::crypto::Dek,
+    transfer: &crate::entity::transfer::Model,
+) -> i64 {
+    if transfer.to_amount.is_empty() {
+        crate::crypto::decrypt_cents(dek, &transfer.amount)
+    } else {
+        crate::crypto::decrypt_cents(dek, &transfer.to_amount)
+    }
+}
+
 pub fn mask_card_number(value: &str) -> String {
     if value.is_empty() {
         return String::new();

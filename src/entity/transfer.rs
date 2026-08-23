@@ -9,6 +9,8 @@ pub struct Model {
     pub to_account_id: i64,
     /// 金额（整数分密文）
     pub amount: String,
+    /// 转入账户实际收到的金额（整数分密文）；跨币种转账与 amount 不同。
+    pub to_amount: String,
     pub note: String,
     pub happened_at: DateTime,
     pub created_at: DateTimeUtc,

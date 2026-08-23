@@ -12,7 +12,7 @@ use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{
-    crypto,
+    crypto, currency,
     entity::{account, account_detail, bill, category, debt_person, debt_record, transfer},
     AppState, SessionDek,
 };
@@ -83,6 +83,7 @@ struct BillsTemplate {
     keyword: String,
     has_filters: bool,
     search_categories: Vec<CategoryOption>,
+    default_currency: String,
 }
 
 #[derive(Template)]
@@ -416,21 +417,19 @@ pub(crate) fn account_display_name(
     detail: Option<&account_detail::Model>,
 ) -> String {
     let name = crypto::decrypt_string(dek, &account.name);
-    let Some(detail) = detail else {
-        return name;
-    };
-    let card_number = crypto::decrypt_string(dek, &detail.card_number);
-    if !card_number.is_empty() {
-        return format!("{name} · 卡号 {}", super::mask_card_number(&card_number));
+    let identity = detail.and_then(|detail| {
+        let card_number = crypto::decrypt_string(dek, &detail.card_number);
+        if !card_number.is_empty() {
+            return Some(format!("卡号 {}", super::mask_card_number(&card_number)));
+        }
+        let username = crypto::decrypt_string(dek, &detail.account_username);
+        (!username.is_empty())
+            .then(|| format!("用户名 {}", super::mask_account_username(&username)))
+    });
+    match identity {
+        Some(identity) => format!("{name} · {identity} · {}", account.currency),
+        None => format!("{name} · {}", account.currency),
     }
-    let username = crypto::decrypt_string(dek, &detail.account_username);
-    if !username.is_empty() {
-        return format!(
-            "{name} · 用户名 {}",
-            super::mask_account_username(&username)
-        );
-    }
-    name
 }
 
 fn debt_kind_label(kind: &str) -> &'static str {
@@ -451,6 +450,15 @@ pub(crate) async fn ledger_rows(
         .all(&state.db)
         .await
         .map_err(err500)?;
+    let default_currency = currency::default_currency(state).await.map_err(err500)?;
+    let today = chrono::Local::now().date_naive();
+    let currencies = accounts
+        .iter()
+        .map(|account| account.currency.clone())
+        .collect::<Vec<_>>();
+    let rates = currency::RateTable::load(state, currencies, &default_currency, today)
+        .await
+        .map_err(err500)?;
     let details: HashMap<i64, account_detail::Model> = account_detail::Entity::find()
         .all(&state.db)
         .await
@@ -459,13 +467,17 @@ pub(crate) async fn ledger_rows(
         .map(|detail| (detail.account_id, detail))
         .collect();
     let account_names: HashMap<i64, String> = accounts
-        .into_iter()
+        .iter()
         .map(|account| {
             (
                 account.id,
                 account_display_name(dek, &account, details.get(&account.id)),
             )
         })
+        .collect();
+    let account_currencies: HashMap<i64, String> = accounts
+        .iter()
+        .map(|account| (account.id, account.currency.clone()))
         .collect();
     let person_names: HashMap<i64, String> = debt_person::Entity::find()
         .all(&state.db)
@@ -479,6 +491,11 @@ pub(crate) async fn ledger_rows(
     for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
         let incoming = bill.kind == "income";
         let amount = crypto::decrypt_cents(dek, &bill.amount);
+        let bill_currency = account_currencies
+            .get(&bill.account_id)
+            .map(String::as_str)
+            .unwrap_or(&default_currency);
+        let converted = rates.convert(amount, bill_currency).map_err(err500)?;
         rows.push(LedgerRow {
             happened_at: bill.happened_at.format(DISPLAY_FMT).to_string(),
             record_type: if incoming { "收入" } else { "支出" }.into(),
@@ -491,7 +508,7 @@ pub(crate) async fn ledger_rows(
             amount: format!(
                 "{}{}",
                 if incoming { "+" } else { "-" },
-                super::fmt_cents(amount)
+                currency::format(amount, bill_currency)
             ),
             money_class: if incoming {
                 "text-green-600"
@@ -504,7 +521,7 @@ pub(crate) async fn ledger_rows(
             delete_confirm: "确认删除这条账单？".into(),
             sort_key: bill.happened_at,
             bill_kind: bill.kind,
-            amount_cents: amount,
+            amount_cents: converted,
             is_expense: !incoming,
         });
     }
@@ -515,6 +532,15 @@ pub(crate) async fn ledger_rows(
         .map_err(err500)?
     {
         let amount = crypto::decrypt_cents(dek, &transfer.amount);
+        let to_amount = super::transfer_to_cents(dek, &transfer);
+        let from_currency = account_currencies
+            .get(&transfer.from_account_id)
+            .map(String::as_str)
+            .unwrap_or(&default_currency);
+        let to_currency = account_currencies
+            .get(&transfer.to_account_id)
+            .map(String::as_str)
+            .unwrap_or(&default_currency);
         rows.push(LedgerRow {
             happened_at: transfer.happened_at.format(DISPLAY_FMT).to_string(),
             record_type: "转账".into(),
@@ -531,14 +557,22 @@ pub(crate) async fn ledger_rows(
             ),
             subject: "账户间".into(),
             note: crypto::decrypt_string(dek, &transfer.note),
-            amount: super::fmt_cents(amount),
+            amount: if from_currency == to_currency {
+                currency::format(amount, from_currency)
+            } else {
+                format!(
+                    "{} → {}",
+                    currency::format(amount, from_currency),
+                    currency::format(to_amount, to_currency)
+                )
+            },
             money_class: "text-blue-600".into(),
             edit_url: String::new(),
             delete_action: format!("/transfers/{}/delete", transfer.id),
             delete_confirm: "确认删除这条转账？".into(),
             sort_key: transfer.happened_at,
             bill_kind: String::new(),
-            amount_cents: amount,
+            amount_cents: rates.convert(amount, from_currency).map_err(err500)?,
             is_expense: false,
         });
     }
@@ -550,6 +584,11 @@ pub(crate) async fn ledger_rows(
     {
         let incoming = matches!(record.kind.as_str(), "borrow" | "repayment_received");
         let amount = crypto::decrypt_cents(dek, &record.amount);
+        let record_currency = account_currencies
+            .get(&record.account_id)
+            .map(String::as_str)
+            .unwrap_or(&default_currency);
+        let converted = rates.convert(amount, record_currency).map_err(err500)?;
         rows.push(LedgerRow {
             happened_at: record.happened_at.format(DISPLAY_FMT).to_string(),
             record_type: debt_kind_label(&record.kind).into(),
@@ -565,7 +604,7 @@ pub(crate) async fn ledger_rows(
             amount: format!(
                 "{}{}",
                 if incoming { "+" } else { "-" },
-                super::fmt_cents(amount)
+                currency::format(amount, record_currency)
             ),
             money_class: if incoming {
                 "text-green-600"
@@ -578,7 +617,7 @@ pub(crate) async fn ledger_rows(
             delete_confirm: "确认删除这条借还记录？".into(),
             sort_key: record.happened_at,
             bill_kind: String::new(),
-            amount_cents: amount,
+            amount_cents: converted,
             is_expense: false,
         });
     }
@@ -664,6 +703,7 @@ async fn render_list(
     }
     let filter = LedgerFilter::from_query(&query)?;
     let has_filters = filter.is_active();
+    let default_currency = currency::default_currency(state).await.map_err(err500)?;
     let records = ledger_rows(state, dek)
         .await?
         .into_iter()
@@ -704,9 +744,9 @@ async fn render_list(
             "/bills".into()
         },
         records,
-        total_income: super::fmt_cents(total_income),
-        total_expense: super::fmt_cents(total_expense),
-        net: super::fmt_cents(net),
+        total_income: currency::format(total_income, &default_currency),
+        total_expense: currency::format(total_expense, &default_currency),
+        net: currency::format(net, &default_currency),
         search_mode: if query.mode == "or" { "or" } else { "and" }.into(),
         start_date: query.start_date,
         end_date: query.end_date,
@@ -719,6 +759,7 @@ async fn render_list(
         keyword: query.keyword,
         has_filters,
         search_categories,
+        default_currency,
     }
     .render()
     .map_err(err500)?;

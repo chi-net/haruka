@@ -12,7 +12,7 @@ use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{
-    crypto,
+    crypto, currency,
     entity::{account, account_detail, bill, category, subscription},
     AppState, SessionDek,
 };
@@ -69,6 +69,8 @@ struct SubscriptionFormTemplate {
     categories: Vec<CategoryOption>,
     name: String,
     amount: String,
+    currency: String,
+    currencies: &'static [currency::CurrencyOption],
     category: String,
     period: String,
     expires_at: String,
@@ -79,6 +81,7 @@ struct SubscriptionFormTemplate {
 pub struct SubscriptionFormData {
     name: String,
     amount: String,
+    currency: String,
     category: String,
     period: String,
     expires_at: String,
@@ -93,6 +96,7 @@ pub struct CreateExpenseFormData {
 struct ParsedSubscription {
     name: String,
     amount: i64,
+    currency: String,
     category: String,
     period: String,
     expires_at: NaiveDateTime,
@@ -113,6 +117,9 @@ fn parse_form(form: SubscriptionFormData) -> HandlerResult<ParsedSubscription> {
     let amount = (amount_decimal * Decimal::from(100))
         .to_i64()
         .ok_or_else(|| bad_request("金额超出范围"))?;
+    if !currency::valid(&form.currency) {
+        return Err(bad_request("订阅货币无效"));
+    }
     let category = form.category.trim();
     if category.is_empty() {
         return Err(bad_request("支出分类不能为空"));
@@ -125,6 +132,7 @@ fn parse_form(form: SubscriptionFormData) -> HandlerResult<ParsedSubscription> {
     Ok(ParsedSubscription {
         name: name.into(),
         amount,
+        currency: form.currency,
         category: category.into(),
         period: form.period,
         expires_at,
@@ -235,7 +243,10 @@ pub async fn list(
             SubscriptionRow {
                 id: subscription.id,
                 name: crypto::decrypt_string(&dek, &subscription.name),
-                amount: super::fmt_cents(crypto::decrypt_cents(&dek, &subscription.amount)),
+                amount: currency::format(
+                    crypto::decrypt_cents(&dek, &subscription.amount),
+                    &subscription.currency,
+                ),
                 category: crypto::decrypt_string(&dek, &subscription.category),
                 period_label: period_label(&subscription.period).into(),
                 expires_at: subscription.expires_at.format(DISPLAY_FMT).to_string(),
@@ -268,6 +279,8 @@ pub async fn new_form(
         categories: expense_categories(&state, &dek).await?,
         name: String::new(),
         amount: String::new(),
+        currency: currency::default_currency(&state).await.map_err(err500)?,
+        currencies: currency::CURRENCIES,
         category: String::new(),
         period: "month".into(),
         expires_at: chrono::Local::now()
@@ -291,6 +304,7 @@ pub async fn create(
     subscription::ActiveModel {
         name: Set(crypto::encrypt(&dek, parsed.name.as_bytes())),
         amount: Set(crypto::encrypt_cents(&dek, parsed.amount)),
+        currency: Set(parsed.currency),
         category: Set(crypto::encrypt(&dek, parsed.category.as_bytes())),
         period: Set(parsed.period),
         expires_at: Set(parsed.expires_at),
@@ -320,6 +334,8 @@ pub async fn edit_form(
         categories: expense_categories(&state, &dek).await?,
         name: crypto::decrypt_string(&dek, &subscription.name),
         amount: super::fmt_cents(crypto::decrypt_cents(&dek, &subscription.amount)),
+        currency: subscription.currency,
+        currencies: currency::CURRENCIES,
         category: crypto::decrypt_string(&dek, &subscription.category),
         period: subscription.period,
         expires_at: subscription.expires_at.format(TIME_FMT).to_string(),
@@ -346,6 +362,7 @@ pub async fn update(
     let mut active = subscription.into_active_model();
     active.name = Set(crypto::encrypt(&dek, parsed.name.as_bytes()));
     active.amount = Set(crypto::encrypt_cents(&dek, parsed.amount));
+    active.currency = Set(parsed.currency);
     active.category = Set(crypto::encrypt(&dek, parsed.category.as_bytes()));
     active.period = Set(parsed.period);
     active.expires_at = Set(parsed.expires_at);
@@ -366,7 +383,22 @@ pub async fn create_expense(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "订阅不存在".into()))?;
-    let amount = crypto::decrypt_cents(&dek, &subscription.amount);
+    let subscription_amount = crypto::decrypt_cents(&dek, &subscription.amount);
+    let account = account::Entity::find_by_id(form.account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("付款账户不存在"))?;
+    let now = chrono::Local::now().naive_local();
+    let amount = currency::convert_cents(
+        &state,
+        subscription_amount,
+        &subscription.currency,
+        &account.currency,
+        now.date(),
+    )
+    .await
+    .map_err(err500)?;
     let category = crypto::decrypt_string(&dek, &subscription.category);
     let is_food = super::bills::category_is_food(&state, &dek, "expense", &category).await?;
     super::accounts::ensure_balance_delta(
@@ -385,7 +417,6 @@ pub async fn create_expense(
     } else {
         format!("订阅：{name} · {subscription_note}")
     };
-    let now = chrono::Local::now().naive_local();
     let next_expiry = renewed_expiry(subscription.expires_at, &subscription.period, now)?;
     let transaction = state.db.begin().await.map_err(err500)?;
     bill::ActiveModel {

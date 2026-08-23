@@ -11,7 +11,7 @@ use serde::Deserialize;
 use std::str::FromStr;
 
 use crate::{
-    crypto,
+    crypto, currency,
     entity::{account, transfer},
     AppState, SessionDek,
 };
@@ -73,15 +73,23 @@ pub async fn create(
     if matches!(from_account.kind.as_str(), "credit_card" | "credit_service") {
         return Err(bad_request("信用卡和信贷服务不能作为转账的转出账户"));
     }
-    if account::Entity::find_by_id(form.to_account_id)
+    let to_account = account::Entity::find_by_id(form.to_account_id)
         .one(&state.db)
         .await
         .map_err(err500)?
-        .is_none()
-    {
-        return Err(bad_request("转入账户不存在"));
-    }
+        .ok_or_else(|| bad_request("转入账户不存在"))?;
     let amount = parse_amount(&form.amount)?;
+    let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
+        .map_err(|_| bad_request("时间格式不正确"))?;
+    let to_amount = currency::convert_cents(
+        &state,
+        amount,
+        &from_account.currency,
+        &to_account.currency,
+        happened_at.date(),
+    )
+    .await
+    .map_err(err500)?;
     super::accounts::ensure_balance_delta(
         &state,
         &dek,
@@ -91,12 +99,11 @@ pub async fn create(
             .ok_or_else(|| bad_request("金额超出范围"))?,
     )
     .await?;
-    let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
-        .map_err(|_| bad_request("时间格式不正确"))?;
     transfer::ActiveModel {
         from_account_id: Set(form.from_account_id),
         to_account_id: Set(form.to_account_id),
         amount: Set(crypto::encrypt_cents(&dek, amount)),
+        to_amount: Set(crypto::encrypt_cents(&dek, to_amount)),
         note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
         happened_at: Set(happened_at),
         created_at: Set(chrono::Utc::now()),
@@ -126,7 +133,7 @@ pub async fn delete(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "转账不存在".into()))?;
-    let amount = crypto::decrypt_cents(&dek, &transfer.amount);
+    let amount = super::transfer_to_cents(&dek, &transfer);
     super::accounts::ensure_balance_delta(
         &state,
         &dek,

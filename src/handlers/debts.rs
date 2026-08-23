@@ -14,7 +14,7 @@ use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{
-    crypto,
+    crypto, currency,
     entity::{account, debt_person, debt_record},
     AppState, SessionDek,
 };
@@ -143,6 +143,27 @@ async fn person_outstanding(
     dek: &crypto::Dek,
     person_id: i64,
 ) -> HandlerResult<(i64, i64)> {
+    let accounts = account::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let account_currencies: HashMap<i64, String> = accounts
+        .iter()
+        .map(|account| (account.id, account.currency.clone()))
+        .collect();
+    let default_currency = currency::default_currency(state).await.map_err(err500)?;
+    let currencies = accounts
+        .into_iter()
+        .map(|account| account.currency)
+        .collect::<Vec<_>>();
+    let rates = currency::RateTable::load(
+        state,
+        currencies,
+        &default_currency,
+        chrono::Local::now().date_naive(),
+    )
+    .await
+    .map_err(err500)?;
     let records = debt_record::Entity::find()
         .filter(debt_record::Column::PersonId.eq(person_id))
         .all(&state.db)
@@ -151,9 +172,16 @@ async fn person_outstanding(
     let mut receivable = 0;
     let mut payable = 0;
     for record in records {
+        let native_amount = crypto::decrypt_cents(dek, &record.amount);
+        let record_currency = account_currencies
+            .get(&record.account_id)
+            .map(String::as_str)
+            .unwrap_or(&default_currency);
         apply_outstanding(
             &record.kind,
-            crypto::decrypt_cents(dek, &record.amount),
+            rates
+                .convert(native_amount, record_currency)
+                .map_err(err500)?,
             &mut receivable,
             &mut payable,
         )?;
@@ -178,20 +206,26 @@ pub async fn create_record(
     {
         return Err(bad_request("借贷对象不存在"));
     }
-    if account::Entity::find_by_id(form.account_id)
+    let account = account::Entity::find_by_id(form.account_id)
         .one(&state.db)
         .await
         .map_err(err500)?
-        .is_none()
-    {
-        return Err(bad_request("账户不存在"));
-    }
+        .ok_or_else(|| bad_request("账户不存在"))?;
     let amount = parse_amount(&form.amount)?;
     let (receivable, payable) = person_outstanding(&state, &dek, form.person_id).await?;
-    if form.kind == "repayment_received" && amount > receivable {
+    let amount_in_default = currency::convert_cents(
+        &state,
+        amount,
+        &account.currency,
+        &currency::default_currency(&state).await.map_err(err500)?,
+        chrono::Local::now().date_naive(),
+    )
+    .await
+    .map_err(err500)?;
+    if form.kind == "repayment_received" && amount_in_default > receivable {
         return Err(bad_request("还款金额超过对方尚欠金额"));
     }
-    if form.kind == "repayment_paid" && amount > payable {
+    if form.kind == "repayment_paid" && amount_in_default > payable {
         return Err(bad_request("还款金额超过尚欠对方金额"));
     }
     super::accounts::ensure_balance_delta(
@@ -267,12 +301,39 @@ pub async fn people(
         .all(&state.db)
         .await
         .map_err(err500)?;
+    let accounts = account::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let account_currencies: HashMap<i64, String> = accounts
+        .iter()
+        .map(|account| (account.id, account.currency.clone()))
+        .collect();
+    let default_currency = currency::default_currency(&state).await.map_err(err500)?;
+    let rates = currency::RateTable::load(
+        &state,
+        accounts
+            .into_iter()
+            .map(|account| account.currency)
+            .collect::<Vec<_>>(),
+        &default_currency,
+        chrono::Local::now().date_naive(),
+    )
+    .await
+    .map_err(err500)?;
     let mut outstanding: HashMap<i64, (i64, i64)> = HashMap::new();
     for record in records {
         let entry = outstanding.entry(record.person_id).or_default();
+        let native_amount = crypto::decrypt_cents(&dek, &record.amount);
+        let record_currency = account_currencies
+            .get(&record.account_id)
+            .map(String::as_str)
+            .unwrap_or(&default_currency);
         apply_outstanding(
             &record.kind,
-            crypto::decrypt_cents(&dek, &record.amount),
+            rates
+                .convert(native_amount, record_currency)
+                .map_err(err500)?,
             &mut entry.0,
             &mut entry.1,
         )?;
@@ -285,8 +346,8 @@ pub async fn people(
                 id: person.id,
                 name: crypto::decrypt_string(&dek, &person.name),
                 note: crypto::decrypt_string(&dek, &person.note),
-                receivable: super::fmt_cents(receivable),
-                payable: super::fmt_cents(payable),
+                receivable: currency::format(receivable, &default_currency),
+                payable: currency::format(payable, &default_currency),
             }
         })
         .collect();

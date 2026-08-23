@@ -24,3 +24,4 @@ zeroize = "1"
 base64 = "0.22"
 bip39 = "2.2"
 webauthn-rs = "0.5.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

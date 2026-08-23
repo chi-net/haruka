@@ -2,7 +2,7 @@
 {% block title %}收支统计 - haruka{% endblock %}
 {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-  <div><h1 class="text-xl font-bold">收支统计</h1><p class="text-sm text-gray-500 mt-1">选择日期区间，查看收入、支出、分类和账户占比。</p></div>
+  <div><h1 class="text-xl font-bold">收支统计</h1><p class="text-sm text-gray-500 mt-1">选择日期区间，查看收入、支出、分类和账户占比；多币种按当日可用汇率折算为 {{ default_currency }}。</p></div>
 </div>
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
@@ -79,7 +79,7 @@
   const createPie = (id, series, colors) => {
     const canvas = document.getElementById(id);
     if (!canvas) return;
-    new Chart(canvas, { type: 'doughnut', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: colors, borderWidth: 0 }] }, options: { responsive: true, maintainAspectRatio: false, cutout: '58%', plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, usePointStyle: true } }, tooltip: { callbacks: { label: item => `${item.label}: ${(item.raw / 100).toFixed(2)}` } } } } });
+    new Chart(canvas, { type: 'doughnut', data: { labels: series.labels, datasets: [{ data: series.values, backgroundColor: colors, borderWidth: 0 }] }, options: { responsive: true, maintainAspectRatio: false, cutout: '58%', plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, usePointStyle: true } }, tooltip: { callbacks: { label: item => `${item.label}: ${(item.raw / 100).toFixed(2)} {{ default_currency }}` } } } } });
   };
   createPie('cashflow-pie', charts.cashflow, ['#16a34a', '#dc2626']);
   createPie('income-category-pie', charts.income_categories, palette);

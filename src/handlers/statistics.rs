@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::{
-    crypto,
+    crypto, currency,
     entity::{account, account_detail, bill},
     AppState, SessionDek,
 };
@@ -62,6 +62,7 @@ struct StatisticsTemplate {
     has_income: bool,
     has_expense: bool,
     charts_json: String,
+    default_currency: String,
 }
 
 #[derive(Serialize)]
@@ -89,7 +90,11 @@ fn parse_date(value: &str, fallback: NaiveDate, label: &str) -> HandlerResult<Na
         .map_err(|_| bad_request(&format!("{label}格式不正确")))
 }
 
-fn ranking_rows(values: HashMap<String, (i64, usize)>, total: i64) -> Vec<RankingRow> {
+fn ranking_rows(
+    values: HashMap<String, (i64, usize)>,
+    total: i64,
+    default_currency: &str,
+) -> Vec<RankingRow> {
     let mut values = values.into_iter().collect::<Vec<_>>();
     values.sort_by(|left, right| {
         right
@@ -110,7 +115,7 @@ fn ranking_rows(values: HashMap<String, (i64, usize)>, total: i64) -> Vec<Rankin
             RankingRow {
                 rank: index + 1,
                 name,
-                amount: super::fmt_cents(amount),
+                amount: currency::format(amount, default_currency),
                 count,
                 share: share.to_string(),
             }
@@ -180,6 +185,14 @@ pub async fn show(
         .all(&state.db)
         .await
         .map_err(err500)?;
+    let default_currency = currency::default_currency(&state).await.map_err(err500)?;
+    let currencies = accounts
+        .iter()
+        .map(|account| account.currency.clone())
+        .collect::<Vec<_>>();
+    let rates = currency::RateTable::load(&state, currencies, &default_currency, today)
+        .await
+        .map_err(err500)?;
     let details: HashMap<i64, account_detail::Model> = account_detail::Entity::find()
         .all(&state.db)
         .await
@@ -188,13 +201,17 @@ pub async fn show(
         .map(|detail| (detail.account_id, detail))
         .collect();
     let account_names: HashMap<i64, String> = accounts
-        .into_iter()
+        .iter()
         .map(|account| {
             (
                 account.id,
                 super::bills::account_display_name(&dek, &account, details.get(&account.id)),
             )
         })
+        .collect();
+    let account_currencies: HashMap<i64, String> = accounts
+        .iter()
+        .map(|account| (account.id, account.currency.clone()))
         .collect();
 
     let mut total_income = 0i64;
@@ -210,7 +227,14 @@ pub async fn show(
         if date < start_date || date > end_date {
             continue;
         }
-        let amount = crypto::decrypt_cents(&dek, &bill.amount);
+        let native_amount = crypto::decrypt_cents(&dek, &bill.amount);
+        let bill_currency = account_currencies
+            .get(&bill.account_id)
+            .map(String::as_str)
+            .unwrap_or(&default_currency);
+        let amount = rates
+            .convert(native_amount, bill_currency)
+            .map_err(err500)?;
         let category_name = crypto::decrypt_string(&dek, &bill.category);
         let account_name = account_names
             .get(&bill.account_id)
@@ -262,21 +286,26 @@ pub async fn show(
         start_date: start_date.format("%Y-%m-%d").to_string(),
         end_date: end_date.format("%Y-%m-%d").to_string(),
         period_label,
-        total_income: super::fmt_cents(total_income),
-        total_expense: super::fmt_cents(total_expense),
-        net: super::fmt_cents(net),
+        total_income: currency::format(total_income, &default_currency),
+        total_expense: currency::format(total_expense, &default_currency),
+        net: currency::format(net, &default_currency),
         income_count,
         expense_count,
-        average_income: super::fmt_cents(average_income),
-        average_expense: super::fmt_cents(average_expense),
-        income_category_rankings: ranking_rows(income_categories, total_income),
-        expense_category_rankings: ranking_rows(expense_categories, total_expense),
-        income_account_rankings: ranking_rows(income_accounts, total_income),
-        expense_account_rankings: ranking_rows(expense_accounts, total_expense),
+        average_income: currency::format(average_income, &default_currency),
+        average_expense: currency::format(average_expense, &default_currency),
+        income_category_rankings: ranking_rows(income_categories, total_income, &default_currency),
+        expense_category_rankings: ranking_rows(
+            expense_categories,
+            total_expense,
+            &default_currency,
+        ),
+        income_account_rankings: ranking_rows(income_accounts, total_income, &default_currency),
+        expense_account_rankings: ranking_rows(expense_accounts, total_expense, &default_currency),
         has_cashflow: total_income > 0 || total_expense > 0,
         has_income: total_income > 0,
         has_expense: total_expense > 0,
         charts_json,
+        default_currency,
     }
     .render()
     .map_err(err500)?;

@@ -8,6 +8,8 @@ pub struct Model {
     pub name: String,
     /// "payment" | "bank" | "stored_value" | "investment" | "other"
     pub kind: String,
+    /// ISO 4217 货币代码；账户内的金额均使用此币种。
+    pub currency: String,
     /// 强制余额相对于各类资金记录净额的偏移量（整数分密文）
     pub balance_offset: String,
     pub note: String,

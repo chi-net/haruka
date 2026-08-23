@@ -1,8 +1,8 @@
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema, Statement};
 
 use crate::entity::{
-    account, account_detail, bill, category, debt_person, debt_record, meta, passkey, recovery,
-    subscription, transfer,
+    account, account_detail, bill, category, debt_person, debt_record, exchange_rate, meta,
+    passkey, preference, recovery, subscription, transfer,
 };
 
 pub async fn init() -> DatabaseConnection {
@@ -24,11 +24,26 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_passkeys.if_not_exists()))
         .await
         .expect("建表失败");
+    let mut create_preferences = schema.create_table_from_entity(preference::Entity);
+    db.execute(builder.build(create_preferences.if_not_exists()))
+        .await
+        .expect("建表失败");
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "INSERT OR IGNORE INTO preferences (id, default_currency) VALUES (1, 'CNY')".to_string(),
+    ))
+    .await
+    .expect("初始化默认货币失败");
+    let mut create_exchange_rates = schema.create_table_from_entity(exchange_rate::Entity);
+    db.execute(builder.build(create_exchange_rates.if_not_exists()))
+        .await
+        .expect("建表失败");
     let mut create_accounts = schema.create_table_from_entity(account::Entity);
     db.execute(builder.build(create_accounts.if_not_exists()))
         .await
         .expect("建表失败");
     ensure_column(&db, "accounts", "kind", "TEXT NOT NULL DEFAULT 'other'").await;
+    ensure_column(&db, "accounts", "currency", "TEXT NOT NULL DEFAULT 'CNY'").await;
     ensure_column(
         &db,
         "accounts",
@@ -63,6 +78,7 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_transfers.if_not_exists()))
         .await
         .expect("建表失败");
+    ensure_column(&db, "transfers", "to_amount", "TEXT NOT NULL DEFAULT ''").await;
     let mut create_debt_people = schema.create_table_from_entity(debt_person::Entity);
     db.execute(builder.build(create_debt_people.if_not_exists()))
         .await
@@ -85,6 +101,13 @@ pub async fn init() -> DatabaseConnection {
         "subscriptions",
         "period",
         "TEXT NOT NULL DEFAULT 'month'",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "subscriptions",
+        "currency",
+        "TEXT NOT NULL DEFAULT 'CNY'",
     )
     .await;
 

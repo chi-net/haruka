@@ -9,8 +9,8 @@ use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QueryOrder, Set};
 use serde::Deserialize;
 
 use crate::{
-    crypto,
-    entity::{category, passkey, recovery},
+    crypto, currency,
+    entity::{category, passkey, preference, recovery},
     AppState, SessionDek,
 };
 
@@ -39,10 +39,17 @@ struct PasskeyRow {
 #[derive(Template)]
 #[template(path = "settings.html")]
 struct SettingsTemplate {
+    currencies: &'static [currency::CurrencyOption],
+    default_currency: String,
     income_categories: Vec<CategoryRow>,
     expense_categories: Vec<CategoryRow>,
     recovery_configured: bool,
     passkeys: Vec<PasskeyRow>,
+}
+
+#[derive(Deserialize)]
+pub struct CurrencyFormData {
+    default_currency: String,
 }
 
 #[derive(Template)]
@@ -129,6 +136,8 @@ pub async fn show(
         })
         .collect();
     let html = SettingsTemplate {
+        currencies: currency::CURRENCIES,
+        default_currency: currency::default_currency(&state).await.map_err(err500)?,
         income_categories,
         expense_categories,
         recovery_configured,
@@ -137,6 +146,24 @@ pub async fn show(
     .render()
     .map_err(err500)?;
     Ok(Html(html))
+}
+
+pub async fn update_currency(
+    State(state): State<AppState>,
+    Form(form): Form<CurrencyFormData>,
+) -> HandlerResult<Redirect> {
+    let code = form.default_currency.trim().to_uppercase();
+    if !currency::valid(&code) {
+        return Err(bad_request("默认货币无效"));
+    }
+    preference::ActiveModel {
+        id: Set(1),
+        default_currency: Set(code),
+    }
+    .update(&state.db)
+    .await
+    .map_err(err500)?;
+    Ok(Redirect::to("/settings"))
 }
 
 pub async fn create_category(

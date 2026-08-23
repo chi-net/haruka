@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::{
-    crypto,
+    crypto, currency,
     entity::{account, account_detail, bill, category, debt_person, debt_record},
     AppState, SessionDek,
 };
@@ -85,6 +85,7 @@ struct DashboardTemplate {
     engel_coefficient: String,
     food_expense: String,
     reports_json: String,
+    default_currency: String,
 }
 
 fn account_kind_label(kind: &str) -> &'static str {
@@ -168,6 +169,19 @@ pub async fn show(
         .all(&state.db)
         .await
         .map_err(err500)?;
+    let today = chrono::Local::now().date_naive();
+    let default_currency = currency::default_currency(&state).await.map_err(err500)?;
+    let currencies = accounts
+        .iter()
+        .map(|account| account.currency.clone())
+        .collect::<Vec<_>>();
+    let rates = currency::RateTable::load(&state, currencies, &default_currency, today)
+        .await
+        .map_err(err500)?;
+    let account_currencies: HashMap<i64, String> = accounts
+        .iter()
+        .map(|account| (account.id, account.currency.clone()))
+        .collect();
     let details: HashMap<i64, account_detail::Model> = account_detail::Entity::find()
         .all(&state.db)
         .await
@@ -204,12 +218,12 @@ pub async fn show(
     for account in &accounts {
         let balance = super::accounts::current_balance(&state, &dek, account.id).await?;
         net_assets = net_assets
-            .checked_add(balance)
+            .checked_add(rates.convert(balance, &account.currency).map_err(err500)?)
             .ok_or_else(|| err500("资产金额超出范围"))?;
         account_summaries.push(AccountSummary {
             name: account_names.get(&account.id).cloned().unwrap_or_default(),
             kind: account_kind_label(&account.kind).into(),
-            balance: super::fmt_cents(balance),
+            balance: currency::format(balance, &account.currency),
         });
     }
 
@@ -244,7 +258,14 @@ pub async fn show(
     let mut receivable = 0i64;
     let mut payable = 0i64;
     for record in debt_records {
-        let amount = crypto::decrypt_cents(&dek, &record.amount);
+        let native_amount = crypto::decrypt_cents(&dek, &record.amount);
+        let record_currency = account_currencies
+            .get(&record.account_id)
+            .map(String::as_str)
+            .unwrap_or(&default_currency);
+        let amount = rates
+            .convert(native_amount, record_currency)
+            .map_err(err500)?;
         match record.kind.as_str() {
             "lend" => {
                 receivable = receivable
@@ -270,19 +291,27 @@ pub async fn show(
         }
     }
 
-    let today = chrono::Local::now().date_naive();
     let bill_values = bill::Entity::find()
         .all(&state.db)
         .await
         .map_err(err500)?
         .into_iter()
-        .map(|bill| BillValue {
-            happened_at: bill.happened_at,
-            kind: bill.kind,
-            amount: crypto::decrypt_cents(&dek, &bill.amount),
-            is_food: bill.is_food,
+        .map(|bill| {
+            let native_amount = crypto::decrypt_cents(&dek, &bill.amount);
+            let bill_currency = account_currencies
+                .get(&bill.account_id)
+                .map(String::as_str)
+                .unwrap_or(&default_currency);
+            Ok(BillValue {
+                happened_at: bill.happened_at,
+                kind: bill.kind,
+                amount: rates
+                    .convert(native_amount, bill_currency)
+                    .map_err(err500)?,
+                is_food: bill.is_food,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<HandlerResult<Vec<_>>>()?;
     let mut month_income = 0i64;
     let mut month_expense = 0i64;
     let mut food_expense = 0i64;
@@ -328,14 +357,15 @@ pub async fn show(
             .naive_local()
             .format(TIME_FMT)
             .to_string(),
-        net_assets: super::fmt_cents(net_assets),
-        month_income: super::fmt_cents(month_income),
-        month_expense: super::fmt_cents(month_expense),
-        receivable: super::fmt_cents(receivable),
-        payable: super::fmt_cents(payable),
+        net_assets: currency::format(net_assets, &default_currency),
+        month_income: currency::format(month_income, &default_currency),
+        month_expense: currency::format(month_expense, &default_currency),
+        receivable: currency::format(receivable, &default_currency),
+        payable: currency::format(payable, &default_currency),
         engel_coefficient,
-        food_expense: super::fmt_cents(food_expense),
+        food_expense: currency::format(food_expense, &default_currency),
         reports_json,
+        default_currency,
     }
     .render()
     .map_err(err500)?;

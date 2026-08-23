@@ -4,6 +4,18 @@
 <h1 class="text-xl font-bold mb-4">设置</h1>
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium">默认货币</h2>
+  <p class="text-sm text-gray-500 mt-1 mb-3">总资产、仪表板和统计会把各账户的原币金额按当日可用汇率折算到默认货币。修改此项不会改写原始账目。</p>
+  <form method="post" action="/settings/currency" class="flex flex-wrap gap-2">
+    <select name="default_currency" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">
+      {% for c in currencies %}<option value="{{ c.code }}" {% if c.code == default_currency %}selected{% endif %}>{{ c.code }} · {{ c.name }}</option>{% endfor %}
+    </select>
+    <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">保存默认货币</button>
+  </form>
+  <p class="text-xs text-gray-400 mt-2">初始值为 CNY（人民币）。汇率会按日期缓存；休市日使用最近可用参考汇率。</p>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium mb-3">收支分类</h2>
   <form method="post" action="/settings/categories" class="flex flex-wrap gap-2 mb-4">
     <select name="kind" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="expense">支出</option><option value="income">收入</option></select>

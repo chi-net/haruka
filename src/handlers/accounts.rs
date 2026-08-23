@@ -14,7 +14,7 @@ use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{
-    crypto,
+    crypto, currency,
     entity::{account, account_detail, bill, debt_record, transfer},
     AppState, SessionDek,
 };
@@ -55,6 +55,8 @@ struct AccountFormTemplate {
     action: String,
     name: String,
     account_kind: String,
+    currency: String,
+    currencies: &'static [currency::CurrencyOption],
     card_number: String,
     account_username: String,
     credit_limit: String,
@@ -74,6 +76,7 @@ struct AccountBalanceTemplate {
 pub struct AccountFormData {
     name: String,
     account_kind: String,
+    currency: String,
     card_number: String,
     account_username: String,
     credit_limit: String,
@@ -191,11 +194,13 @@ async fn transaction_balance(
         .await
         .map_err(err500)?;
     for transfer in transfers {
-        let cents = crypto::decrypt_cents(dek, &transfer.amount);
+        let from_cents = crypto::decrypt_cents(dek, &transfer.amount);
         let signed = if transfer.to_account_id == account_id {
-            cents
+            super::transfer_to_cents(dek, &transfer)
         } else {
-            cents.checked_neg().ok_or_else(|| err500("余额超出范围"))?
+            from_cents
+                .checked_neg()
+                .ok_or_else(|| err500("余额超出范围"))?
         };
         total = total
             .checked_add(signed)
@@ -331,7 +336,7 @@ pub async fn list(
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let details: HashMap<i64, (String, String, String)> = account_detail::Entity::find()
+    let details: HashMap<i64, (String, String, i64, i32)> = account_detail::Entity::find()
         .all(&state.db)
         .await
         .map_err(err500)?
@@ -340,21 +345,13 @@ pub async fn list(
             let card_number = crypto::decrypt_string(&dek, &detail.card_number);
             let account_username = crypto::decrypt_string(&dek, &detail.account_username);
             let credit_limit = crypto::decrypt_cents(&dek, &detail.credit_limit);
-            let credit_summary = if detail.billing_day > 0 {
-                format!(
-                    "授信额 {} · 每月 {} 日",
-                    super::fmt_cents(credit_limit),
-                    detail.billing_day
-                )
-            } else {
-                String::new()
-            };
             (
                 detail.account_id,
                 (
                     super::mask_card_number(&card_number),
                     super::mask_account_username(&account_username),
-                    credit_summary,
+                    credit_limit,
+                    detail.billing_day,
                 ),
             )
         })
@@ -385,11 +382,14 @@ pub async fn list(
         );
     }
     for transfer in transfers {
-        let cents = crypto::decrypt_cents(&dek, &transfer.amount);
-        let outgoing = cents.checked_neg().ok_or_else(|| err500("余额超出范围"))?;
+        let from_cents = crypto::decrypt_cents(&dek, &transfer.amount);
+        let to_cents = super::transfer_to_cents(&dek, &transfer);
+        let outgoing = from_cents
+            .checked_neg()
+            .ok_or_else(|| err500("余额超出范围"))?;
         for (account_id, signed) in [
             (transfer.from_account_id, outgoing),
-            (transfer.to_account_id, cents),
+            (transfer.to_account_id, to_cents),
         ] {
             let current = net.get(&account_id).copied().unwrap_or_default();
             net.insert(
@@ -419,8 +419,17 @@ pub async fn list(
     let rows = accounts
         .into_iter()
         .map(|account| {
-            let (card_number, account_username, credit_summary) =
+            let (card_number, account_username, credit_limit, billing_day) =
                 details.get(&account.id).cloned().unwrap_or_default();
+            let credit_summary = if billing_day > 0 {
+                format!(
+                    "授信额 {} · 每月 {} 日",
+                    currency::format(credit_limit, &account.currency),
+                    billing_day
+                )
+            } else {
+                String::new()
+            };
             AccountRow {
                 id: account.id,
                 name: crypto::decrypt_string(&dek, &account.name),
@@ -429,7 +438,10 @@ pub async fn list(
                 account_username,
                 credit_summary,
                 note: crypto::decrypt_string(&dek, &account.note),
-                balance: super::fmt_cents(net.get(&account.id).copied().unwrap_or_default()),
+                balance: currency::format(
+                    net.get(&account.id).copied().unwrap_or_default(),
+                    &account.currency,
+                ),
             }
         })
         .collect();
@@ -440,12 +452,14 @@ pub async fn list(
     Ok(Html(html))
 }
 
-pub async fn new_form() -> Html<String> {
+pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<String>> {
     let html = AccountFormTemplate {
         heading: "新建账户".into(),
         action: "/accounts".into(),
         name: String::new(),
         account_kind: DEFAULT_ACCOUNT_KIND.into(),
+        currency: currency::default_currency(&state).await.map_err(err500)?,
+        currencies: currency::CURRENCIES,
         card_number: String::new(),
         account_username: String::new(),
         credit_limit: String::new(),
@@ -453,8 +467,8 @@ pub async fn new_form() -> Html<String> {
         note: String::new(),
     }
     .render()
-    .expect("模板渲染失败");
-    Html(html)
+    .map_err(err500)?;
+    Ok(Html(html))
 }
 
 pub async fn create(
@@ -468,11 +482,15 @@ pub async fn create(
     if !valid_account_kind(&form.account_kind) {
         return Err(bad_request("账户类型无效"));
     }
+    if !currency::valid(&form.currency) {
+        return Err(bad_request("账户货币无效"));
+    }
     let (credit_limit, billing_day) =
         parse_credit_settings(&form.account_kind, &form.credit_limit, &form.billing_day)?;
     let account = account::ActiveModel {
         name: Set(crypto::encrypt(&dek, form.name.trim().as_bytes())),
         kind: Set(form.account_kind.clone()),
+        currency: Set(form.currency.clone()),
         balance_offset: Set(crypto::encrypt_cents(&dek, 0)),
         note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
         created_at: Set(chrono::Utc::now()),
@@ -531,6 +549,8 @@ pub async fn edit_form(
         action: format!("/accounts/{id}/edit"),
         name: crypto::decrypt_string(&dek, &account.name),
         account_kind: account.kind,
+        currency: account.currency,
+        currencies: currency::CURRENCIES,
         card_number,
         account_username,
         credit_limit,
@@ -555,6 +575,9 @@ pub async fn update(
     if !valid_account_kind(&form.account_kind) {
         return Err(bad_request("账户类型无效"));
     }
+    if !currency::valid(&form.currency) {
+        return Err(bad_request("账户货币无效"));
+    }
     let (credit_limit, billing_day) =
         parse_credit_settings(&form.account_kind, &form.credit_limit, &form.billing_day)?;
     let account = account::Entity::find_by_id(id)
@@ -563,6 +586,36 @@ pub async fn update(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     let balance = current_balance(&state, &dek, id).await?;
+    if account.currency != form.currency {
+        let has_activity = bill::Entity::find()
+            .filter(bill::Column::AccountId.eq(id))
+            .one(&state.db)
+            .await
+            .map_err(err500)?
+            .is_some()
+            || transfer::Entity::find()
+                .filter(
+                    Condition::any()
+                        .add(transfer::Column::FromAccountId.eq(id))
+                        .add(transfer::Column::ToAccountId.eq(id)),
+                )
+                .one(&state.db)
+                .await
+                .map_err(err500)?
+                .is_some()
+            || debt_record::Entity::find()
+                .filter(debt_record::Column::AccountId.eq(id))
+                .one(&state.db)
+                .await
+                .map_err(err500)?
+                .is_some()
+            || crypto::decrypt_cents(&dek, &account.balance_offset) != 0;
+        if has_activity {
+            return Err(bad_request(
+                "已有余额或流水的账户不能修改货币；请新建对应货币账户后转账",
+            ));
+        }
+    }
     if matches!(form.account_kind.as_str(), "credit_card" | "credit_service") {
         let minimum = credit_limit
             .checked_neg()
@@ -576,6 +629,7 @@ pub async fn update(
     let mut active = account.into_active_model();
     active.name = Set(crypto::encrypt(&dek, form.name.trim().as_bytes()));
     active.kind = Set(form.account_kind.clone());
+    active.currency = Set(form.currency.clone());
     active.note = Set(crypto::encrypt(&dek, form.note.trim().as_bytes()));
     active.update(&state.db).await.map_err(err500)?;
     save_account_detail(
@@ -604,7 +658,10 @@ pub async fn balance_form(
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     let html = AccountBalanceTemplate {
         account_name: crypto::decrypt_string(&dek, &account.name),
-        current_balance: super::fmt_cents(current_balance(&state, &dek, id).await?),
+        current_balance: currency::format(
+            current_balance(&state, &dek, id).await?,
+            &account.currency,
+        ),
         action: format!("/accounts/{id}/balance"),
     }
     .render()
@@ -660,16 +717,17 @@ pub async fn delete(
         .await
         .map_err(err500)?
     {
-        let amount = crypto::decrypt_cents(&dek, &transfer.amount);
+        let from_amount = crypto::decrypt_cents(&dek, &transfer.amount);
+        let to_amount = super::transfer_to_cents(&dek, &transfer);
         let (other_id, delta) = if transfer.from_account_id == id {
             (
                 transfer.to_account_id,
-                amount
+                to_amount
                     .checked_neg()
                     .ok_or_else(|| bad_request("金额超出范围"))?,
             )
         } else {
-            (transfer.from_account_id, amount)
+            (transfer.from_account_id, from_amount)
         };
         if other_id != id {
             let current = balance_changes.get(&other_id).copied().unwrap_or_default();

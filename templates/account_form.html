@@ -19,6 +19,13 @@
       <option value="other" {% if account_kind == "other" %}selected{% endif %}>其他</option>
     </select>
   </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">账户货币</label>
+    <select name="currency" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      {% for c in currencies %}<option value="{{ c.code }}" {% if c.code == currency %}selected{% endif %}>{{ c.code }} · {{ c.name }}</option>{% endfor %}
+    </select>
+    <p class="text-xs text-gray-400 mt-1">已有余额或流水后不可直接改币种，避免历史金额被重新解释。</p>
+  </div>
   <div id="card-number-field">
     <label class="block text-sm text-gray-600 mb-1">卡号（可选）</label>
     <input name="card_number" value="{{ card_number }}" autocomplete="off" spellcheck="false" placeholder="例如：6222 0000 0000 1234" class="w-full border border-gray-300 rounded px-3 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">

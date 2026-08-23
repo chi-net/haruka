@@ -12,6 +12,13 @@
     <input name="amount" type="number" step="0.01" min="0.01" value="{{ amount }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
   </div>
   <div>
+    <label class="block text-sm text-gray-600 mb-1">订阅货币</label>
+    <select name="currency" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      {% for c in currencies %}<option value="{{ c.code }}" {% if c.code == currency %}selected{% endif %}>{{ c.code }} · {{ c.name }}</option>{% endfor %}
+    </select>
+    <p class="text-xs text-gray-400 mt-1">生成支出时会按当日汇率换算为付款账户的货币。</p>
+  </div>
+  <div>
     <label class="block text-sm text-gray-600 mb-1">支出分类</label>
     <select name="category" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
       {% for c in categories %}<option value="{{ c.name }}" {% if c.name == category %}selected{% endif %}>{{ c.name }}</option>{% endfor %}

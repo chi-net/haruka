@@ -370,6 +370,7 @@ pub(crate) async fn ensure_default_account(
         account::ActiveModel {
             name: Set(crypto::encrypt(dek, "默认账户".as_bytes())),
             kind: Set("other".into()),
+            currency: Set(crate::currency::FALLBACK_CURRENCY.into()),
             balance_offset: Set(crypto::encrypt_cents(dek, 0)),
             note: Set(crypto::encrypt(dek, "".as_bytes())),
             created_at: Set(chrono::Utc::now()),

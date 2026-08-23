@@ -1,4 +1,5 @@
 mod crypto;
+mod currency;
 mod db;
 mod entity;
 mod handlers;
@@ -36,6 +37,8 @@ pub struct AppState {
     pub db: DatabaseConnection,
     sessions: Arc<RwLock<HashMap<String, Dek>>>,
     pub balance_writes: Arc<tokio::sync::Mutex<()>>,
+    fx_client: reqwest::Client,
+    fx_fetches: Arc<tokio::sync::Mutex<()>>,
     webauthn: Arc<Webauthn>,
     passkey_registrations:
         Arc<tokio::sync::Mutex<HashMap<String, (Instant, PasskeyRegistration, String)>>>,
@@ -125,6 +128,12 @@ async fn main() {
         db,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         balance_writes: Arc::new(tokio::sync::Mutex::new(())),
+        fx_client: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .user_agent("haruka/0.1")
+            .build()
+            .expect("汇率客户端初始化失败"),
+        fx_fetches: Arc::new(tokio::sync::Mutex::new(())),
         webauthn: Arc::new(webauthn),
         passkey_registrations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         passkey_enrollments: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -200,6 +209,10 @@ async fn main() {
             post(handlers::debts::delete_person),
         )
         .route("/settings", get(handlers::settings::show))
+        .route(
+            "/settings/currency",
+            post(handlers::settings::update_currency),
+        )
         .route("/statistics", get(handlers::statistics::show))
         .route(
             "/settings/categories",

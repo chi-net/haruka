@@ -28,7 +28,7 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-    <div><h2 class="font-medium">收支报表</h2><p class="text-xs text-gray-500 mt-1">今日按小时；周/月/年分别统计近 7/30/365 天。转账和借还不计入普通收支。</p></div>
+    <div><h2 class="font-medium">收支报表</h2><p class="text-xs text-gray-500 mt-1">今日按小时；周/月/年分别统计近 7/30/365 天。多币种按当日可用汇率折算为 {{ default_currency }}；转账和借还不计入普通收支。</p></div>
     <div class="flex rounded border border-gray-200 overflow-hidden" id="report-tabs">
       <button type="button" data-period="daily" class="report-tab bg-blue-600 text-white text-xs px-3 py-1.5">日</button>
       <button type="button" data-period="weekly" class="report-tab text-gray-600 text-xs px-3 py-1.5">周</button>
@@ -56,8 +56,8 @@
         { label: '支出', data: data.expense, borderColor: 'rgb(220, 38, 38)', backgroundColor: 'rgba(220, 38, 38, .12)', borderWidth: 2, tension: .42, fill: true, pointRadius: period === 'daily' ? 2 : 0, pointHoverRadius: 4 }
       ]},
       options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
-        scales: { y: { beginAtZero: true, ticks: { callback: value => (value / 100).toFixed(2) } } },
-        plugins: { tooltip: { callbacks: { label: item => `${item.dataset.label}: ${(item.raw / 100).toFixed(2)}` } } }
+        scales: { y: { beginAtZero: true, ticks: { callback: value => `${(value / 100).toFixed(2)} {{ default_currency }}` } } },
+        plugins: { tooltip: { callbacks: { label: item => `${item.dataset.label}: ${(item.raw / 100).toFixed(2)} {{ default_currency }}` } } }
       }
     });
     document.querySelectorAll('.report-tab').forEach(button => {
