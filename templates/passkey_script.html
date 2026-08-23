@@ -39,17 +39,19 @@ function harukaCreateOptions(payload, authenticatorMode) {
   return { publicKey: options };
 }
 
-function harukaRequestOptions(payload) {
+function harukaRequestOptions(payload, authenticatorMode) {
   const options = payload.options.publicKey;
   options.challenge = harukaB64urlToBytes(options.challenge);
   const allowed = options.allowCredentials || [];
-  const hasPlatformCredential = allowed.some(item => (item.transports || []).includes('internal'));
-  const hasUnknownTransport = allowed.some(item => !item.transports || item.transports.length === 0);
   for (const item of allowed) item.id = harukaB64urlToBytes(item.id);
-  // 登录没有 authenticatorAttachment 参数，只能用注册时保存的 transport 和 hints 引导选择器。
-  options.hints = (hasPlatformCredential || hasUnknownTransport)
-    ? ['client-device', 'hybrid', 'security-key']
-    : ['hybrid', 'security-key'];
+  if (authenticatorMode === 'platform') {
+    // Firefox/macOS 需要可发现凭据流程才会稳定打开 iCloud 钥匙串，而不是外部设备面板。
+    options.allowCredentials = [];
+    options.hints = ['client-device'];
+  } else {
+    options.allowCredentials = allowed;
+    options.hints = ['hybrid', 'security-key'];
+  }
   options.extensions = Object.assign({}, options.extensions || {}, {
     prf: { eval: { first: harukaB64urlToBytes(payload.prf_input) } }
   });
@@ -146,10 +148,10 @@ async function harukaEnrollPasskey(name, authenticatorMode) {
   });
 }
 
-async function harukaLoginWithPasskey() {
+async function harukaLoginWithPasskey(authenticatorMode) {
   await harukaRequireWebAuthn();
   const start = await harukaJson('/passkey/auth/start', {});
-  const asserted = await navigator.credentials.get(harukaRequestOptions(start));
+  const asserted = await navigator.credentials.get(harukaRequestOptions(start, authenticatorMode || 'platform'));
   if (!asserted) throw new Error('浏览器没有返回 Passkey');
   const authentication = harukaAuthenticationCredential(asserted);
   const result = await harukaJson('/passkey/auth/finish', {

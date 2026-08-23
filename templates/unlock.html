@@ -8,7 +8,8 @@
   {% endif %}
   {% if has_passkeys %}
   <div class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
-    <button id="passkey-login-button" type="button" class="w-full bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50">使用 Passkey 解锁</button>
+    <button data-passkey-login="platform" type="button" class="w-full bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50">使用此 Mac 的 Passkey 解锁</button>
+    <button data-passkey-login="external" type="button" class="w-full mt-2 border border-gray-300 bg-white text-gray-700 text-sm px-4 py-2 rounded hover:bg-gray-50 disabled:opacity-50">使用手机或安全密钥</button>
     <p id="passkey-login-status" class="hidden text-sm mt-3" role="status"></p>
   </div>
   <div class="flex items-center gap-3 mb-4"><span class="h-px bg-gray-200 flex-1"></span><span class="text-xs text-gray-400">或使用主密码</span><span class="h-px bg-gray-200 flex-1"></span></div>
@@ -25,21 +26,25 @@
 {% include "passkey_script.html" %}
 {% if has_passkeys %}
 <script>
-document.getElementById('passkey-login-button').addEventListener('click', async () => {
-  const button = document.getElementById('passkey-login-button');
+for (const button of document.querySelectorAll('[data-passkey-login]')) {
+button.addEventListener('click', async () => {
+  const buttons = document.querySelectorAll('[data-passkey-login]');
   const status = document.getElementById('passkey-login-status');
-  button.disabled = true;
+  for (const item of buttons) item.disabled = true;
   status.className = 'text-sm text-blue-600 mt-3';
-  status.textContent = '等待 Passkey 确认…';
+  status.textContent = button.dataset.passkeyLogin === 'platform'
+    ? '正在打开此 Mac 的 Passkey…'
+    : '正在等待手机或安全密钥…';
   try {
-    const redirect = await harukaLoginWithPasskey();
+    const redirect = await harukaLoginWithPasskey(button.dataset.passkeyLogin);
     window.location.assign(redirect);
   } catch (error) {
     status.className = 'text-sm text-red-600 mt-3';
     status.textContent = harukaPasskeyError(error);
-    button.disabled = false;
+    for (const item of buttons) item.disabled = false;
   }
 });
+}
 </script>
 {% endif %}
 {% endblock %}

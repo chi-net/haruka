@@ -24,7 +24,7 @@
 - setup/unlock/recover 表单禁用 htmx boost，确保会话 Cookie 和重定向走完整浏览器导航；解锁成功直接进入 `/dashboard`
 - 密码只用于当次 Argon2id 派生并用 `Zeroizing` 尽快清除，不落盘、不进入 Cookie 或会话；恢复密码会使现有客户端会话全部失效
 - 密码恢复使用 BIP-39 英文 12 词助记词；明文助记词只展示一次且不落盘，`recovery` 表只保存恢复密钥包裹 DEK 后的 nonce + ciphertext；在设置页重置助记词必须重新验证主密码
-- Passkey 使用 WebAuthn 用户验证并要求 PRF 扩展；PRF 以固定域分隔输入产生每凭据 32 字节 KEK，`passkeys` 只保存公钥凭据（含认证器 transports）、PRF-KEK 包裹后的 DEK 和加密名称。注册必须在已解锁设置页完成，默认明确请求可发现的本机平台凭据（兼容 Firefox/macOS 的 iCloud 钥匙串），也允许用户改选手机或安全密钥；登录按已注册凭据的 `internal` transport 优先提示本机平台认证器；挑战状态仅在服务端内存保存五分钟且一次性使用；登录成功后仍只创建普通内存 DEK 会话。默认来源为 `http://localhost:3000`，部署时用 `PASSKEY_ORIGIN` 和 `PASSKEY_RP_ID` 固定配置，来源/RP ID 变更会使已有 Passkey 不可用
+- Passkey 使用 WebAuthn 用户验证并要求 PRF 扩展；PRF 以固定域分隔输入产生每凭据 32 字节 KEK，`passkeys` 只保存公钥凭据（含认证器 transports）、PRF-KEK 包裹后的 DEK 和加密名称。注册必须在已解锁设置页完成，默认明确请求可发现的本机平台凭据（兼容 Firefox/macOS 的 iCloud 钥匙串），也允许用户改选手机或安全密钥；登录页将本机和外部认证器拆成两个入口，本机入口必须清空 `allowCredentials` 走可发现凭据流程并提示 `client-device`，外部入口保留凭据白名单并提示 `hybrid`/`security-key`；挑战状态仅在服务端内存保存五分钟且一次性使用；登录成功后仍只创建普通内存 DEK 会话。默认来源为 `http://localhost:3000`，部署时用 `PASSKEY_ORIGIN` 和 `PASSKEY_RP_ID` 固定配置，来源/RP ID 变更会使已有 Passkey 不可用
 - 不提供能在重启后独立解锁数据的 TOTP：6 位动态码不能安全充当 KEK，若服务端可读取 TOTP 种子再解密 DEK，会破坏数据库静态加密的威胁模型
 - 加解密统一走 `crypto` 模块（`encrypt`/`decrypt_string`/`encrypt_cents`/`decrypt_cents`），handler 里不要直接碰密文
 - 加密字段无法 SQL 筛选/排序/求和，汇总统计都在 Rust 里做
