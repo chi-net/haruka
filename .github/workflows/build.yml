@@ -1,0 +1,70 @@
+name: Build haruka
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-linux:
+    name: Linux x86_64 release (Ubuntu 24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tailwind CSS
+        run: npm run css:build
+
+      - name: Check generated CSS is committed
+        run: git diff --exit-code -- static/app.css
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes pkg-config libssl-dev
+
+      - name: Set up stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt
+          rustup default stable
+
+      - name: Check Rust formatting
+        run: cargo fmt --check
+
+      - name: Build release binary
+        run: cargo build --locked --release
+
+      - name: Package deployment artifact
+        run: |
+          install -Dm755 target/release/haruka dist/haruka
+          cp README.md LICENSE dist/
+          tar -C dist -czf haruka-linux-x86_64.tar.gz .
+
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: haruka-linux-x86_64
+          path: haruka-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 14

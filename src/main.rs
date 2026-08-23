@@ -6,6 +6,7 @@ mod handlers;
 
 use std::{
     collections::HashMap,
+    env, process,
     sync::{Arc, RwLock},
     time::Instant,
 };
@@ -28,6 +29,85 @@ use webauthn_rs::prelude::{
 };
 
 const SESSION_COOKIE: &str = "haruka_session";
+const DEFAULT_LISTEN_ADDR: &str = "127.0.0.1:3000";
+
+fn port_addr(value: &str, source: &str) -> Result<String, String> {
+    let port = value
+        .parse::<u16>()
+        .map_err(|_| format!("{source} 必须是 1 到 65535 之间的端口号"))?;
+    if port == 0 {
+        return Err(format!("{source} 不能为 0"));
+    }
+    Ok(format!("0.0.0.0:{port}"))
+}
+
+fn required_arg(args: &mut impl Iterator<Item = String>, option: &str) -> Result<String, String> {
+    args.next()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{option} 后面缺少值"))
+}
+
+fn print_usage() {
+    println!(
+        "haruka\n\n用法：\n  haruka [--listen <地址:端口> | --port <端口>]\n\n参数：\n  --listen <地址:端口>  精确指定监听地址，例如 127.0.0.1:3000\n  --port <端口>         监听 0.0.0.0:<端口>\n  -h, --help            显示帮助\n\n环境变量：\n  LISTEN_ADDR           精确指定监听地址\n  PORT                  监听 0.0.0.0:<端口>\n\n优先级：命令行参数 > LISTEN_ADDR > PORT > 127.0.0.1:3000"
+    );
+}
+
+fn resolve_listen_addr() -> Result<String, String> {
+    let mut listen = None;
+    let mut port = None;
+    let mut args = env::args().skip(1);
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--listen" => listen = Some(required_arg(&mut args, "--listen")?),
+            "--port" => port = Some(required_arg(&mut args, "--port")?),
+            "-h" | "--help" => {
+                print_usage();
+                process::exit(0);
+            }
+            _ if arg.starts_with("--listen=") => {
+                let value = arg.trim_start_matches("--listen=").trim();
+                if value.is_empty() {
+                    return Err("--listen 后面缺少值".to_string());
+                }
+                listen = Some(value.to_string());
+            }
+            _ if arg.starts_with("--port=") => {
+                let value = arg.trim_start_matches("--port=").trim();
+                if value.is_empty() {
+                    return Err("--port 后面缺少值".to_string());
+                }
+                port = Some(value.to_string());
+            }
+            _ => return Err(format!("未知参数：{arg}")),
+        }
+    }
+
+    match (listen, port) {
+        (Some(_), Some(_)) => Err("--listen 和 --port 不能同时使用".to_string()),
+        (Some(addr), None) => Ok(addr),
+        (None, Some(value)) => port_addr(&value, "--port"),
+        (None, None) => match env::var("LISTEN_ADDR") {
+            Ok(addr) if addr.trim().is_empty() => Err("LISTEN_ADDR 不能为空".to_string()),
+            Ok(addr) => Ok(addr),
+            Err(env::VarError::NotPresent) => match env::var("PORT") {
+                Ok(value) => port_addr(value.trim(), "PORT"),
+                Err(env::VarError::NotPresent) => Ok(DEFAULT_LISTEN_ADDR.to_string()),
+                Err(env::VarError::NotUnicode(_)) => Err("PORT 不是有效文本".to_string()),
+            },
+            Err(env::VarError::NotUnicode(_)) => Err("LISTEN_ADDR 不是有效文本".to_string()),
+        },
+    }
+}
+
+fn default_passkey_origin(addr: &str) -> String {
+    let port = addr
+        .rsplit_once(':')
+        .and_then(|(_, value)| value.parse::<u16>().ok())
+        .unwrap_or(3000);
+    format!("http://localhost:{port}")
+}
 
 #[derive(Clone)]
 pub struct SessionDek(pub Dek);
@@ -109,10 +189,15 @@ async fn require_unlock(State(state): State<AppState>, mut req: Request, next: N
 
 #[tokio::main]
 async fn main() {
+    let addr = resolve_listen_addr().unwrap_or_else(|error| {
+        eprintln!("启动参数错误：{error}\n");
+        print_usage();
+        process::exit(2);
+    });
     let db = db::init().await;
     let passkey_origin =
-        std::env::var("PASSKEY_ORIGIN").unwrap_or_else(|_| "http://localhost:3000".to_string());
-    let passkey_rp_id = std::env::var("PASSKEY_RP_ID").unwrap_or_else(|_| {
+        env::var("PASSKEY_ORIGIN").unwrap_or_else(|_| default_passkey_origin(&addr));
+    let passkey_rp_id = env::var("PASSKEY_RP_ID").unwrap_or_else(|_| {
         Url::parse(&passkey_origin)
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
@@ -285,11 +370,13 @@ async fn main() {
         .with_state(state)
         .layer(middleware::from_fn(handlers::render_error_response));
 
-    let addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .expect("端口绑定失败");
-    println!("haruka 已启动: http://{addr}");
+        .unwrap_or_else(|error| {
+            eprintln!("无法监听 {addr}：{error}");
+            process::exit(1);
+        });
+    println!("haruka 已启动，监听地址: {addr}");
     println!("Passkey 来源: {passkey_origin}（RP ID: {passkey_rp_id}）");
     axum::serve(listener, app).await.expect("服务器运行失败");
 }

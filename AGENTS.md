@@ -13,7 +13,7 @@
 
 ## 命令
 
-- 运行：`cargo run`，监听 `127.0.0.1:3000`（可用 `LISTEN_ADDR` 覆盖）
+- 运行：`cargo run`，默认监听 `127.0.0.1:3000`；命令行支持 `--listen <地址:端口>` 或 `--port <端口>`，环境变量支持 `LISTEN_ADDR` 或 `PORT`，优先级为命令行 > `LISTEN_ADDR` > `PORT` > 默认值；`--port`/`PORT` 监听 `0.0.0.0`
 - 前端依赖：`npm install`；构建样式：`npm run css:build`；开发监听：`npm run css:watch`
 - 数据库：默认 `sqlite://haruka.db?mode=rwc`（可用 `DATABASE_URL` 覆盖），启动时用 sea-orm `Schema` 自动 `CREATE TABLE IF NOT EXISTS`，并由 `db::ensure_column` 用轻量 `ALTER TABLE` 补齐构建阶段新增字段；新增字段时必须同步登记，不能再要求用户手动删除数据库
 
@@ -25,7 +25,7 @@
 - setup/unlock/recover 表单禁用 htmx boost，确保会话 Cookie 和重定向走完整浏览器导航；解锁成功直接进入 `/dashboard`
 - 密码只用于当次 Argon2id 派生并用 `Zeroizing` 尽快清除，不落盘、不进入 Cookie 或会话；恢复密码会使现有客户端会话全部失效
 - 密码恢复使用 BIP-39 英文 12 词助记词；明文助记词只展示一次且不落盘，`recovery` 表只保存恢复密钥包裹 DEK 后的 nonce + ciphertext；在设置页重置助记词必须重新验证主密码
-- Passkey 使用 WebAuthn 用户验证并要求 PRF 扩展；PRF 以固定域分隔输入产生每凭据 32 字节 KEK，`passkeys` 只保存公钥凭据（含认证器 transports）、PRF-KEK 包裹后的 DEK 和加密名称。注册必须在已解锁设置页完成，默认明确请求可发现的本机平台凭据（兼容 Firefox/macOS 的 iCloud 钥匙串），也允许用户改选手机或安全密钥；登录页将本机和外部认证器拆成两个入口，本机入口必须清空 `allowCredentials` 走可发现凭据流程并提示 `client-device`，外部入口保留凭据白名单并提示 `hybrid`/`security-key`；挑战状态仅在服务端内存保存五分钟且一次性使用；登录成功后仍只创建普通内存 DEK 会话。默认来源为 `http://localhost:3000`，部署时用 `PASSKEY_ORIGIN` 和 `PASSKEY_RP_ID` 固定配置，来源/RP ID 变更会使已有 Passkey 不可用
+- Passkey 使用 WebAuthn 用户验证并要求 PRF 扩展；PRF 以固定域分隔输入产生每凭据 32 字节 KEK，`passkeys` 只保存公钥凭据（含认证器 transports）、PRF-KEK 包裹后的 DEK 和加密名称。注册必须在已解锁设置页完成，默认明确请求可发现的本机平台凭据（兼容 Firefox/macOS 的 iCloud 钥匙串），也允许用户改选手机或安全密钥；登录页将本机和外部认证器拆成两个入口，本机入口必须清空 `allowCredentials` 走可发现凭据流程并提示 `client-device`，外部入口保留凭据白名单并提示 `hybrid`/`security-key`；挑战状态仅在服务端内存保存五分钟且一次性使用；登录成功后仍只创建普通内存 DEK 会话。本地默认来源为当前监听端口对应的 `http://localhost:<端口>`，部署时用 `PASSKEY_ORIGIN` 和 `PASSKEY_RP_ID` 固定配置，来源/RP ID 变更会使已有 Passkey 不可用
 - 不提供能在重启后独立解锁数据的 TOTP：6 位动态码不能安全充当 KEK，若服务端可读取 TOTP 种子再解密 DEK，会破坏数据库静态加密的威胁模型
 - 加解密统一走 `crypto` 模块（`encrypt`/`decrypt_string`/`encrypt_cents`/`decrypt_cents`），handler 里不要直接碰密文
 - 加密字段无法 SQL 筛选/排序/求和，汇总统计都在 Rust 里做
