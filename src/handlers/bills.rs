@@ -1,6 +1,6 @@
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::{Html, Redirect},
     Form,
@@ -11,7 +11,11 @@ use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QueryOrder, Set};
 use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr};
 
-use crate::{crypto, entity::{account, bill}, AppState};
+use crate::{
+    crypto,
+    entity::{account, bill},
+    AppState, SessionDek,
+};
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
 
@@ -84,7 +88,10 @@ const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
 const DISPLAY_FMT: &str = "%Y-%m-%d %H:%M";
 
 fn parse_form(form: BillFormData) -> HandlerResult<ParsedBill> {
-    let account_id: i64 = form.account_id.parse().map_err(|_| bad_request("账户无效"))?;
+    let account_id: i64 = form
+        .account_id
+        .parse()
+        .map_err(|_| bad_request("账户无效"))?;
     if form.kind != "income" && form.kind != "expense" {
         return Err(bad_request("类型必须是收入或支出"));
     }
@@ -112,8 +119,7 @@ fn parse_form(form: BillFormData) -> HandlerResult<ParsedBill> {
     })
 }
 
-async fn account_options(state: &AppState) -> HandlerResult<Vec<AccountOption>> {
-    let dek = state.dek()?;
+async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<Vec<AccountOption>> {
     let accounts = account::Entity::find()
         .order_by_asc(account::Column::Id)
         .all(&state.db)
@@ -124,19 +130,27 @@ async fn account_options(state: &AppState) -> HandlerResult<Vec<AccountOption>> 
     }
     Ok(accounts
         .into_iter()
-        .map(|a| AccountOption { id: a.id, name: crypto::decrypt_string(&dek, &a.name) })
+        .map(|a| AccountOption {
+            id: a.id,
+            name: crypto::decrypt_string(dek, &a.name),
+        })
         .collect())
 }
 
-pub async fn list(State(state): State<AppState>) -> HandlerResult<Html<String>> {
-    let dek = state.dek()?;
+pub async fn list(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+) -> HandlerResult<Html<String>> {
     let bills = bill::Entity::find()
         .order_by_desc(bill::Column::HappenedAt)
         .order_by_desc(bill::Column::Id)
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let accounts = account::Entity::find().all(&state.db).await.map_err(err500)?;
+    let accounts = account::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
     let names: HashMap<i64, String> = accounts
         .into_iter()
         .map(|a| (a.id, crypto::decrypt_string(&dek, &a.name)))
@@ -154,7 +168,10 @@ pub async fn list(State(state): State<AppState>) -> HandlerResult<Html<String>> 
         }
         rows.push(BillRow {
             id: b.id,
-            account_name: names.get(&b.account_id).cloned().unwrap_or_else(|| "已删除账户".into()),
+            account_name: names
+                .get(&b.account_id)
+                .cloned()
+                .unwrap_or_else(|| "已删除账户".into()),
             kind: b.kind,
             amount: super::fmt_cents(cents),
             category: crypto::decrypt_string(&dek, &b.category),
@@ -174,8 +191,11 @@ pub async fn list(State(state): State<AppState>) -> HandlerResult<Html<String>> 
     Ok(Html(html))
 }
 
-pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<String>> {
-    let accounts = account_options(&state).await?;
+pub async fn new_form(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+) -> HandlerResult<Html<String>> {
+    let accounts = account_options(&state, &dek).await?;
     let first_id = accounts[0].id;
     let html = BillFormTemplate {
         heading: "记一笔".into(),
@@ -186,7 +206,10 @@ pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<Strin
         amount: String::new(),
         category: String::new(),
         note: String::new(),
-        happened_at: chrono::Local::now().naive_local().format(TIME_FMT).to_string(),
+        happened_at: chrono::Local::now()
+            .naive_local()
+            .format(TIME_FMT)
+            .to_string(),
     }
     .render()
     .map_err(err500)?;
@@ -195,9 +218,9 @@ pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<Strin
 
 pub async fn create(
     State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
-    let dek = state.dek()?;
     let parsed = parse_form(form)?;
     bill::ActiveModel {
         account_id: Set(parsed.account_id),
@@ -217,15 +240,15 @@ pub async fn create(
 
 pub async fn edit_form(
     State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
-    let dek = state.dek()?;
     let b = bill::Entity::find_by_id(id)
         .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
-    let accounts = account_options(&state).await?;
+    let accounts = account_options(&state, &dek).await?;
     let html = BillFormTemplate {
         heading: "编辑账单".into(),
         action: format!("/bills/{id}/edit"),
@@ -244,10 +267,10 @@ pub async fn edit_form(
 
 pub async fn update(
     State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
-    let dek = state.dek()?;
     let parsed = parse_form(form)?;
     let b = bill::Entity::find_by_id(id)
         .one(&state.db)
@@ -265,10 +288,7 @@ pub async fn update(
     Ok(Redirect::to("/bills"))
 }
 
-pub async fn delete(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> HandlerResult<Redirect> {
+pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> HandlerResult<Redirect> {
     bill::Entity::delete_by_id(id)
         .exec(&state.db)
         .await

@@ -3,53 +3,93 @@ mod db;
 mod entity;
 mod handlers;
 
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use axum::{
     extract::{Request, State},
-    http::StatusCode,
+    http::{header, HeaderMap, HeaderValue},
     middleware::{self, Next},
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
     Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use sea_orm::{DatabaseConnection, EntityTrait};
 
 use crypto::Dek;
 use entity::meta;
 
+const SESSION_COOKIE: &str = "haruka_session";
+
+#[derive(Clone)]
+pub struct SessionDek(pub Dek);
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
-    pub dek: Arc<RwLock<Option<Dek>>>,
+    sessions: Arc<RwLock<HashMap<String, Dek>>>,
 }
 
 impl AppState {
-    pub fn dek(&self) -> Result<Dek, (StatusCode, String)> {
-        self.dek
-            .read()
+    pub fn create_session(&self, dek: &Dek) -> HeaderValue {
+        let token = URL_SAFE_NO_PAD.encode(crypto::random_bytes::<32>());
+        self.sessions
+            .write()
             .unwrap()
-            .clone()
-            .ok_or((StatusCode::UNAUTHORIZED, "未解锁".to_string()))
+            .insert(token.clone(), dek.clone());
+        HeaderValue::from_str(&format!(
+            "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict"
+        ))
+        .expect("会话 Cookie 无效")
+    }
+
+    fn session_token(headers: &HeaderMap) -> Option<&str> {
+        headers
+            .get(header::COOKIE)?
+            .to_str()
+            .ok()?
+            .split(';')
+            .filter_map(|part| part.trim().split_once('='))
+            .find_map(|(name, value)| (name == SESSION_COOKIE).then_some(value))
+    }
+
+    fn session_dek(&self, headers: &HeaderMap) -> Option<Dek> {
+        let token = Self::session_token(headers)?;
+        self.sessions.read().unwrap().get(token).cloned()
+    }
+
+    pub fn remove_session(&self, headers: &HeaderMap) {
+        if let Some(token) = Self::session_token(headers) {
+            self.sessions.write().unwrap().remove(token);
+        }
+    }
+
+    pub fn clear_sessions(&self) {
+        self.sessions.write().unwrap().clear();
+    }
+
+    pub fn clear_session_cookie() -> HeaderValue {
+        HeaderValue::from_static("haruka_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
     }
 }
 
-async fn require_unlock(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
-    if state.dek.read().unwrap().is_none() {
-        let has_meta = meta::Entity::find_by_id(1)
-            .one(&state.db)
-            .await
-            .ok()
-            .flatten()
-            .is_some();
-        let target = if has_meta { "/unlock" } else { "/setup" };
-        return Redirect::to(target).into_response();
+async fn require_unlock(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
+    if let Some(dek) = state.session_dek(req.headers()) {
+        req.extensions_mut().insert(SessionDek(dek));
+        return next.run(req).await;
     }
-    next.run(req).await
+
+    let has_meta = meta::Entity::find_by_id(1)
+        .one(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .is_some();
+    let target = if has_meta { "/unlock" } else { "/setup" };
+    Redirect::to(target).into_response()
 }
 
 #[tokio::main]
@@ -57,30 +97,55 @@ async fn main() {
     let db = db::init().await;
     let state = AppState {
         db,
-        dek: Arc::new(RwLock::new(None)),
+        sessions: Arc::new(RwLock::new(HashMap::new())),
     };
 
     let protected = Router::new()
         .route("/", get(|| async { Redirect::to("/bills") }))
-        .route("/accounts", get(handlers::accounts::list).post(handlers::accounts::create))
+        .route(
+            "/accounts",
+            get(handlers::accounts::list).post(handlers::accounts::create),
+        )
         .route("/accounts/new", get(handlers::accounts::new_form))
         .route(
             "/accounts/{id}/edit",
             get(handlers::accounts::edit_form).post(handlers::accounts::update),
         )
         .route("/accounts/{id}/delete", post(handlers::accounts::delete))
-        .route("/bills", get(handlers::bills::list).post(handlers::bills::create))
+        .route(
+            "/bills",
+            get(handlers::bills::list).post(handlers::bills::create),
+        )
         .route("/bills/new", get(handlers::bills::new_form))
         .route(
             "/bills/{id}/edit",
             get(handlers::bills::edit_form).post(handlers::bills::update),
         )
         .route("/bills/{id}/delete", post(handlers::bills::delete))
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_unlock));
+        .route("/security", get(handlers::auth::security))
+        .route(
+            "/security/recovery",
+            post(handlers::auth::generate_recovery),
+        )
+        .route("/lock", post(handlers::auth::lock))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_unlock,
+        ));
 
     let app = Router::new()
-        .route("/setup", get(handlers::auth::setup_form).post(handlers::auth::setup))
-        .route("/unlock", get(handlers::auth::unlock_form).post(handlers::auth::unlock))
+        .route(
+            "/setup",
+            get(handlers::auth::setup_form).post(handlers::auth::setup),
+        )
+        .route(
+            "/unlock",
+            get(handlers::auth::unlock_form).post(handlers::auth::unlock),
+        )
+        .route(
+            "/recover",
+            get(handlers::auth::recover_form).post(handlers::auth::recover),
+        )
         .merge(protected)
         .with_state(state);
 

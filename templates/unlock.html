@@ -9,9 +9,10 @@
   <form method="post" action="/unlock" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
     <div>
       <label class="block text-sm text-gray-600 mb-1">主密码</label>
-      <input name="password" type="password" required autofocus class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <input name="password" type="password" required autofocus autocomplete="current-password" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
     <button type="submit" class="w-full bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">解锁</button>
   </form>
+  <p class="text-center mt-4"><a href="/recover" class="text-sm text-blue-600 hover:underline">忘记密码？使用助记词恢复</a></p>
 </div>
 {% endblock %}

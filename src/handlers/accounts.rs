@@ -1,6 +1,6 @@
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     response::{Html, Redirect},
     Form,
@@ -9,7 +9,11 @@ use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QueryOrder, Set};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use crate::{crypto, entity::{account, bill}, AppState};
+use crate::{
+    crypto,
+    entity::{account, bill},
+    AppState, SessionDek,
+};
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
 
@@ -45,8 +49,10 @@ pub struct AccountFormData {
     note: String,
 }
 
-pub async fn list(State(state): State<AppState>) -> HandlerResult<Html<String>> {
-    let dek = state.dek()?;
+pub async fn list(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+) -> HandlerResult<Html<String>> {
     let accounts = account::Entity::find()
         .order_by_asc(account::Column::Id)
         .all(&state.db)
@@ -71,7 +77,9 @@ pub async fn list(State(state): State<AppState>) -> HandlerResult<Html<String>> 
         })
         .collect();
 
-    let html = AccountsTemplate { accounts: rows }.render().map_err(err500)?;
+    let html = AccountsTemplate { accounts: rows }
+        .render()
+        .map_err(err500)?;
     Ok(Html(html))
 }
 
@@ -89,9 +97,9 @@ pub async fn new_form() -> Html<String> {
 
 pub async fn create(
     State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Form(form): Form<AccountFormData>,
 ) -> HandlerResult<Redirect> {
-    let dek = state.dek()?;
     if form.name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "账户名不能为空".into()));
     }
@@ -109,9 +117,9 @@ pub async fn create(
 
 pub async fn edit_form(
     State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
-    let dek = state.dek()?;
     let a = account::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -130,10 +138,10 @@ pub async fn edit_form(
 
 pub async fn update(
     State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
     Form(form): Form<AccountFormData>,
 ) -> HandlerResult<Redirect> {
-    let dek = state.dek()?;
     if form.name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "账户名不能为空".into()));
     }
@@ -149,10 +157,7 @@ pub async fn update(
     Ok(Redirect::to("/accounts"))
 }
 
-pub async fn delete(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> HandlerResult<Redirect> {
+pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> HandlerResult<Redirect> {
     account::Entity::delete_by_id(id)
         .exec(&state.db)
         .await

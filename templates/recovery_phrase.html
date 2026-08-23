@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} - haruka{% endblock %}
+{% block content %}
+<div class="max-w-xl mx-auto mt-10">
+  <h1 class="text-xl font-bold mb-2">{{ heading }}</h1>
+  <p class="text-sm text-gray-600 mb-4">请按顺序抄写并离线保管。它可以重设主密码并解密全部账目；任何得到它的人也拥有同样权限。</p>
+  <div class="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
+    <label for="recovery-phrase" class="block text-sm font-medium text-amber-900">BIP-39 英文 12 词助记词</label>
+    <textarea id="recovery-phrase" readonly rows="3" spellcheck="false" class="w-full resize-none border border-amber-300 rounded bg-white px-3 py-2 font-mono text-sm leading-6">{{ phrase }}</textarea>
+    <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('recovery-phrase').value)" class="text-sm text-blue-700 hover:underline">复制助记词</button>
+  </div>
+  <p class="text-xs text-gray-500 mt-3">离开本页后 haruka 不会再次显示这组词。重新生成会立即使旧助记词失效。</p>
+  <a href="{{ next_url }}" class="mt-5 inline-block bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700">我已安全保存</a>
+</div>
+{% endblock %}

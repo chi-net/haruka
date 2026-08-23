@@ -3,18 +3,18 @@
 {% block content %}
 <div class="max-w-sm mx-auto mt-16">
   <h1 class="text-xl font-bold mb-2">设置主密码</h1>
-  <p class="text-sm text-gray-500 mb-4">首次使用需要设置主密码，用于加密你的账目数据。忘记密码将无法恢复数据。</p>
+  <p class="text-sm text-gray-500 mb-4">首次使用需要设置主密码。完成后会生成一组仅展示一次的 12 词恢复助记词。</p>
   {% if !error.is_empty() %}
   <p class="text-sm text-red-600 mb-4">{{ error }}</p>
   {% endif %}
   <form method="post" action="/setup" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
     <div>
       <label class="block text-sm text-gray-600 mb-1">密码（至少 6 位）</label>
-      <input name="password" type="password" required minlength="6" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <input name="password" type="password" required minlength="6" autocomplete="new-password" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
     <div>
       <label class="block text-sm text-gray-600 mb-1">确认密码</label>
-      <input name="confirm" type="password" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <input name="confirm" type="password" required autocomplete="new-password" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
     <button type="submit" class="w-full bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">设置并进入</button>
   </form>
