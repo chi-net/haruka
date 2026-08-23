@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}订阅服务 - haruka{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <div>
+    <h1 class="text-xl font-bold">订阅服务</h1>
+    <p class="text-sm text-gray-500 mt-1">集中查看服务到期情况，并快速记录订阅支出。</p>
+  </div>
+  <a href="/subscriptions/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新增订阅</a>
+</div>
+
+<div class="grid grid-cols-3 gap-3 mb-5 text-center">
+  <div class="bg-white rounded-lg border border-gray-200 py-3">
+    <div class="text-xs text-gray-500">全部订阅</div>
+    <div class="text-lg font-mono">{{ total_count }}</div>
+  </div>
+  <div class="bg-amber-50 rounded-lg border border-amber-200 py-3">
+    <div class="text-xs text-amber-700">7 天内到期</div>
+    <div class="text-lg font-mono text-amber-700">{{ due_soon_count }}</div>
+  </div>
+  <div class="bg-red-50 rounded-lg border border-red-200 py-3">
+    <div class="text-xs text-red-700">已到期</div>
+    <div class="text-lg font-mono text-red-700">{{ expired_count }}</div>
+  </div>
+</div>
+
+{% if accounts.is_empty() && !subscriptions.is_empty() %}
+<p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3 mb-4">请先创建账户，之后才能从订阅生成支出。</p>
+{% endif %}
+
+{% if subscriptions.is_empty() %}
+<p class="text-gray-500 text-sm">还没有订阅服务。</p>
+{% else %}
+<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+  {% for s in subscriptions %}
+  <section class="bg-white rounded-lg border {% if s.expired %}border-red-200{% else if s.due_soon %}border-amber-200{% else %}border-gray-200{% endif %} p-4">
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <h2 class="font-medium">{{ s.name }}</h2>
+        <p class="text-xs text-gray-500 mt-1">{{ s.category }} · {{ s.period_label }}</p>
+      </div>
+      <span class="text-xs rounded-full px-2 py-0.5 {% if s.expired %}bg-red-100 text-red-700{% else if s.due_soon %}bg-amber-100 text-amber-700{% else %}bg-green-100 text-green-700{% endif %}">{{ s.status }}</span>
+    </div>
+    <div class="mt-4 flex items-end justify-between gap-3">
+      <div>
+        <div class="text-2xl font-mono">{{ s.amount }}</div>
+        <div class="text-xs text-gray-500 mt-1">下次到期：{{ s.expires_at }}</div>
+      </div>
+      <div class="text-sm whitespace-nowrap">
+        <a href="/subscriptions/{{ s.id }}/edit" class="text-blue-600 hover:underline mr-2">编辑</a>
+        <form method="post" action="/subscriptions/{{ s.id }}/delete" class="inline" hx-confirm="确认删除该订阅？已经生成的支出不会删除。"><button class="text-red-600 hover:underline">删除</button></form>
+      </div>
+    </div>
+    {% if !s.note.is_empty() %}<p class="text-sm text-gray-500 mt-3">{{ s.note }}</p>{% endif %}
+    {% if !accounts.is_empty() %}
+    <form method="post" action="/subscriptions/{{ s.id }}/expense" class="mt-4 pt-4 border-t border-gray-100 flex gap-2">
+      <select name="account_id" required aria-label="付款账户" class="min-w-0 flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
+        {% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}
+      </select>
+      <button type="submit" class="shrink-0 bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700" hx-confirm="使用所选账户创建支出，并自动续期一个周期？">支出并续期</button>
+    </form>
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

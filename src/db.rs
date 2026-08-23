@@ -1,7 +1,8 @@
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema};
 
 use crate::entity::{
-    account, account_detail, bill, category, debt_person, debt_record, meta, recovery, transfer,
+    account, account_detail, bill, category, debt_person, debt_record, meta, recovery,
+    subscription, transfer,
 };
 
 pub async fn init() -> DatabaseConnection {
@@ -45,6 +46,10 @@ pub async fn init() -> DatabaseConnection {
         .expect("建表失败");
     let mut create_categories = schema.create_table_from_entity(category::Entity);
     db.execute(builder.build(create_categories.if_not_exists()))
+        .await
+        .expect("建表失败");
+    let mut create_subscriptions = schema.create_table_from_entity(subscription::Entity);
+    db.execute(builder.build(create_subscriptions.if_not_exists()))
         .await
         .expect("建表失败");
 

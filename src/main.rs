@@ -31,6 +31,7 @@ pub struct SessionDek(pub Dek);
 pub struct AppState {
     pub db: DatabaseConnection,
     sessions: Arc<RwLock<HashMap<String, Dek>>>,
+    pub balance_writes: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -98,6 +99,7 @@ async fn main() {
     let state = AppState {
         db,
         sessions: Arc::new(RwLock::new(HashMap::new())),
+        balance_writes: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     let protected = Router::new()
@@ -126,6 +128,23 @@ async fn main() {
             get(handlers::bills::edit_form).post(handlers::bills::update),
         )
         .route("/bills/{id}/delete", post(handlers::bills::delete))
+        .route(
+            "/subscriptions",
+            get(handlers::subscriptions::list).post(handlers::subscriptions::create),
+        )
+        .route("/subscriptions/new", get(handlers::subscriptions::new_form))
+        .route(
+            "/subscriptions/{id}/edit",
+            get(handlers::subscriptions::edit_form).post(handlers::subscriptions::update),
+        )
+        .route(
+            "/subscriptions/{id}/expense",
+            post(handlers::subscriptions::create_expense),
+        )
+        .route(
+            "/subscriptions/{id}/delete",
+            post(handlers::subscriptions::delete),
+        )
         .route(
             "/transfers",
             get(handlers::transfers::list).post(handlers::transfers::create),

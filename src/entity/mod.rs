@@ -6,4 +6,5 @@ pub mod debt_person;
 pub mod debt_record;
 pub mod meta;
 pub mod recovery;
+pub mod subscription;
 pub mod transfer;

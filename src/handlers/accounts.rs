@@ -220,7 +220,7 @@ async fn transaction_balance(
     Ok(total)
 }
 
-async fn current_balance(
+pub(crate) async fn current_balance(
     state: &AppState,
     dek: &crypto::Dek,
     account_id: i64,
@@ -234,6 +234,48 @@ async fn current_balance(
         .await?
         .checked_add(crypto::decrypt_cents(dek, &account.balance_offset))
         .ok_or_else(|| err500("余额超出范围"))
+}
+
+pub(crate) async fn ensure_credit_balance(
+    state: &AppState,
+    dek: &crypto::Dek,
+    account_id: i64,
+    balance: i64,
+) -> HandlerResult<()> {
+    let account = account::Entity::find_by_id(account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("账户不存在"))?;
+    if !matches!(account.kind.as_str(), "credit_card" | "credit_service") {
+        return Ok(());
+    }
+    let detail = account_detail::Entity::find_by_id(account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| err500("信用账户缺少授信配置"))?;
+    let limit = crypto::decrypt_cents(dek, &detail.credit_limit);
+    let minimum = limit
+        .checked_neg()
+        .ok_or_else(|| err500("授信额超出范围"))?;
+    if balance < minimum {
+        return Err(bad_request("操作后将超过该账户的可用授信额度"));
+    }
+    Ok(())
+}
+
+pub(crate) async fn ensure_balance_delta(
+    state: &AppState,
+    dek: &crypto::Dek,
+    account_id: i64,
+    delta: i64,
+) -> HandlerResult<()> {
+    let projected = current_balance(state, dek, account_id)
+        .await?
+        .checked_add(delta)
+        .ok_or_else(|| bad_request("余额超出范围"))?;
+    ensure_credit_balance(state, dek, account_id, projected).await
 }
 
 fn parse_balance(value: &str) -> HandlerResult<i64> {
@@ -503,6 +545,7 @@ pub async fn update(
     Path(id): Path<i64>,
     Form(form): Form<AccountFormData>,
 ) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
     if form.name.trim().is_empty() {
         return Err(bad_request("账户名不能为空"));
     }
@@ -516,6 +559,14 @@ pub async fn update(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    if matches!(form.account_kind.as_str(), "credit_card" | "credit_service") {
+        let minimum = credit_limit
+            .checked_neg()
+            .ok_or_else(|| bad_request("授信额超出范围"))?;
+        if current_balance(&state, &dek, id).await? < minimum {
+            return Err(bad_request("当前透支金额超过新的授信额"));
+        }
+    }
     let mut active = account.into_active_model();
     active.name = Set(crypto::encrypt(&dek, form.name.trim().as_bytes()));
     active.kind = Set(form.account_kind.clone());
@@ -561,12 +612,14 @@ pub async fn force_balance(
     Path(id): Path<i64>,
     Form(form): Form<AccountBalanceFormData>,
 ) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
     let account = account::Entity::find_by_id(id)
         .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     let target = parse_balance(&form.balance)?;
+    ensure_credit_balance(&state, &dek, id, target).await?;
     let offset = target
         .checked_sub(transaction_balance(&state, &dek, id).await?)
         .ok_or_else(|| bad_request("余额超出范围"))?;
@@ -576,7 +629,55 @@ pub async fn force_balance(
     Ok(Redirect::to("/accounts"))
 }
 
-pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> HandlerResult<Redirect> {
+pub async fn delete(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
+    if account::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_none()
+    {
+        return Err((StatusCode::NOT_FOUND, "账户不存在".into()));
+    }
+    let mut balance_changes: HashMap<i64, i64> = HashMap::new();
+    for transfer in transfer::Entity::find()
+        .filter(
+            Condition::any()
+                .add(transfer::Column::FromAccountId.eq(id))
+                .add(transfer::Column::ToAccountId.eq(id)),
+        )
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+    {
+        let amount = crypto::decrypt_cents(&dek, &transfer.amount);
+        let (other_id, delta) = if transfer.from_account_id == id {
+            (
+                transfer.to_account_id,
+                amount
+                    .checked_neg()
+                    .ok_or_else(|| bad_request("金额超出范围"))?,
+            )
+        } else {
+            (transfer.from_account_id, amount)
+        };
+        if other_id != id {
+            let current = balance_changes.get(&other_id).copied().unwrap_or_default();
+            balance_changes.insert(
+                other_id,
+                current
+                    .checked_add(delta)
+                    .ok_or_else(|| bad_request("余额超出范围"))?,
+            );
+        }
+    }
+    for (account_id, delta) in balance_changes {
+        ensure_balance_delta(&state, &dek, account_id, delta).await?;
+    }
     account::Entity::delete_by_id(id)
         .exec(&state.db)
         .await

@@ -125,6 +125,16 @@ fn account_money_direction(kind: &str) -> (&'static str, &'static str) {
     }
 }
 
+fn account_delta(kind: &str, amount: i64) -> HandlerResult<i64> {
+    if matches!(kind, "borrow" | "repayment_received") {
+        Ok(amount)
+    } else {
+        amount
+            .checked_neg()
+            .ok_or_else(|| bad_request("金额超出范围"))
+    }
+}
+
 fn parse_amount(value: &str) -> HandlerResult<i64> {
     let decimal = Decimal::from_str(value.trim())
         .map_err(|_| bad_request("金额格式不正确"))?
@@ -273,6 +283,7 @@ pub async fn create_record(
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Form(form): Form<DebtRecordFormData>,
 ) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
     if !valid_kind(&form.kind) {
         return Err(bad_request("借还类型无效"));
     }
@@ -300,6 +311,13 @@ pub async fn create_record(
     if form.kind == "repayment_paid" && amount > payable {
         return Err(bad_request("还款金额超过尚欠对方金额"));
     }
+    super::accounts::ensure_balance_delta(
+        &state,
+        &dek,
+        form.account_id,
+        account_delta(&form.kind, amount)?,
+    )
+    .await?;
     let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确"))?;
     debt_record::ActiveModel {
@@ -320,8 +338,19 @@ pub async fn create_record(
 
 pub async fn delete_record(
     State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
+    let record = debt_record::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "借还记录不存在".into()))?;
+    let delta = account_delta(&record.kind, crypto::decrypt_cents(&dek, &record.amount))?
+        .checked_neg()
+        .ok_or_else(|| bad_request("金额超出范围"))?;
+    super::accounts::ensure_balance_delta(&state, &dek, record.account_id, delta).await?;
     debt_record::Entity::delete_by_id(id)
         .exec(&state.db)
         .await
@@ -448,8 +477,42 @@ pub async fn update_person(
 
 pub async fn delete_person(
     State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
+    if debt_person::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_none()
+    {
+        return Err((StatusCode::NOT_FOUND, "借贷对象不存在".into()));
+    }
+    let mut balance_changes: HashMap<i64, i64> = HashMap::new();
+    for record in debt_record::Entity::find()
+        .filter(debt_record::Column::PersonId.eq(id))
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+    {
+        let delta = account_delta(&record.kind, crypto::decrypt_cents(&dek, &record.amount))?
+            .checked_neg()
+            .ok_or_else(|| bad_request("金额超出范围"))?;
+        let current = balance_changes
+            .get(&record.account_id)
+            .copied()
+            .unwrap_or_default();
+        balance_changes.insert(
+            record.account_id,
+            current
+                .checked_add(delta)
+                .ok_or_else(|| bad_request("余额超出范围"))?,
+        );
+    }
+    for (account_id, delta) in balance_changes {
+        super::accounts::ensure_balance_delta(&state, &dek, account_id, delta).await?;
+    }
     debt_person::Entity::delete_by_id(id)
         .exec(&state.db)
         .await

@@ -90,6 +90,16 @@ struct ParsedBill {
     happened_at: NaiveDateTime,
 }
 
+fn signed_amount(kind: &str, amount: i64) -> HandlerResult<i64> {
+    if kind == "income" {
+        Ok(amount)
+    } else {
+        amount
+            .checked_neg()
+            .ok_or_else(|| bad_request("金额超出范围"))
+    }
+}
+
 const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
 const DISPLAY_FMT: &str = "%Y-%m-%d %H:%M";
 
@@ -150,7 +160,7 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
         .collect())
 }
 
-fn account_display_name(
+pub(crate) fn account_display_name(
     dek: &crypto::Dek,
     account: &account::Model,
     detail: Option<&account_detail::Model>,
@@ -190,7 +200,7 @@ async fn category_options(
         .collect())
 }
 
-async fn ensure_category_exists(
+pub(crate) async fn ensure_category_exists(
     state: &AppState,
     dek: &crypto::Dek,
     kind: &str,
@@ -299,8 +309,16 @@ pub async fn create(
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
     let parsed = parse_form(form)?;
     ensure_category_exists(&state, &dek, &parsed.kind, &parsed.category).await?;
+    super::accounts::ensure_balance_delta(
+        &state,
+        &dek,
+        parsed.account_id,
+        signed_amount(&parsed.kind, parsed.amount)?,
+    )
+    .await?;
     bill::ActiveModel {
         account_id: Set(parsed.account_id),
         kind: Set(parsed.kind),
@@ -352,6 +370,7 @@ pub async fn update(
     Path(id): Path<i64>,
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
     let parsed = parse_form(form)?;
     ensure_category_exists(&state, &dek, &parsed.kind, &parsed.category).await?;
     let b = bill::Entity::find_by_id(id)
@@ -359,6 +378,26 @@ pub async fn update(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
+    let old_amount = crypto::decrypt_cents(&dek, &b.amount);
+    let old_signed = signed_amount(&b.kind, old_amount)?;
+    let new_signed = signed_amount(&parsed.kind, parsed.amount)?;
+    if b.account_id == parsed.account_id {
+        let delta = new_signed
+            .checked_sub(old_signed)
+            .ok_or_else(|| bad_request("金额超出范围"))?;
+        super::accounts::ensure_balance_delta(&state, &dek, b.account_id, delta).await?;
+    } else {
+        super::accounts::ensure_balance_delta(
+            &state,
+            &dek,
+            b.account_id,
+            old_signed
+                .checked_neg()
+                .ok_or_else(|| bad_request("金额超出范围"))?,
+        )
+        .await?;
+        super::accounts::ensure_balance_delta(&state, &dek, parsed.account_id, new_signed).await?;
+    }
     let mut active = b.into_active_model();
     active.account_id = Set(parsed.account_id);
     active.kind = Set(parsed.kind);
@@ -370,7 +409,27 @@ pub async fn update(
     Ok(Redirect::to("/bills"))
 }
 
-pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> HandlerResult<Redirect> {
+pub async fn delete(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
+    let b = bill::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
+    let signed = signed_amount(&b.kind, crypto::decrypt_cents(&dek, &b.amount))?;
+    super::accounts::ensure_balance_delta(
+        &state,
+        &dek,
+        b.account_id,
+        signed
+            .checked_neg()
+            .ok_or_else(|| bad_request("金额超出范围"))?,
+    )
+    .await?;
     bill::Entity::delete_by_id(id)
         .exec(&state.db)
         .await

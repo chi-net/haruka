@@ -132,6 +132,7 @@ pub async fn create(
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Form(form): Form<TransferFormData>,
 ) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
     if form.from_account_id == form.to_account_id {
         return Err(bad_request("转出和转入账户不能相同"));
     }
@@ -146,6 +147,15 @@ pub async fn create(
         }
     }
     let amount = parse_amount(&form.amount)?;
+    super::accounts::ensure_balance_delta(
+        &state,
+        &dek,
+        form.from_account_id,
+        amount
+            .checked_neg()
+            .ok_or_else(|| bad_request("金额超出范围"))?,
+    )
+    .await?;
     let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确"))?;
     transfer::ActiveModel {
@@ -163,7 +173,27 @@ pub async fn create(
     Ok(Redirect::to("/transfers"))
 }
 
-pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> HandlerResult<Redirect> {
+pub async fn delete(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
+    let transfer = transfer::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "转账不存在".into()))?;
+    let amount = crypto::decrypt_cents(&dek, &transfer.amount);
+    super::accounts::ensure_balance_delta(
+        &state,
+        &dek,
+        transfer.to_account_id,
+        amount
+            .checked_neg()
+            .ok_or_else(|| bad_request("金额超出范围"))?,
+    )
+    .await?;
     transfer::Entity::delete_by_id(id)
         .exec(&state.db)
         .await

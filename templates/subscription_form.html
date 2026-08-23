@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} - haruka{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-4">{{ heading }}</h1>
+<form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-md">
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">服务名</label>
+    <input name="name" value="{{ name }}" required autofocus placeholder="例如：视频网站会员" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">每次支出金额</label>
+    <input name="amount" type="number" step="0.01" min="0.01" value="{{ amount }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">支出分类</label>
+    <select name="category" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      {% for c in categories %}<option value="{{ c.name }}" {% if c.name == category %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+    </select>
+    <p class="text-xs text-gray-400 mt-1">分类可在设置页管理。</p>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">订阅周期</label>
+    <select name="period" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <option value="day" {% if period == "day" %}selected{% endif %}>日</option>
+      <option value="week" {% if period == "week" %}selected{% endif %}>周</option>
+      <option value="month" {% if period == "month" %}selected{% endif %}>月</option>
+      <option value="quarter" {% if period == "quarter" %}selected{% endif %}>季</option>
+      <option value="year" {% if period == "year" %}selected{% endif %}>年</option>
+    </select>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">下次到期时间</label>
+    <input name="expires_at" type="datetime-local" value="{{ expires_at }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">备注</label>
+    <input name="note" value="{{ note }}" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div class="flex gap-3">
+    <button type="submit" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">保存</button>
+    <a href="/subscriptions" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300 hover:bg-gray-50">取消</a>
+  </div>
+</form>
+{% endblock %}
