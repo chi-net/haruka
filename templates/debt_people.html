@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}借贷对象 - haruka{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <div><h1 class="text-xl font-bold">借贷对象</h1><a href="/debts" class="text-sm text-blue-600 hover:underline">返回借款与还款</a></div>
+  <a href="/debt-people/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新增对象</a>
+</div>
+{% if people.is_empty() %}
+<p class="text-sm text-gray-500">还没有借款人或出借人。</p>
+{% else %}
+<div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-gray-500"><tr><th class="text-left px-4 py-2">姓名</th><th class="text-left px-4 py-2">备注</th><th class="text-right px-4 py-2">对方欠我</th><th class="text-right px-4 py-2">我欠对方</th><th></th></tr></thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for p in people %}
+      <tr>
+        <td class="px-4 py-2">{{ p.name }}</td>
+        <td class="px-4 py-2 text-gray-500">{{ p.note }}</td>
+        <td class="px-4 py-2 text-right font-mono text-green-600">{{ p.receivable }}</td>
+        <td class="px-4 py-2 text-right font-mono text-red-600">{{ p.payable }}</td>
+        <td class="px-4 py-2 text-right whitespace-nowrap"><a href="/debt-people/{{ p.id }}/edit" class="text-blue-600 hover:underline mr-3">编辑</a><form method="post" action="/debt-people/{{ p.id }}/delete" class="inline" hx-confirm="删除对象会同时删除全部相关借还记录，确认？"><button class="text-red-600 hover:underline">删除</button></form></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

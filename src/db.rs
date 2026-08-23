@@ -1,6 +1,8 @@
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema};
 
-use crate::entity::{account, account_detail, bill, meta, recovery};
+use crate::entity::{
+    account, account_detail, bill, category, debt_person, debt_record, meta, recovery, transfer,
+};
 
 pub async fn init() -> DatabaseConnection {
     let url =
@@ -27,6 +29,22 @@ pub async fn init() -> DatabaseConnection {
         .expect("建表失败");
     let mut create_bills = schema.create_table_from_entity(bill::Entity);
     db.execute(builder.build(create_bills.if_not_exists()))
+        .await
+        .expect("建表失败");
+    let mut create_transfers = schema.create_table_from_entity(transfer::Entity);
+    db.execute(builder.build(create_transfers.if_not_exists()))
+        .await
+        .expect("建表失败");
+    let mut create_debt_people = schema.create_table_from_entity(debt_person::Entity);
+    db.execute(builder.build(create_debt_people.if_not_exists()))
+        .await
+        .expect("建表失败");
+    let mut create_debt_records = schema.create_table_from_entity(debt_record::Entity);
+    db.execute(builder.build(create_debt_records.if_not_exists()))
+        .await
+        .expect("建表失败");
+    let mut create_categories = schema.create_table_from_entity(category::Entity);
+    db.execute(builder.build(create_categories.if_not_exists()))
         .await
         .expect("建表失败");
 

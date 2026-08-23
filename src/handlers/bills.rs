@@ -13,7 +13,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto,
-    entity::{account, bill},
+    entity::{account, bill, category},
     AppState, SessionDek,
 };
 
@@ -42,6 +42,11 @@ struct AccountOption {
     name: String,
 }
 
+struct CategoryOption {
+    kind: String,
+    name: String,
+}
+
 #[derive(Template)]
 #[template(path = "bills.html")]
 struct BillsTemplate {
@@ -57,6 +62,7 @@ struct BillFormTemplate {
     heading: String,
     action: String,
     accounts: Vec<AccountOption>,
+    categories: Vec<CategoryOption>,
     account_id: i64,
     kind: String,
     amount: String,
@@ -137,6 +143,39 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
         .collect())
 }
 
+async fn category_options(
+    state: &AppState,
+    dek: &crypto::Dek,
+) -> HandlerResult<Vec<CategoryOption>> {
+    Ok(category::Entity::find()
+        .order_by_asc(category::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|category| CategoryOption {
+            kind: category.kind,
+            name: crypto::decrypt_string(dek, &category.name),
+        })
+        .collect())
+}
+
+async fn ensure_category_exists(
+    state: &AppState,
+    dek: &crypto::Dek,
+    kind: &str,
+    name: &str,
+) -> HandlerResult<()> {
+    let exists = category_options(state, dek)
+        .await?
+        .into_iter()
+        .any(|category| category.kind == kind && category.name == name);
+    if !exists {
+        return Err(bad_request("请选择设置中已有的对应收支分类"));
+    }
+    Ok(())
+}
+
 pub async fn list(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
@@ -196,11 +235,13 @@ pub async fn new_form(
     Extension(SessionDek(dek)): Extension<SessionDek>,
 ) -> HandlerResult<Html<String>> {
     let accounts = account_options(&state, &dek).await?;
+    let categories = category_options(&state, &dek).await?;
     let first_id = accounts[0].id;
     let html = BillFormTemplate {
         heading: "记一笔".into(),
         action: "/bills".into(),
         accounts,
+        categories,
         account_id: first_id,
         kind: "expense".into(),
         amount: String::new(),
@@ -222,6 +263,7 @@ pub async fn create(
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
     let parsed = parse_form(form)?;
+    ensure_category_exists(&state, &dek, &parsed.kind, &parsed.category).await?;
     bill::ActiveModel {
         account_id: Set(parsed.account_id),
         kind: Set(parsed.kind),
@@ -249,10 +291,12 @@ pub async fn edit_form(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
     let accounts = account_options(&state, &dek).await?;
+    let categories = category_options(&state, &dek).await?;
     let html = BillFormTemplate {
         heading: "编辑账单".into(),
         action: format!("/bills/{id}/edit"),
         accounts,
+        categories,
         account_id: b.account_id,
         kind: b.kind,
         amount: super::fmt_cents(crypto::decrypt_cents(&dek, &b.amount)),
@@ -272,6 +316,7 @@ pub async fn update(
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
     let parsed = parse_form(form)?;
+    ensure_category_exists(&state, &dek, &parsed.kind, &parsed.category).await?;
     let b = bill::Entity::find_by_id(id)
         .one(&state.db)
         .await

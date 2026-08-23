@@ -8,14 +8,24 @@
     <input name="name" value="{{ name }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
   </div>
   <div>
+    <label class="block text-sm text-gray-600 mb-1">账户类型</label>
+    <select id="account-kind" name="account_kind" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <option value="payment" {% if account_kind == "payment" %}selected{% endif %}>支付账户</option>
+      <option value="bank" {% if account_kind == "bank" %}selected{% endif %}>银行账户</option>
+      <option value="stored_value" {% if account_kind == "stored_value" %}selected{% endif %}>储值卡账户</option>
+      <option value="investment" {% if account_kind == "investment" %}selected{% endif %}>投资账户</option>
+      <option value="other" {% if account_kind == "other" %}selected{% endif %}>其他</option>
+    </select>
+  </div>
+  <div id="card-number-field">
     <label class="block text-sm text-gray-600 mb-1">卡号（可选）</label>
     <input name="card_number" value="{{ card_number }}" autocomplete="off" spellcheck="false" placeholder="例如：6222 0000 0000 1234" class="w-full border border-gray-300 rounded px-3 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-    <p class="text-xs text-gray-400 mt-1">账户列表中仅显示后四位。</p>
+    <p class="text-xs text-gray-400 mt-1">银行账户和储值卡账户可填写，列表中仅显示后四位。</p>
   </div>
-  <div>
+  <div id="account-username-field">
     <label class="block text-sm text-gray-600 mb-1">账户用户名（可选）</label>
     <input name="account_username" value="{{ account_username }}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如：haruka_user" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-    <p class="text-xs text-gray-400 mt-1">账户列表中显示前三位和后两位。</p>
+    <p class="text-xs text-gray-400 mt-1">支付账户可填写，列表中显示前三位和后两位。</p>
   </div>
   <div>
     <label class="block text-sm text-gray-600 mb-1">备注</label>
@@ -26,4 +36,17 @@
     <a href="/accounts" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300 hover:bg-gray-50">取消</a>
   </div>
 </form>
+<script>
+(() => {
+  const select = document.getElementById('account-kind');
+  const card = document.getElementById('card-number-field');
+  const username = document.getElementById('account-username-field');
+  const updateFields = () => {
+    card.classList.toggle('hidden', select.value !== 'bank' && select.value !== 'stored_value');
+    username.classList.toggle('hidden', select.value !== 'payment');
+  };
+  select.addEventListener('change', updateFields);
+  updateFields();
+})();
+</script>
 {% endblock %}

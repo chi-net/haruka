@@ -1,6 +1,6 @@
 use askama::Template;
 use axum::{
-    extract::{Extension, State},
+    extract::State,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     Form,
@@ -13,8 +13,8 @@ use zeroize::Zeroizing;
 
 use crate::{
     crypto,
-    entity::{account, meta, recovery},
-    AppState, SessionDek,
+    entity::{account, category, meta, recovery},
+    AppState,
 };
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
@@ -66,12 +66,6 @@ struct RecoverTemplate {
     error: String,
 }
 
-#[derive(Template)]
-#[template(path = "security.html")]
-struct SecurityTemplate {
-    recovery_configured: bool,
-}
-
 #[derive(Deserialize)]
 pub struct SetupFormData {
     password: String,
@@ -80,6 +74,11 @@ pub struct SetupFormData {
 
 #[derive(Deserialize)]
 pub struct UnlockFormData {
+    password: String,
+}
+
+#[derive(Deserialize)]
+pub struct RecoveryPasswordFormData {
     password: String,
 }
 
@@ -183,6 +182,7 @@ pub async fn setup(
 
     let phrase = store_new_recovery(&state, &dek).await?;
     ensure_default_account(&state, &dek).await?;
+    ensure_default_categories(&state, &dek).await?;
     let html = RecoveryPhraseTemplate {
         heading: "保存恢复助记词".into(),
         phrase,
@@ -239,24 +239,24 @@ pub async fn unlock(
     }
 }
 
-pub async fn security(State(state): State<AppState>) -> HandlerResult<Response> {
-    let html = SecurityTemplate {
-        recovery_configured: has_recovery(&state).await,
-    }
-    .render()
-    .map_err(err500)?;
-    Ok(no_store(Html(html).into_response()))
-}
-
 pub async fn generate_recovery(
     State(state): State<AppState>,
-    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Form(form): Form<RecoveryPasswordFormData>,
 ) -> HandlerResult<Response> {
+    let password = Zeroizing::new(form.password);
+    let meta = meta::Entity::find_by_id(1)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "尚未设置密码".into()))?;
+    let kek = crypto::derive_kek(password.as_str(), &meta.salt);
+    let dek = crypto::unwrap_dek(&meta.dek_nonce, &meta.wrapped_dek, kek.as_slice())
+        .ok_or((StatusCode::UNAUTHORIZED, "主密码错误".into()))?;
     let phrase = store_new_recovery(&state, &dek).await?;
     let html = RecoveryPhraseTemplate {
         heading: "新的恢复助记词".into(),
         phrase,
-        next_url: "/security".into(),
+        next_url: "/settings".into(),
     }
     .render()
     .map_err(err500)?;
@@ -270,7 +270,7 @@ pub async fn recover_form(State(state): State<AppState>) -> Response {
     let error = if has_recovery(&state).await {
         String::new()
     } else {
-        "尚未设置恢复助记词，请先使用主密码解锁并在安全设置中生成。".into()
+        "尚未设置恢复助记词，请先使用主密码解锁并在设置中生成。".into()
     };
     let html = RecoverTemplate { error }.render().expect("模板渲染失败");
     no_store(Html(html).into_response())
@@ -355,7 +355,41 @@ async fn ensure_default_account(state: &AppState, dek: &crypto::Dek) -> HandlerR
     {
         account::ActiveModel {
             name: Set(crypto::encrypt(dek, "默认账户".as_bytes())),
+            kind: Set("other".into()),
+            balance_offset: Set(crypto::encrypt_cents(dek, 0)),
             note: Set(crypto::encrypt(dek, "".as_bytes())),
+            created_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        }
+        .insert(&state.db)
+        .await
+        .map_err(err500)?;
+    }
+    Ok(())
+}
+
+async fn ensure_default_categories(state: &AppState, dek: &crypto::Dek) -> HandlerResult<()> {
+    if category::Entity::find()
+        .count(&state.db)
+        .await
+        .map_err(err500)?
+        > 0
+    {
+        return Ok(());
+    }
+    for (kind, name) in [
+        ("expense", "餐饮"),
+        ("expense", "交通"),
+        ("expense", "购物"),
+        ("expense", "居住"),
+        ("expense", "娱乐"),
+        ("expense", "其他支出"),
+        ("income", "工资"),
+        ("income", "其他收入"),
+    ] {
+        category::ActiveModel {
+            kind: Set(kind.into()),
+            name: Set(crypto::encrypt(dek, name.as_bytes())),
             created_at: Set(chrono::Utc::now()),
             ..Default::default()
         }

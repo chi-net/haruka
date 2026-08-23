@@ -111,6 +111,10 @@ async fn main() {
             "/accounts/{id}/edit",
             get(handlers::accounts::edit_form).post(handlers::accounts::update),
         )
+        .route(
+            "/accounts/{id}/balance",
+            get(handlers::accounts::balance_form).post(handlers::accounts::force_balance),
+        )
         .route("/accounts/{id}/delete", post(handlers::accounts::delete))
         .route(
             "/bills",
@@ -122,9 +126,44 @@ async fn main() {
             get(handlers::bills::edit_form).post(handlers::bills::update),
         )
         .route("/bills/{id}/delete", post(handlers::bills::delete))
-        .route("/security", get(handlers::auth::security))
         .route(
-            "/security/recovery",
+            "/transfers",
+            get(handlers::transfers::list).post(handlers::transfers::create),
+        )
+        .route("/transfers/{id}/delete", post(handlers::transfers::delete))
+        .route(
+            "/debts",
+            get(handlers::debts::list).post(handlers::debts::create_record),
+        )
+        .route("/debts/{id}/delete", post(handlers::debts::delete_record))
+        .route(
+            "/debt-people",
+            get(handlers::debts::people).post(handlers::debts::create_person),
+        )
+        .route("/debt-people/new", get(handlers::debts::new_person_form))
+        .route(
+            "/debt-people/{id}/edit",
+            get(handlers::debts::edit_person_form).post(handlers::debts::update_person),
+        )
+        .route(
+            "/debt-people/{id}/delete",
+            post(handlers::debts::delete_person),
+        )
+        .route("/settings", get(handlers::settings::show))
+        .route(
+            "/settings/categories",
+            post(handlers::settings::create_category),
+        )
+        .route(
+            "/settings/categories/{id}/edit",
+            get(handlers::settings::edit_category_form).post(handlers::settings::update_category),
+        )
+        .route(
+            "/settings/categories/{id}/delete",
+            post(handlers::settings::delete_category),
+        )
+        .route(
+            "/settings/recovery",
             post(handlers::auth::generate_recovery),
         )
         .route("/lock", post(handlers::auth::lock))

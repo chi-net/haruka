@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}设置 - haruka{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-4">设置</h1>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium mb-3">收支分类</h2>
+  <form method="post" action="/settings/categories" class="flex flex-wrap gap-2 mb-4">
+    <select name="kind" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="expense">支出</option><option value="income">收入</option></select>
+    <input name="name" required placeholder="分类名称" class="flex-1 min-w-40 border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新增分类</button>
+  </form>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+    <div>
+      <h3 class="text-sm font-medium text-gray-600 mb-2">支出分类</h3>
+      <ul class="divide-y divide-gray-100 border border-gray-100 rounded">
+        {% for c in expense_categories %}<li class="flex items-center px-3 py-2 text-sm"><span class="flex-1">{{ c.name }}</span><a href="/settings/categories/{{ c.id }}/edit" class="text-blue-600 mr-3">编辑</a><form method="post" action="/settings/categories/{{ c.id }}/delete" hx-confirm="确认删除该分类？已有账单不会受影响。"><button class="text-red-600">删除</button></form></li>{% endfor %}
+        {% if expense_categories.is_empty() %}<li class="px-3 py-2 text-sm text-gray-400">暂无</li>{% endif %}
+      </ul>
+    </div>
+    <div>
+      <h3 class="text-sm font-medium text-gray-600 mb-2">收入分类</h3>
+      <ul class="divide-y divide-gray-100 border border-gray-100 rounded">
+        {% for c in income_categories %}<li class="flex items-center px-3 py-2 text-sm"><span class="flex-1">{{ c.name }}</span><a href="/settings/categories/{{ c.id }}/edit" class="text-blue-600 mr-3">编辑</a><form method="post" action="/settings/categories/{{ c.id }}/delete" hx-confirm="确认删除该分类？已有账单不会受影响。"><button class="text-red-600">删除</button></form></li>{% endfor %}
+        {% if income_categories.is_empty() %}<li class="px-3 py-2 text-sm text-gray-400">暂无</li>{% endif %}
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4">
+  <h2 class="font-medium">恢复助记词</h2>
+  <p class="text-sm text-gray-500 mt-1 mb-3">{% if recovery_configured %}已设置。重新生成后旧助记词立即失效。{% else %}尚未设置。{% endif %} 此操作必须重新验证主密码。</p>
+  <form method="post" action="/settings/recovery" hx-confirm="确认生成新的恢复助记词？旧助记词将立即失效。" class="flex flex-wrap gap-2">
+    <input name="password" type="password" required autocomplete="current-password" placeholder="输入主密码" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">重置助记词</button>
+  </form>
+</section>
+{% endblock %}

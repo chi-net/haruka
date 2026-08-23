@@ -6,6 +6,10 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i64,
     pub name: String,
+    /// "payment" | "bank" | "stored_value" | "investment" | "other"
+    pub kind: String,
+    /// 强制余额相对于各类资金记录净额的偏移量（整数分密文）
+    pub balance_offset: String,
     pub note: String,
     pub created_at: DateTimeUtc,
 }

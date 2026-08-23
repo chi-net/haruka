@@ -28,16 +28,10 @@
   </div>
   <div>
     <label class="block text-sm text-gray-600 mb-1">分类</label>
-    <input name="category" value="{{ category }}" list="categories" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-    <datalist id="categories">
-      <option value="餐饮">
-      <option value="交通">
-      <option value="购物">
-      <option value="居住">
-      <option value="娱乐">
-      <option value="工资">
-      <option value="其他">
-    </datalist>
+    <select id="bill-category" name="category" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      {% for c in categories %}<option value="{{ c.name }}" data-kind="{{ c.kind }}" {% if c.name == category %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+    </select>
+    <p class="text-xs text-gray-400 mt-1">分类可在设置页增删修改。</p>
   </div>
   <div>
     <label class="block text-sm text-gray-600 mb-1">时间</label>
@@ -52,4 +46,25 @@
     <a href="/bills" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300 hover:bg-gray-50">取消</a>
   </div>
 </form>
+<script>
+(() => {
+  const category = document.getElementById('bill-category');
+  const kinds = document.querySelectorAll('input[name="kind"]');
+  const updateCategories = () => {
+    const kind = document.querySelector('input[name="kind"]:checked').value;
+    let first = null;
+    let selectedVisible = false;
+    for (const option of category.options) {
+      const visible = option.dataset.kind === kind;
+      option.hidden = !visible;
+      option.disabled = !visible;
+      if (visible && !first) first = option;
+      if (visible && option.selected) selectedVisible = true;
+    }
+    if (!selectedVisible && first) first.selected = true;
+  };
+  kinds.forEach(input => input.addEventListener('change', updateCategories));
+  updateCategories();
+})();
+</script>
 {% endblock %}

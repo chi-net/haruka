@@ -1,5 +1,9 @@
 pub mod account;
 pub mod account_detail;
 pub mod bill;
+pub mod category;
+pub mod debt_person;
+pub mod debt_record;
 pub mod meta;
 pub mod recovery;
+pub mod transfer;

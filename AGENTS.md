@@ -19,13 +19,13 @@
 ## 加密（envelope）
 
 - DEK（随机 32 字节）加密数据；KEK 由 Argon2id(密码, salt) 派生并 wrap DEK；`meta` 表存 salt + nonce + wrapped_dek。密码不落盘，改密码只需重 wrap
-- 字段级加密：XChaCha20-Poly1305，每条随机 nonce，存 `base64(nonce||ct)` 于原 TEXT 列。加密字段：accounts.name/note、account_details.card_number/account_username、bills.amount/category/note；kind、happened_at、时间戳为明文
+- 字段级加密：XChaCha20-Poly1305，每条随机 nonce，存 `base64(nonce||ct)` 于原 TEXT 列。加密字段：accounts.name/balance_offset/note、account_details.card_number/account_username、bills.amount/category/note、transfers.amount/note、debt_people.name/note、debt_records.amount/note、categories.name；账户类型、各记录 kind、账户外键、happened_at、时间戳为明文
 - DEK 按客户端会话仅存服务端内存（`AppState.sessions`）；浏览器只保存无过期时间的 `HttpOnly` 随机会话 Cookie，不保存密码或 DEK。Cookie 丢失、主动锁定或服务重启后需重新输入密码；`require_unlock` 中间件把未解锁请求重定向到 `/unlock`（无 meta 时去 `/setup`）
 - 密码只用于当次 Argon2id 派生并用 `Zeroizing` 尽快清除，不落盘、不进入 Cookie 或会话；恢复密码会使现有客户端会话全部失效
-- 密码恢复使用 BIP-39 英文 12 词助记词；明文助记词只展示一次且不落盘，`recovery` 表只保存恢复密钥包裹 DEK 后的 nonce + ciphertext
+- 密码恢复使用 BIP-39 英文 12 词助记词；明文助记词只展示一次且不落盘，`recovery` 表只保存恢复密钥包裹 DEK 后的 nonce + ciphertext；在设置页重置助记词必须重新验证主密码
 - 加解密统一走 `crypto` 模块（`encrypt`/`decrypt_string`/`encrypt_cents`/`decrypt_cents`），handler 里不要直接碰密文
 - 加密字段无法 SQL 筛选/排序/求和，汇总统计都在 Rust 里做
-- 默认账户在解锁后由 `auth::ensure_default_account` 创建（名称需 DEK 加密，不能在 db 初始化时做）
+- 默认账户在解锁后由 `auth` 创建；默认收支分类只在首次 setup 时创建（字段需 DEK 加密，不能在 db 初始化时做）
 
 ## 约定
 
@@ -33,6 +33,11 @@
 - 账单类型字段为 `kind`（"income" / "expense"），非 `type`（Rust 关键字）
 - 账单时间 `happened_at` 精确到分钟（`NaiveDateTime`），表单用 `datetime-local`，格式 `%Y-%m-%dT%H:%M`
 - 删除一律用 POST 表单（`/xxx/{id}/delete`），配合 `hx-confirm` 确认
-- 删账户会级联删其账单（FK `on_delete = Cascade`）
+- 删账户会级联删其账单、转账和借还记录（FK `on_delete = Cascade`）；删借贷对象会级联删其借还记录
 - 卡号和账户用户名分开加密存于 `account_details`；列表中卡号只显示后四位，用户名显示前三位和后两位（短用户名需进一步掩码）
+- 账户类型直接存于 `accounts.kind`：payment（支付，用户名）、bank（银行，卡号）、stored_value（储值卡，卡号）、investment（投资）、other（其他）；切换类型需清除不适用的账户详情
+- 强制设置余额不创建账单；将“目标余额 - 当前资金记录净额”以整数分加密存入 `accounts.balance_offset`。账户余额为 offset 加账单、转账和借还记录的资金净额
+- 转账单独存于 `transfers`，转出账户扣款、转入账户加款，不计入普通收入/支出汇总
+- 借还记录 kind：lend（我借给对方，账户扣款）、borrow（我向对方借入，账户加款）、repayment_received（对方还我，账户加款）、repayment_paid（我还对方，账户扣款）；借贷对象单独存于 `debt_people`
+- 收支分类由设置页 CRUD，存于 `categories`；新建或编辑账单只能选择对应 income/expense 类型下仍存在的分类，删除分类不改写历史账单
 - 路由路径参数用 axum 0.8 语法 `{id}`
