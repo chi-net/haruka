@@ -64,6 +64,12 @@ pub struct DebtRecordFormData {
 }
 
 #[derive(Deserialize)]
+pub struct DeleteRecordFormData {
+    #[serde(default)]
+    redirect_to: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct DebtPersonFormData {
     name: String,
     note: String,
@@ -215,6 +221,7 @@ pub async fn delete_record(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
+    Form(form): Form<DeleteRecordFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
     let record = debt_record::Entity::find_by_id(id)
@@ -230,7 +237,13 @@ pub async fn delete_record(
         .exec(&state.db)
         .await
         .map_err(err500)?;
-    Ok(Redirect::to("/dashboard"))
+    Ok(Redirect::to(
+        if form.redirect_to.as_deref() == Some("/bills") {
+            "/bills"
+        } else {
+            "/dashboard"
+        },
+    ))
 }
 
 pub async fn people(

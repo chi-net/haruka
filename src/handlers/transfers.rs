@@ -36,6 +36,12 @@ pub struct TransferFormData {
     happened_at: String,
 }
 
+#[derive(Deserialize)]
+pub struct DeleteFormData {
+    #[serde(default)]
+    redirect_to: Option<String>,
+}
+
 fn parse_amount(value: &str) -> HandlerResult<i64> {
     let decimal = Decimal::from_str(value.trim())
         .map_err(|_| bad_request("金额格式不正确"))?
@@ -57,15 +63,21 @@ pub async fn create(
     if form.from_account_id == form.to_account_id {
         return Err(bad_request("转出和转入账户不能相同"));
     }
-    for account_id in [form.from_account_id, form.to_account_id] {
-        if account::Entity::find_by_id(account_id)
-            .one(&state.db)
-            .await
-            .map_err(err500)?
-            .is_none()
-        {
-            return Err(bad_request("账户不存在"));
-        }
+    let from_account = account::Entity::find_by_id(form.from_account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("转出账户不存在"))?;
+    if matches!(from_account.kind.as_str(), "credit_card" | "credit_service") {
+        return Err(bad_request("信用卡和信贷服务不能作为转账的转出账户"));
+    }
+    if account::Entity::find_by_id(form.to_account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_none()
+    {
+        return Err(bad_request("转入账户不存在"));
     }
     let amount = parse_amount(&form.amount)?;
     super::accounts::ensure_balance_delta(
@@ -98,6 +110,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
+    Form(form): Form<DeleteFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
     let transfer = transfer::Entity::find_by_id(id)
@@ -119,5 +132,11 @@ pub async fn delete(
         .exec(&state.db)
         .await
         .map_err(err500)?;
-    Ok(Redirect::to("/dashboard"))
+    Ok(Redirect::to(
+        if form.redirect_to.as_deref() == Some("/bills") {
+            "/bills"
+        } else {
+            "/dashboard"
+        },
+    ))
 }

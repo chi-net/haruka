@@ -13,7 +13,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto,
-    entity::{account, account_detail, bill, category},
+    entity::{account, account_detail, bill, category, debt_person, debt_record, transfer},
     AppState, SessionDek,
 };
 
@@ -27,14 +27,18 @@ fn bad_request(msg: &str) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, msg.to_string())
 }
 
-struct BillRow {
-    id: i64,
-    account_name: String,
-    kind: String,
-    amount: String,
-    category: String,
-    note: String,
-    happened_at: String,
+pub(crate) struct LedgerRow {
+    pub(crate) happened_at: String,
+    pub(crate) record_type: String,
+    pub(crate) account_name: String,
+    pub(crate) subject: String,
+    pub(crate) note: String,
+    pub(crate) amount: String,
+    pub(crate) money_class: String,
+    pub(crate) edit_url: String,
+    pub(crate) delete_action: String,
+    pub(crate) delete_confirm: String,
+    pub(crate) sort_key: NaiveDateTime,
 }
 
 struct AccountOption {
@@ -50,7 +54,7 @@ struct CategoryOption {
 #[derive(Template)]
 #[template(path = "bills.html")]
 struct BillsTemplate {
-    bills: Vec<BillRow>,
+    records: Vec<LedgerRow>,
     total_income: String,
     total_expense: String,
     net: String,
@@ -81,6 +85,20 @@ pub struct BillFormData {
     happened_at: String,
     #[serde(default)]
     redirect_to: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct DeleteFormData {
+    #[serde(default)]
+    redirect_to: Option<String>,
+}
+
+fn ledger_redirect(redirect_to: Option<&str>) -> &'static str {
+    if redirect_to == Some("/dashboard") {
+        "/dashboard"
+    } else {
+        "/bills"
+    }
 }
 
 struct ParsedBill {
@@ -191,6 +209,150 @@ pub(crate) fn account_display_name(
     name
 }
 
+fn debt_kind_label(kind: &str) -> &'static str {
+    match kind {
+        "lend" => "借出",
+        "borrow" => "借入",
+        "repayment_received" => "收回还款",
+        "repayment_paid" => "归还借款",
+        _ => "借还",
+    }
+}
+
+pub(crate) async fn ledger_rows(
+    state: &AppState,
+    dek: &crypto::Dek,
+) -> HandlerResult<Vec<LedgerRow>> {
+    let accounts = account::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let details: HashMap<i64, account_detail::Model> = account_detail::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|detail| (detail.account_id, detail))
+        .collect();
+    let account_names: HashMap<i64, String> = accounts
+        .into_iter()
+        .map(|account| {
+            (
+                account.id,
+                account_display_name(dek, &account, details.get(&account.id)),
+            )
+        })
+        .collect();
+    let person_names: HashMap<i64, String> = debt_person::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|person| (person.id, crypto::decrypt_string(dek, &person.name)))
+        .collect();
+
+    let mut rows = Vec::new();
+    for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
+        let incoming = bill.kind == "income";
+        let amount = crypto::decrypt_cents(dek, &bill.amount);
+        rows.push(LedgerRow {
+            happened_at: bill.happened_at.format(DISPLAY_FMT).to_string(),
+            record_type: if incoming { "收入" } else { "支出" }.into(),
+            account_name: account_names
+                .get(&bill.account_id)
+                .cloned()
+                .unwrap_or_else(|| "已删除账户".into()),
+            subject: crypto::decrypt_string(dek, &bill.category),
+            note: crypto::decrypt_string(dek, &bill.note),
+            amount: format!(
+                "{}{}",
+                if incoming { "+" } else { "-" },
+                super::fmt_cents(amount)
+            ),
+            money_class: if incoming {
+                "text-green-600"
+            } else {
+                "text-red-600"
+            }
+            .into(),
+            edit_url: format!("/bills/{}/edit", bill.id),
+            delete_action: format!("/bills/{}/delete", bill.id),
+            delete_confirm: "确认删除这条账单？".into(),
+            sort_key: bill.happened_at,
+        });
+    }
+
+    for transfer in transfer::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+    {
+        rows.push(LedgerRow {
+            happened_at: transfer.happened_at.format(DISPLAY_FMT).to_string(),
+            record_type: "转账".into(),
+            account_name: format!(
+                "{} → {}",
+                account_names
+                    .get(&transfer.from_account_id)
+                    .cloned()
+                    .unwrap_or_else(|| "已删除账户".into()),
+                account_names
+                    .get(&transfer.to_account_id)
+                    .cloned()
+                    .unwrap_or_else(|| "已删除账户".into())
+            ),
+            subject: "账户间".into(),
+            note: crypto::decrypt_string(dek, &transfer.note),
+            amount: super::fmt_cents(crypto::decrypt_cents(dek, &transfer.amount)),
+            money_class: "text-blue-600".into(),
+            edit_url: String::new(),
+            delete_action: format!("/transfers/{}/delete", transfer.id),
+            delete_confirm: "确认删除这条转账？".into(),
+            sort_key: transfer.happened_at,
+        });
+    }
+
+    for record in debt_record::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+    {
+        let incoming = matches!(record.kind.as_str(), "borrow" | "repayment_received");
+        let amount = crypto::decrypt_cents(dek, &record.amount);
+        rows.push(LedgerRow {
+            happened_at: record.happened_at.format(DISPLAY_FMT).to_string(),
+            record_type: debt_kind_label(&record.kind).into(),
+            account_name: account_names
+                .get(&record.account_id)
+                .cloned()
+                .unwrap_or_else(|| "已删除账户".into()),
+            subject: person_names
+                .get(&record.person_id)
+                .cloned()
+                .unwrap_or_else(|| "已删除对象".into()),
+            note: crypto::decrypt_string(dek, &record.note),
+            amount: format!(
+                "{}{}",
+                if incoming { "+" } else { "-" },
+                super::fmt_cents(amount)
+            ),
+            money_class: if incoming {
+                "text-green-600"
+            } else {
+                "text-red-600"
+            }
+            .into(),
+            edit_url: String::new(),
+            delete_action: format!("/debts/{}/delete", record.id),
+            delete_confirm: "确认删除这条借还记录？".into(),
+            sort_key: record.happened_at,
+        });
+    }
+
+    rows.sort_by(|left, right| right.sort_key.cmp(&left.sort_key));
+    Ok(rows)
+}
+
 async fn category_options(
     state: &AppState,
     dek: &crypto::Dek,
@@ -245,25 +407,8 @@ pub async fn list(
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let accounts = account::Entity::find()
-        .all(&state.db)
-        .await
-        .map_err(err500)?;
-    let details: HashMap<i64, account_detail::Model> = account_detail::Entity::find()
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-        .into_iter()
-        .map(|detail| (detail.account_id, detail))
-        .collect();
-    let names: HashMap<i64, String> = accounts
-        .into_iter()
-        .map(|a| (a.id, account_display_name(&dek, &a, details.get(&a.id))))
-        .collect();
-
     let mut total_income: i64 = 0;
     let mut total_expense: i64 = 0;
-    let mut rows = Vec::with_capacity(bills.len());
     for b in bills {
         let cents = crypto::decrypt_cents(&dek, &b.amount);
         if b.kind == "income" {
@@ -271,22 +416,10 @@ pub async fn list(
         } else {
             total_expense += cents;
         }
-        rows.push(BillRow {
-            id: b.id,
-            account_name: names
-                .get(&b.account_id)
-                .cloned()
-                .unwrap_or_else(|| "已删除账户".into()),
-            kind: b.kind,
-            amount: super::fmt_cents(cents),
-            category: crypto::decrypt_string(&dek, &b.category),
-            note: crypto::decrypt_string(&dek, &b.note),
-            happened_at: b.happened_at.format(DISPLAY_FMT).to_string(),
-        });
     }
 
     let html = BillsTemplate {
-        bills: rows,
+        records: ledger_rows(&state, &dek).await?,
         total_income: super::fmt_cents(total_income),
         total_expense: super::fmt_cents(total_expense),
         net: super::fmt_cents(total_income - total_expense),
@@ -435,6 +568,7 @@ pub async fn delete(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
+    Form(form): Form<DeleteFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
     let b = bill::Entity::find_by_id(id)
@@ -456,5 +590,5 @@ pub async fn delete(
         .exec(&state.db)
         .await
         .map_err(err500)?;
-    Ok(Redirect::to("/bills"))
+    Ok(Redirect::to(ledger_redirect(form.redirect_to.as_deref())))
 }

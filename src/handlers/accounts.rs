@@ -236,7 +236,7 @@ pub(crate) async fn current_balance(
         .ok_or_else(|| err500("余额超出范围"))
 }
 
-pub(crate) async fn ensure_credit_balance(
+pub(crate) async fn ensure_allowed_balance(
     state: &AppState,
     dek: &crypto::Dek,
     account_id: i64,
@@ -248,6 +248,9 @@ pub(crate) async fn ensure_credit_balance(
         .map_err(err500)?
         .ok_or_else(|| bad_request("账户不存在"))?;
     if !matches!(account.kind.as_str(), "credit_card" | "credit_service") {
+        if balance < 0 {
+            return Err(bad_request("该账户不允许透支"));
+        }
         return Ok(());
     }
     let detail = account_detail::Entity::find_by_id(account_id)
@@ -275,7 +278,7 @@ pub(crate) async fn ensure_balance_delta(
         .await?
         .checked_add(delta)
         .ok_or_else(|| bad_request("余额超出范围"))?;
-    ensure_credit_balance(state, dek, account_id, projected).await
+    ensure_allowed_balance(state, dek, account_id, projected).await
 }
 
 fn parse_balance(value: &str) -> HandlerResult<i64> {
@@ -559,13 +562,16 @@ pub async fn update(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    let balance = current_balance(&state, &dek, id).await?;
     if matches!(form.account_kind.as_str(), "credit_card" | "credit_service") {
         let minimum = credit_limit
             .checked_neg()
             .ok_or_else(|| bad_request("授信额超出范围"))?;
-        if current_balance(&state, &dek, id).await? < minimum {
+        if balance < minimum {
             return Err(bad_request("当前透支金额超过新的授信额"));
         }
+    } else if balance < 0 {
+        return Err(bad_request("当前余额为负，不能改为禁止透支的账户类型"));
     }
     let mut active = account.into_active_model();
     active.name = Set(crypto::encrypt(&dek, form.name.trim().as_bytes()));
@@ -619,7 +625,7 @@ pub async fn force_balance(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     let target = parse_balance(&form.balance)?;
-    ensure_credit_balance(&state, &dek, id, target).await?;
+    ensure_allowed_balance(&state, &dek, id, target).await?;
     let offset = target
         .checked_sub(transaction_balance(&state, &dek, id).await?)
         .ok_or_else(|| bad_request("余额超出范围"))?;
