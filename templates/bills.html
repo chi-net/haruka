@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}账单 - haruka{% endblock %}
+{% block title %}{{ page_heading }} - haruka{% endblock %}
 {% block content %}
 <div class="flex items-start justify-between mb-4">
   <div>
-    <h1 class="text-xl font-bold">账单</h1>
-    <p class="text-sm text-gray-500 mt-1">收入、支出、转账和借还流水按时间合并显示。</p>
+    <h1 class="text-xl font-bold">{{ page_heading }}</h1>
+    <p class="text-sm text-gray-500 mt-1">{% if advanced_search %}组合多个条件查找账单与资金流水。{% else %}收入、支出、转账和借还流水按时间合并显示。{% endif %}</p>
   </div>
-  <a href="/bills/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">记一笔</a>
+  {% if advanced_search %}<a href="/bills" class="text-sm text-blue-600 hover:underline">返回账单</a>{% else %}<a href="/bills/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">记一笔</a>{% endif %}
 </div>
 <div class="grid grid-cols-3 gap-3 mb-4 text-center">
   <div class="bg-white rounded-lg border border-gray-200 py-3">
@@ -22,8 +22,29 @@
     <div class="font-mono">{{ net }}</div>
   </div>
 </div>
+<form method="get" action="{{ search_action }}" class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+  <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+    <div><h2 class="font-medium">{% if advanced_search %}高级搜索条件{% else %}搜索账单与流水{% endif %}</h2><p class="text-xs text-gray-500 mt-1">{% if advanced_search %}支出金额区间仅匹配普通支出；其他条件可匹配全部流水。{% else %}按日期范围和关键词快速查找，多个条件同时满足。{% endif %}</p></div>
+    {% if advanced_search %}
+    <select name="mode" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
+      <option value="and" {% if search_mode == "and" %}selected{% endif %}>全部条件都满足</option>
+      <option value="or" {% if search_mode == "or" %}selected{% endif %}>任一条件满足</option>
+    </select>
+    {% else %}<a href="/bills/search" class="text-sm text-blue-600 hover:underline">高级搜索</a>{% endif %}
+  </div>
+  <div class="grid grid-cols-1 sm:grid-cols-2 {% if advanced_search %}lg:grid-cols-5{% else %}lg:grid-cols-3{% endif %} gap-3">
+    <div><label class="block text-xs text-gray-500 mb-1">开始日期</label><input name="start_date" type="date" value="{{ start_date }}" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">结束日期</label><input name="end_date" type="date" value="{{ end_date }}" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    {% if advanced_search %}
+    <div><label class="block text-xs text-gray-500 mb-1">最低支出</label><input name="min_expense" type="number" min="0" step="0.01" value="{{ min_expense }}" placeholder="0.00" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">最高支出</label><input name="max_expense" type="number" min="0" step="0.01" value="{{ max_expense }}" placeholder="不限" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
+    {% endif %}
+    <div><label class="block text-xs text-gray-500 mb-1">关键词</label><input name="keyword" value="{{ keyword }}" placeholder="类型、账户、分类、对象或备注" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+  </div>
+  <div class="flex items-center gap-3 mt-3"><button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">搜索</button><a href="{{ search_action }}" class="text-sm text-gray-600 hover:underline">清除条件</a>{% if has_filters %}<span class="text-xs text-gray-500">找到 {{ records.len() }} 条流水</span>{% endif %}</div>
+</form>
 {% if records.is_empty() %}
-<p class="text-gray-500 text-sm">还没有账单或资金流水。</p>
+<p class="text-gray-500 text-sm">{% if has_filters %}没有符合搜索条件的账单或资金流水。{% else %}还没有账单或资金流水。{% endif %}</p>
 {% else %}
 <div class="bg-white rounded-lg border border-gray-200 overflow-x-auto">
 <table class="w-full text-sm">

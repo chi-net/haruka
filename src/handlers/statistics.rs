@@ -24,7 +24,12 @@ fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
 
 #[derive(Deserialize)]
 pub struct StatisticsQuery {
-    period: Option<String>,
+    #[serde(default)]
+    period: String,
+    #[serde(default)]
+    start_date: String,
+    #[serde(default)]
+    end_date: String,
 }
 
 struct RankingRow {
@@ -39,6 +44,8 @@ struct RankingRow {
 #[template(path = "statistics.html")]
 struct StatisticsTemplate {
     period: String,
+    start_date: String,
+    end_date: String,
     period_label: String,
     total_expense: String,
     expense_count: usize,
@@ -47,12 +54,16 @@ struct StatisticsTemplate {
     account_rankings: Vec<RankingRow>,
 }
 
-fn start_date(period: &str, today: NaiveDate) -> Option<NaiveDate> {
-    match period {
-        "30d" => Some(today - Duration::days(29)),
-        "365d" => Some(today - Duration::days(364)),
-        _ => None,
+fn bad_request(msg: &str) -> (StatusCode, String) {
+    (StatusCode::BAD_REQUEST, msg.to_string())
+}
+
+fn parse_date(value: &str, fallback: NaiveDate, label: &str) -> HandlerResult<NaiveDate> {
+    if value.trim().is_empty() {
+        return Ok(fallback);
     }
+    NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+        .map_err(|_| bad_request(&format!("{label}格式不正确")))
 }
 
 fn ranking_rows(values: HashMap<String, (i64, usize)>, total: i64) -> Vec<RankingRow> {
@@ -89,18 +100,35 @@ pub async fn show(
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Query(query): Query<StatisticsQuery>,
 ) -> HandlerResult<Html<String>> {
-    let period = match query.period.as_deref() {
-        Some("365d") => "365d",
-        Some("all") => "all",
-        _ => "30d",
-    };
-    let period_label = match period {
-        "365d" => "近 365 天",
-        "all" => "全部时间",
-        _ => "近 30 天",
-    };
     let today = chrono::Local::now().date_naive();
-    let start = start_date(period, today);
+    let preset = match query.period.as_str() {
+        "7d" => Some(("7d", 7)),
+        "14d" => Some(("14d", 14)),
+        "30d" => Some(("30d", 30)),
+        "90d" => Some(("90d", 90)),
+        "365d" => Some(("365d", 365)),
+        _ if query.start_date.trim().is_empty() && query.end_date.trim().is_empty() => {
+            Some(("30d", 30))
+        }
+        _ => None,
+    };
+    let (period, start_date, end_date) = if let Some((period, days)) = preset {
+        (period, today - Duration::days(days - 1), today)
+    } else {
+        (
+            "custom",
+            parse_date(&query.start_date, today - Duration::days(29), "开始日期")?,
+            parse_date(&query.end_date, today, "结束日期")?,
+        )
+    };
+    if start_date > end_date {
+        return Err(bad_request("开始日期不能晚于结束日期"));
+    }
+    let period_label = format!(
+        "{} 至 {}",
+        start_date.format("%Y-%m-%d"),
+        end_date.format("%Y-%m-%d")
+    );
 
     let accounts = account::Entity::find()
         .all(&state.db)
@@ -128,7 +156,8 @@ pub async fn show(
     let mut categories: HashMap<String, (i64, usize)> = HashMap::new();
     let mut account_values: HashMap<String, (i64, usize)> = HashMap::new();
     for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
-        if bill.kind != "expense" || start.is_some_and(|start| bill.happened_at.date() < start) {
+        let date = bill.happened_at.date();
+        if bill.kind != "expense" || date < start_date || date > end_date {
             continue;
         }
         let amount = crypto::decrypt_cents(&dek, &bill.amount);
@@ -161,7 +190,9 @@ pub async fn show(
     };
     let html = StatisticsTemplate {
         period: period.into(),
-        period_label: period_label.into(),
+        start_date: start_date.format("%Y-%m-%d").to_string(),
+        end_date: end_date.format("%Y-%m-%d").to_string(),
+        period_label,
         total_expense: super::fmt_cents(total_expense),
         expense_count,
         average_expense: super::fmt_cents(average),

@@ -123,6 +123,7 @@ async fn main() {
             "/bills",
             get(handlers::bills::list).post(handlers::bills::create),
         )
+        .route("/bills/search", get(handlers::bills::advanced_search))
         .route("/bills/new", get(handlers::bills::new_form))
         .route(
             "/bills/{id}/edit",

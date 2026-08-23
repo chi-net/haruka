@@ -61,6 +61,8 @@ pub struct DebtRecordFormData {
     amount: String,
     note: String,
     happened_at: String,
+    #[serde(default)]
+    redirect_to: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -214,7 +216,13 @@ pub async fn create_record(
     .insert(&state.db)
     .await
     .map_err(err500)?;
-    Ok(Redirect::to("/dashboard"))
+    Ok(Redirect::to(
+        if form.redirect_to.as_deref() == Some("/bills") {
+            "/bills"
+        } else {
+            "/dashboard"
+        },
+    ))
 }
 
 pub async fn delete_record(

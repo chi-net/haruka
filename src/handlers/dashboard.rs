@@ -74,7 +74,8 @@ struct DashboardTemplate {
     account_summaries: Vec<AccountSummary>,
     people: Vec<PersonOption>,
     categories: Vec<CategoryOption>,
-    records: Vec<super::bills::LedgerRow>,
+    quick_entry_heading: String,
+    quick_redirect_to: String,
     happened_at: String,
     net_assets: String,
     month_income: String,
@@ -321,7 +322,8 @@ pub async fn show(
         account_summaries,
         people: people_options,
         categories,
-        records: super::bills::ledger_rows(&state, &dek).await?,
+        quick_entry_heading: "快速记账".into(),
+        quick_redirect_to: "/dashboard".into(),
         happened_at: chrono::Local::now()
             .naive_local()
             .format(TIME_FMT)

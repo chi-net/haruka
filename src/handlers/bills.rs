@@ -1,6 +1,6 @@
 use askama::Template;
 use axum::{
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::{Html, Redirect},
     Form,
@@ -39,11 +39,16 @@ pub(crate) struct LedgerRow {
     pub(crate) delete_action: String,
     pub(crate) delete_confirm: String,
     pub(crate) sort_key: NaiveDateTime,
+    pub(crate) bill_kind: String,
+    pub(crate) amount_cents: i64,
+    pub(crate) is_expense: bool,
 }
 
+#[derive(Clone)]
 struct AccountOption {
     id: i64,
     name: String,
+    kind: String,
 }
 
 struct CategoryOption {
@@ -51,13 +56,40 @@ struct CategoryOption {
     name: String,
 }
 
+struct PersonOption {
+    id: i64,
+    name: String,
+}
+
 #[derive(Template)]
 #[template(path = "bills.html")]
 struct BillsTemplate {
+    page_heading: String,
+    advanced_search: bool,
+    search_action: String,
     records: Vec<LedgerRow>,
     total_income: String,
     total_expense: String,
     net: String,
+    search_mode: String,
+    start_date: String,
+    end_date: String,
+    min_expense: String,
+    max_expense: String,
+    keyword: String,
+    has_filters: bool,
+}
+
+#[derive(Template)]
+#[template(path = "quick_entry_page.html")]
+struct QuickEntryPageTemplate {
+    accounts: Vec<AccountOption>,
+    transfer_sources: Vec<AccountOption>,
+    people: Vec<PersonOption>,
+    categories: Vec<CategoryOption>,
+    happened_at: String,
+    quick_entry_heading: String,
+    quick_redirect_to: String,
 }
 
 #[derive(Template)]
@@ -93,11 +125,135 @@ pub struct DeleteFormData {
     redirect_to: Option<String>,
 }
 
+#[derive(Default, Deserialize)]
+pub struct BillsQuery {
+    #[serde(default)]
+    mode: String,
+    #[serde(default)]
+    start_date: String,
+    #[serde(default)]
+    end_date: String,
+    #[serde(default)]
+    min_expense: String,
+    #[serde(default)]
+    max_expense: String,
+    #[serde(default)]
+    keyword: String,
+}
+
+struct LedgerFilter {
+    mode_or: bool,
+    start_date: Option<chrono::NaiveDate>,
+    end_date: Option<chrono::NaiveDate>,
+    min_expense: Option<i64>,
+    max_expense: Option<i64>,
+    keyword: String,
+}
+
 fn ledger_redirect(redirect_to: Option<&str>) -> &'static str {
     if redirect_to == Some("/dashboard") {
         "/dashboard"
     } else {
         "/bills"
+    }
+}
+
+fn parse_search_date(value: &str, label: &str) -> HandlerResult<Option<chrono::NaiveDate>> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    chrono::NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+        .map(Some)
+        .map_err(|_| bad_request(&format!("{label}格式不正确")))
+}
+
+fn parse_search_amount(value: &str, label: &str) -> HandlerResult<Option<i64>> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    let decimal = Decimal::from_str(value.trim())
+        .map_err(|_| bad_request(&format!("{label}格式不正确")))?
+        .round_dp(2);
+    if decimal < Decimal::ZERO {
+        return Err(bad_request(&format!("{label}不能小于 0")));
+    }
+    (decimal * Decimal::from(100))
+        .to_i64()
+        .map(Some)
+        .ok_or_else(|| bad_request(&format!("{label}超出范围")))
+}
+
+impl LedgerFilter {
+    fn from_query(query: &BillsQuery) -> HandlerResult<Self> {
+        let start_date = parse_search_date(&query.start_date, "开始日期")?;
+        let end_date = parse_search_date(&query.end_date, "结束日期")?;
+        if start_date
+            .zip(end_date)
+            .is_some_and(|(start, end)| start > end)
+        {
+            return Err(bad_request("开始日期不能晚于结束日期"));
+        }
+        let min_expense = parse_search_amount(&query.min_expense, "最低支出")?;
+        let max_expense = parse_search_amount(&query.max_expense, "最高支出")?;
+        if min_expense
+            .zip(max_expense)
+            .is_some_and(|(min, max)| min > max)
+        {
+            return Err(bad_request("最低支出不能大于最高支出"));
+        }
+        Ok(Self {
+            mode_or: query.mode == "or",
+            start_date,
+            end_date,
+            min_expense,
+            max_expense,
+            keyword: query.keyword.trim().to_lowercase(),
+        })
+    }
+
+    fn is_active(&self) -> bool {
+        self.start_date.is_some()
+            || self.end_date.is_some()
+            || self.min_expense.is_some()
+            || self.max_expense.is_some()
+            || !self.keyword.is_empty()
+    }
+
+    fn matches(&self, row: &LedgerRow) -> bool {
+        let mut conditions = Vec::with_capacity(3);
+        if self.start_date.is_some() || self.end_date.is_some() {
+            let date = row.sort_key.date();
+            conditions.push(
+                self.start_date.is_none_or(|start| date >= start)
+                    && self.end_date.is_none_or(|end| date <= end),
+            );
+        }
+        if self.min_expense.is_some() || self.max_expense.is_some() {
+            conditions.push(
+                row.is_expense
+                    && self
+                        .min_expense
+                        .is_none_or(|minimum| row.amount_cents >= minimum)
+                    && self
+                        .max_expense
+                        .is_none_or(|maximum| row.amount_cents <= maximum),
+            );
+        }
+        if !self.keyword.is_empty() {
+            let haystack = format!(
+                "{} {} {} {}",
+                row.record_type, row.account_name, row.subject, row.note
+            )
+            .to_lowercase();
+            conditions.push(haystack.contains(&self.keyword));
+        }
+        if conditions.is_empty() {
+            true
+        } else if self.mode_or {
+            conditions.into_iter().any(|matches| matches)
+        } else {
+            conditions.into_iter().all(|matches| matches)
+        }
     }
 }
 
@@ -182,6 +338,21 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
         .map(|a| AccountOption {
             id: a.id,
             name: account_display_name(dek, &a, details.get(&a.id)),
+            kind: a.kind,
+        })
+        .collect())
+}
+
+async fn people_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<Vec<PersonOption>> {
+    Ok(debt_person::Entity::find()
+        .order_by_asc(debt_person::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|person| PersonOption {
+            id: person.id,
+            name: crypto::decrypt_string(dek, &person.name),
         })
         .collect())
 }
@@ -279,6 +450,9 @@ pub(crate) async fn ledger_rows(
             delete_action: format!("/bills/{}/delete", bill.id),
             delete_confirm: "确认删除这条账单？".into(),
             sort_key: bill.happened_at,
+            bill_kind: bill.kind,
+            amount_cents: amount,
+            is_expense: !incoming,
         });
     }
 
@@ -287,6 +461,7 @@ pub(crate) async fn ledger_rows(
         .await
         .map_err(err500)?
     {
+        let amount = crypto::decrypt_cents(dek, &transfer.amount);
         rows.push(LedgerRow {
             happened_at: transfer.happened_at.format(DISPLAY_FMT).to_string(),
             record_type: "转账".into(),
@@ -303,12 +478,15 @@ pub(crate) async fn ledger_rows(
             ),
             subject: "账户间".into(),
             note: crypto::decrypt_string(dek, &transfer.note),
-            amount: super::fmt_cents(crypto::decrypt_cents(dek, &transfer.amount)),
+            amount: super::fmt_cents(amount),
             money_class: "text-blue-600".into(),
             edit_url: String::new(),
             delete_action: format!("/transfers/{}/delete", transfer.id),
             delete_confirm: "确认删除这条转账？".into(),
             sort_key: transfer.happened_at,
+            bill_kind: String::new(),
+            amount_cents: amount,
+            is_expense: false,
         });
     }
 
@@ -346,6 +524,9 @@ pub(crate) async fn ledger_rows(
             delete_action: format!("/debts/{}/delete", record.id),
             delete_confirm: "确认删除这条借还记录？".into(),
             sort_key: record.happened_at,
+            bill_kind: String::new(),
+            amount_cents: amount,
+            is_expense: false,
         });
     }
 
@@ -400,29 +581,77 @@ pub(crate) async fn category_is_food(
 pub async fn list(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Query(query): Query<BillsQuery>,
 ) -> HandlerResult<Html<String>> {
-    let bills = bill::Entity::find()
-        .order_by_desc(bill::Column::HappenedAt)
-        .order_by_desc(bill::Column::Id)
-        .all(&state.db)
-        .await
-        .map_err(err500)?;
+    render_list(&state, &dek, query, false).await
+}
+
+pub async fn advanced_search(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Query(query): Query<BillsQuery>,
+) -> HandlerResult<Html<String>> {
+    render_list(&state, &dek, query, true).await
+}
+
+async fn render_list(
+    state: &AppState,
+    dek: &crypto::Dek,
+    mut query: BillsQuery,
+    advanced_search: bool,
+) -> HandlerResult<Html<String>> {
+    if !advanced_search {
+        query.mode = "and".into();
+        query.min_expense.clear();
+        query.max_expense.clear();
+    }
+    let filter = LedgerFilter::from_query(&query)?;
+    let has_filters = filter.is_active();
+    let records = ledger_rows(state, dek)
+        .await?
+        .into_iter()
+        .filter(|row| filter.matches(row))
+        .collect::<Vec<_>>();
     let mut total_income: i64 = 0;
     let mut total_expense: i64 = 0;
-    for b in bills {
-        let cents = crypto::decrypt_cents(&dek, &b.amount);
-        if b.kind == "income" {
-            total_income += cents;
-        } else {
-            total_expense += cents;
+    for row in &records {
+        if row.bill_kind == "income" {
+            total_income = total_income
+                .checked_add(row.amount_cents)
+                .ok_or_else(|| err500("汇总金额超出范围"))?;
+        } else if row.bill_kind == "expense" {
+            total_expense = total_expense
+                .checked_add(row.amount_cents)
+                .ok_or_else(|| err500("汇总金额超出范围"))?;
         }
     }
 
+    let net = total_income
+        .checked_sub(total_expense)
+        .ok_or_else(|| err500("汇总金额超出范围"))?;
     let html = BillsTemplate {
-        records: ledger_rows(&state, &dek).await?,
+        page_heading: if advanced_search {
+            "高级搜索".into()
+        } else {
+            "账单".into()
+        },
+        advanced_search,
+        search_action: if advanced_search {
+            "/bills/search".into()
+        } else {
+            "/bills".into()
+        },
+        records,
         total_income: super::fmt_cents(total_income),
         total_expense: super::fmt_cents(total_expense),
-        net: super::fmt_cents(total_income - total_expense),
+        net: super::fmt_cents(net),
+        search_mode: if query.mode == "or" { "or" } else { "and" }.into(),
+        start_date: query.start_date,
+        end_date: query.end_date,
+        min_expense: query.min_expense,
+        max_expense: query.max_expense,
+        keyword: query.keyword,
+        has_filters,
     }
     .render()
     .map_err(err500)?;
@@ -434,22 +663,22 @@ pub async fn new_form(
     Extension(SessionDek(dek)): Extension<SessionDek>,
 ) -> HandlerResult<Html<String>> {
     let accounts = account_options(&state, &dek).await?;
-    let categories = category_options(&state, &dek).await?;
-    let first_id = accounts[0].id;
-    let html = BillFormTemplate {
-        heading: "记一笔".into(),
-        action: "/bills".into(),
+    let transfer_sources = accounts
+        .iter()
+        .filter(|account| !matches!(account.kind.as_str(), "credit_card" | "credit_service"))
+        .cloned()
+        .collect();
+    let html = QuickEntryPageTemplate {
         accounts,
-        categories,
-        account_id: first_id,
-        kind: "expense".into(),
-        amount: String::new(),
-        category: String::new(),
-        note: String::new(),
+        transfer_sources,
+        people: people_options(&state, &dek).await?,
+        categories: category_options(&state, &dek).await?,
         happened_at: chrono::Local::now()
             .naive_local()
             .format(TIME_FMT)
             .to_string(),
+        quick_entry_heading: "记一笔".into(),
+        quick_redirect_to: "/bills".into(),
     }
     .render()
     .map_err(err500)?;
