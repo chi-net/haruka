@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}haruka{% endblock %}</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="/static/app.css">
 <script src="https://unpkg.com/htmx.org@2"></script>
 </head>
 <body class="bg-gray-50 text-gray-900 min-h-screen" hx-boost="true">
@@ -28,14 +28,53 @@
 {% block content %}{% endblock %}
 </main>
 <script>
+window.harukaErrorMessage = function(raw, contentType, status) {
+  const fallback = `请求失败（HTTP ${status || '未知'}）`;
+  if (!raw) return fallback;
+  if ((contentType || '').includes('application/json')) {
+    try {
+      const payload = JSON.parse(raw);
+      return payload.error || payload.message || payload.detail || fallback;
+    } catch (_) {
+      return raw.trim() || fallback;
+    }
+  }
+  if ((contentType || '').includes('text/html')) {
+    const document = new DOMParser().parseFromString(raw, 'text/html');
+    const detail = document.querySelector('[data-error-detail]');
+    return (detail ? detail.textContent : document.body.textContent).trim() || fallback;
+  }
+  return raw.trim() || fallback;
+};
+
+window.harukaReadErrorResponse = async function(response) {
+  const raw = await response.text();
+  return window.harukaErrorMessage(raw, response.headers.get('content-type') || '', response.status);
+};
+
+window.harukaShowError = function(message, status) {
+  let notice = document.getElementById('haruka-error-notice');
+  if (!notice) {
+    notice = document.createElement('div');
+    notice.id = 'haruka-error-notice';
+    notice.className = 'fixed top-4 right-4 z-50 w-[min(24rem,calc(100vw-2rem))] rounded-lg border border-red-300 bg-red-50 p-4 shadow-lg';
+    notice.setAttribute('role', 'alert');
+    notice.setAttribute('aria-live', 'assertive');
+    notice.innerHTML = '<div class="flex items-start gap-3"><div class="min-w-0 flex-1"><p data-error-title class="text-sm font-semibold text-red-800"></p><p data-error-message class="mt-1 whitespace-pre-wrap break-words text-sm text-red-700"></p></div><button type="button" class="shrink-0 text-red-500 hover:text-red-800" aria-label="关闭错误提示">×</button></div>';
+    notice.querySelector('button').addEventListener('click', () => notice.remove());
+    document.body.appendChild(notice);
+  }
+  notice.querySelector('[data-error-title]').textContent = status ? `操作失败（HTTP ${status}）` : '操作失败';
+  notice.querySelector('[data-error-message]').textContent = message || '请求没有成功，请稍后重试。';
+};
+
 document.addEventListener('htmx:responseError', event => {
   const xhr = event.detail.xhr;
-  if (xhr.status >= 500 && xhr.responseText) {
-    document.open();
-    document.write(xhr.responseText);
-    document.close();
-  }
+  const message = window.harukaErrorMessage(xhr.responseText, xhr.getResponseHeader('content-type') || '', xhr.status);
+  window.harukaShowError(message, xhr.status);
 });
+document.addEventListener('htmx:sendError', () => window.harukaShowError('无法连接服务器，请检查网络或服务是否正在运行。'));
+document.addEventListener('htmx:timeout', () => window.harukaShowError('请求超时，请稍后重试。'));
 </script>
 </body>
 </html>

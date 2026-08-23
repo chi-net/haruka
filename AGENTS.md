@@ -8,12 +8,13 @@
 ## 技术栈
 
 - 后端：Rust + axum 0.8 + sea-orm 1（SQLite，sqlx 运行时）
-- 前端：服务端渲染，askama 模板（`templates/`）+ htmx（`hx-boost`）+ Tailwind（CDN，无构建步骤）
+- 前端：服务端渲染，askama 模板（`templates/`）+ htmx（`hx-boost`）+ Tailwind CSS v4 CLI 本地编译（源文件 `assets/tailwind.css`，提交产物 `static/app.css`）
 - 无测试框架、无 lint 配置，验证方式：`cargo build` + 手动跑服务器用 curl 验证
 
 ## 命令
 
 - 运行：`cargo run`，监听 `127.0.0.1:3000`（可用 `LISTEN_ADDR` 覆盖）
+- 前端依赖：`npm install`；构建样式：`npm run css:build`；开发监听：`npm run css:watch`
 - 数据库：默认 `sqlite://haruka.db?mode=rwc`（可用 `DATABASE_URL` 覆盖），启动时用 sea-orm `Schema` 自动 `CREATE TABLE IF NOT EXISTS`，并由 `db::ensure_column` 用轻量 `ALTER TABLE` 补齐构建阶段新增字段；新增字段时必须同步登记，不能再要求用户手动删除数据库
 
 ## 加密（envelope）
@@ -57,5 +58,6 @@
 - `/bills` 的基础搜索只显示日期区间和关键词并按 AND 筛选；独立 `/bills/search` 高级搜索页增加收支类型、精确分类、收入金额区间、支出金额区间及 AND/OR 组合模式。两组金额同时启用时按各自类型匹配其中一个区间，再与其他条件组合；关键词覆盖流水类型、账户、分类/对象和备注。筛选与筛选后汇总必须在 Rust 中解密后完成
 - `/bills` 与 `/bills/search` 均在完成解密筛选和全部结果汇总后分页，默认每页 50 条，可选 50/100/200 条；翻页必须保留全部搜索条件和每页条数
 - `/statistics` 是独立收支统计页，提供近 7/14/30/90/365 天快捷区间，也允许用户选择开始和结束日期（均包含）；至少展示收入、支出、结余、各自笔数与均值、收入/支出的分类和账户排行及占比饼图，统计仍须在 Rust 中解密后完成
-- 所有 HTTP 500 响应由统一中间件渲染为客户端可见的错误页，必须显示原始错误详情并同时写入服务端日志，禁止空白页或吞掉错误
+- 所有 HTTP 4xx/5xx 响应由统一中间件处理：发送或接受 `application/json` 的请求以及 htmx 请求返回 `{ ok: false, status, error }` JSON，普通浏览器导航返回包含原始详情的错误页；前端必须展示明确的“操作失败”反馈，500 同时写入服务端日志，禁止空白页或吞掉错误
+- 禁止使用 Tailwind Play CDN；样式改动后必须运行 `npm run css:build` 并提交 `static/app.css`
 - 路由路径参数用 axum 0.8 语法 `{id}`

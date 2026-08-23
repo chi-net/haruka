@@ -173,7 +173,12 @@
       });
       try {
         const response = await fetch(`/transfers/quote?${params}`, { headers: { Accept: 'application/json' } });
-        if (!response.ok) throw new Error(await response.text() || `HTTP ${response.status}`);
+        if (!response.ok) {
+          const message = window.harukaReadErrorResponse
+            ? await window.harukaReadErrorResponse(response)
+            : `请求失败（HTTP ${response.status}）`;
+          throw new Error(message);
+        }
         const quote = await response.json();
         if (currentRequest !== requestNumber) return;
         toAmount.value = quote.to_amount;

@@ -105,12 +105,10 @@ async function harukaJson(url, body) {
     body: JSON.stringify(body || {})
   });
   if (!response.ok) {
-    const raw = await response.text();
-    let message = raw;
-    if ((response.headers.get('content-type') || '').includes('text/html')) {
-      message = new DOMParser().parseFromString(raw, 'text/html').body.textContent.trim();
-    }
-    throw new Error(message || `请求失败（HTTP ${response.status}）`);
+    const message = window.harukaReadErrorResponse
+      ? await window.harukaReadErrorResponse(response)
+      : `请求失败（HTTP ${response.status}）`;
+    throw new Error(message);
   }
   return response.json();
 }

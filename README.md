@@ -8,6 +8,18 @@
 
 Haruka 是一个单例软件，理论上它只服务于一个用户。
 
+## 本地运行
+
+首次运行先安装前端构建依赖并生成本地 CSS：
+
+```sh
+npm install
+npm run css:build
+cargo run
+```
+
+Tailwind 样式由 `assets/tailwind.css` 扫描模板和 Rust 源码后编译到 `static/app.css`，运行时不依赖 Tailwind CDN。开发样式时可使用 `npm run css:watch`。
+
 ## Passkey 配置
 
 本地默认使用 `http://localhost:3000` 作为 WebAuthn 来源；需要用这个地址访问（不要改用 `127.0.0.1`）才能注册和登录 Passkey。部署到其他域名时固定配置：

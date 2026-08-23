@@ -260,6 +260,7 @@ async fn main() {
         ));
 
     let app = Router::new()
+        .route("/static/app.css", get(handlers::stylesheet))
         .route(
             "/setup",
             get(handlers::auth::setup_form).post(handlers::auth::setup),
@@ -282,7 +283,7 @@ async fn main() {
         )
         .merge(protected)
         .with_state(state)
-        .layer(middleware::from_fn(handlers::render_server_error));
+        .layer(middleware::from_fn(handlers::render_error_response));
 
     let addr = std::env::var("LISTEN_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
     let listener = tokio::net::TcpListener::bind(&addr)
