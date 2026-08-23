@@ -8,6 +8,16 @@
 
 Haruka 是一个单例软件，理论上它只服务于一个用户。
 
+## Passkey 配置
+
+本地默认使用 `http://localhost:3000` 作为 WebAuthn 来源；需要用这个地址访问（不要改用 `127.0.0.1`）才能注册和登录 Passkey。部署到其他域名时固定配置：
+
+```sh
+PASSKEY_ORIGIN=https://haruka.example.com PASSKEY_RP_ID=haruka.example.com cargo run
+```
+
+生产环境必须使用 HTTPS。已有 Passkey 与来源和 RP ID 绑定，后续不要随意更改这两个值。
+
 # 预计的 Features
 
 - 内置订阅管理，妈妈再也不用担心我忘了续费啦！

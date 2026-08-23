@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     crypto,
-    entity::{account, category, meta, recovery},
+    entity::{account, category, meta, passkey, recovery},
     AppState,
 };
 
@@ -50,6 +50,7 @@ struct SetupTemplate {
 #[template(path = "unlock.html")]
 struct UnlockTemplate {
     error: String,
+    has_passkeys: bool,
 }
 
 #[derive(Template)]
@@ -193,16 +194,21 @@ pub async fn setup(
     Ok(set_session_cookie(Html(html).into_response(), &state, &dek))
 }
 
-pub async fn unlock_form(State(state): State<AppState>) -> Response {
+pub async fn unlock_form(State(state): State<AppState>) -> HandlerResult<Response> {
     if !has_meta(&state).await {
-        return Redirect::to("/setup").into_response();
+        return Ok(Redirect::to("/setup").into_response());
     }
     let html = UnlockTemplate {
         error: String::new(),
+        has_passkeys: passkey::Entity::find()
+            .count(&state.db)
+            .await
+            .map_err(err500)?
+            > 0,
     }
     .render()
-    .expect("模板渲染失败");
-    no_store(Html(html).into_response())
+    .map_err(err500)?;
+    Ok(no_store(Html(html).into_response()))
 }
 
 pub async fn unlock(
@@ -231,6 +237,11 @@ pub async fn unlock(
         None => {
             let html = UnlockTemplate {
                 error: "密码错误".to_string(),
+                has_passkeys: passkey::Entity::find()
+                    .count(&state.db)
+                    .await
+                    .map_err(err500)?
+                    > 0,
             }
             .render()
             .map_err(err500)?;
@@ -346,7 +357,10 @@ pub async fn lock(State(state): State<AppState>, headers: HeaderMap) -> Response
 }
 
 /// 解锁后若没有任何账户，创建默认账户（名称需用 DEK 加密，故不能在 db 初始化时做）
-async fn ensure_default_account(state: &AppState, dek: &crypto::Dek) -> HandlerResult<()> {
+pub(crate) async fn ensure_default_account(
+    state: &AppState,
+    dek: &crypto::Dek,
+) -> HandlerResult<()> {
     if account::Entity::find()
         .count(&state.db)
         .await

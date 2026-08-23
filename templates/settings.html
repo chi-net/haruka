@@ -29,6 +29,29 @@
   </div>
 </section>
 
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium">Passkey 登录</h2>
+  <p class="text-sm text-gray-500 mt-1 mb-3">使用设备解锁、Touch ID、Windows Hello 或安全密钥直接解锁账本，服务重启后也可使用。需要浏览器与认证器支持 WebAuthn PRF。</p>
+  <form id="passkey-enroll-form" class="flex flex-wrap gap-2 mb-4">
+    <input id="passkey-name" required maxlength="80" autocomplete="off" placeholder="例如：MacBook Touch ID" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <select id="passkey-authenticator" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">
+      <option value="platform">此 Mac / 系统 Passkey</option>
+      <option value="external">手机或安全密钥</option>
+    </select>
+    <button id="passkey-enroll-button" type="submit" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">添加 Passkey</button>
+  </form>
+  <p id="passkey-status" class="hidden text-sm mb-3" role="status"></p>
+  <ul class="divide-y divide-gray-100 border border-gray-100 rounded">
+    {% for key in passkeys %}
+    <li class="flex items-center gap-3 px-3 py-2 text-sm">
+      <span class="flex-1"><span class="font-medium">{{ key.name }}</span><span class="block text-xs text-gray-400">添加于 {{ key.created_at }}</span></span>
+      <form method="post" action="/settings/passkeys/{{ key.id }}/delete" hx-confirm="确认删除这个 Passkey？删除后无法再用它解锁。"><button class="text-red-600">删除</button></form>
+    </li>
+    {% endfor %}
+    {% if passkeys.is_empty() %}<li class="px-3 py-2 text-sm text-gray-400">尚未添加 Passkey</li>{% endif %}
+  </ul>
+</section>
+
 <section class="bg-white rounded-lg border border-gray-200 p-4">
   <h2 class="font-medium">恢复助记词</h2>
   <p class="text-sm text-gray-500 mt-1 mb-3">{% if recovery_configured %}已设置。重新生成后旧助记词立即失效。{% else %}尚未设置。{% endif %} 此操作必须重新验证主密码。</p>
@@ -37,4 +60,28 @@
     <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">重置助记词</button>
   </form>
 </section>
+{% include "passkey_script.html" %}
+<script>
+document.getElementById('passkey-enroll-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = document.getElementById('passkey-enroll-button');
+  const status = document.getElementById('passkey-status');
+  button.disabled = true;
+  status.className = 'text-sm text-blue-600 mb-3';
+  status.textContent = '请按浏览器提示创建并再次确认 Passkey…';
+  try {
+    await harukaEnrollPasskey(
+      document.getElementById('passkey-name').value,
+      document.getElementById('passkey-authenticator').value
+    );
+    status.className = 'text-sm text-green-700 mb-3';
+    status.textContent = 'Passkey 添加成功，正在刷新…';
+    window.location.assign('/settings');
+  } catch (error) {
+    status.className = 'text-sm text-red-600 mb-3';
+    status.textContent = harukaPasskeyError(error);
+    button.disabled = false;
+  }
+});
+</script>
 {% endblock %}

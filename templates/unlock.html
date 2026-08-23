@@ -6,6 +6,13 @@
   {% if !error.is_empty() %}
   <p class="text-sm text-red-600 mb-4">{{ error }}</p>
   {% endif %}
+  {% if has_passkeys %}
+  <div class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+    <button id="passkey-login-button" type="button" class="w-full bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50">使用 Passkey 解锁</button>
+    <p id="passkey-login-status" class="hidden text-sm mt-3" role="status"></p>
+  </div>
+  <div class="flex items-center gap-3 mb-4"><span class="h-px bg-gray-200 flex-1"></span><span class="text-xs text-gray-400">或使用主密码</span><span class="h-px bg-gray-200 flex-1"></span></div>
+  {% endif %}
   <form method="post" action="/unlock" hx-boost="false" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
     <div>
       <label class="block text-sm text-gray-600 mb-1">主密码</label>
@@ -15,4 +22,24 @@
   </form>
   <p class="text-center mt-4"><a href="/recover" class="text-sm text-blue-600 hover:underline">忘记密码？使用助记词恢复</a></p>
 </div>
+{% include "passkey_script.html" %}
+{% if has_passkeys %}
+<script>
+document.getElementById('passkey-login-button').addEventListener('click', async () => {
+  const button = document.getElementById('passkey-login-button');
+  const status = document.getElementById('passkey-login-status');
+  button.disabled = true;
+  status.className = 'text-sm text-blue-600 mt-3';
+  status.textContent = '等待 Passkey 确认…';
+  try {
+    const redirect = await harukaLoginWithPasskey();
+    window.location.assign(redirect);
+  } catch (error) {
+    status.className = 'text-sm text-red-600 mt-3';
+    status.textContent = harukaPasskeyError(error);
+    button.disabled = false;
+  }
+});
+</script>
+{% endif %}
 {% endblock %}

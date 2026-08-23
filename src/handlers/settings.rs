@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::{
     crypto,
-    entity::{category, recovery},
+    entity::{category, passkey, recovery},
     AppState, SessionDek,
 };
 
@@ -30,12 +30,19 @@ struct CategoryRow {
     is_food: bool,
 }
 
+struct PasskeyRow {
+    id: i64,
+    name: String,
+    created_at: String,
+}
+
 #[derive(Template)]
 #[template(path = "settings.html")]
 struct SettingsTemplate {
     income_categories: Vec<CategoryRow>,
     expense_categories: Vec<CategoryRow>,
     recovery_configured: bool,
+    passkeys: Vec<PasskeyRow>,
 }
 
 #[derive(Template)]
@@ -109,10 +116,23 @@ pub async fn show(
         .await
         .map_err(err500)?
         .is_some();
+    let passkeys = passkey::Entity::find()
+        .order_by_asc(passkey::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|passkey| PasskeyRow {
+            id: passkey.id,
+            name: crypto::decrypt_string(&dek, &passkey.name),
+            created_at: passkey.created_at.format("%Y-%m-%d %H:%M").to_string(),
+        })
+        .collect();
     let html = SettingsTemplate {
         income_categories,
         expense_categories,
         recovery_configured,
+        passkeys,
     }
     .render()
     .map_err(err500)?;

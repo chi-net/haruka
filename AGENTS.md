@@ -19,11 +19,13 @@
 ## 加密（envelope）
 
 - DEK（随机 32 字节）加密数据；KEK 由 Argon2id(密码, salt) 派生并 wrap DEK；`meta` 表存 salt + nonce + wrapped_dek。密码不落盘，改密码只需重 wrap
-- 字段级加密：XChaCha20-Poly1305，每条随机 nonce，存 `base64(nonce||ct)` 于原 TEXT 列。加密字段：accounts.name/balance_offset/note、account_details.card_number/account_username/credit_limit、bills.amount/category/note、transfers.amount/note、debt_people.name/note、debt_records.amount/note、categories.name、subscriptions.name/amount/category/note；账户类型、账单日、各记录 kind、账户外键、分类/账单的 is_food、happened_at、订阅周期/到期时间、时间戳为明文
-- DEK 按客户端会话仅存服务端内存（`AppState.sessions`）；浏览器只保存无过期时间的 `HttpOnly` 随机会话 Cookie，不保存密码或 DEK。Cookie 丢失、主动锁定或服务重启后需重新输入密码；`require_unlock` 中间件把未解锁请求重定向到 `/unlock`（无 meta 时去 `/setup`）
+- 字段级加密：XChaCha20-Poly1305，每条随机 nonce，存 `base64(nonce||ct)` 于原 TEXT 列。加密字段：accounts.name/balance_offset/note、account_details.card_number/account_username/credit_limit、bills.amount/category/note、transfers.amount/note、debt_people.name/note、debt_records.amount/note、categories.name、subscriptions.name/amount/category/note、passkeys.name；账户类型、账单日、各记录 kind、账户外键、分类/账单的 is_food、happened_at、订阅周期/到期时间、Passkey 公钥凭据和时间戳为明文
+- DEK 按客户端会话仅存服务端内存（`AppState.sessions`）；浏览器只保存无过期时间的 `HttpOnly` 随机会话 Cookie，不保存密码或 DEK。Cookie 丢失、主动锁定或服务重启后需重新使用密码或 Passkey 解锁；`require_unlock` 中间件把未解锁请求重定向到 `/unlock`（无 meta 时去 `/setup`）
 - setup/unlock/recover 表单禁用 htmx boost，确保会话 Cookie 和重定向走完整浏览器导航；解锁成功直接进入 `/dashboard`
 - 密码只用于当次 Argon2id 派生并用 `Zeroizing` 尽快清除，不落盘、不进入 Cookie 或会话；恢复密码会使现有客户端会话全部失效
 - 密码恢复使用 BIP-39 英文 12 词助记词；明文助记词只展示一次且不落盘，`recovery` 表只保存恢复密钥包裹 DEK 后的 nonce + ciphertext；在设置页重置助记词必须重新验证主密码
+- Passkey 使用 WebAuthn 用户验证并要求 PRF 扩展；PRF 以固定域分隔输入产生每凭据 32 字节 KEK，`passkeys` 只保存公钥凭据（含认证器 transports）、PRF-KEK 包裹后的 DEK 和加密名称。注册必须在已解锁设置页完成，默认明确请求可发现的本机平台凭据（兼容 Firefox/macOS 的 iCloud 钥匙串），也允许用户改选手机或安全密钥；登录按已注册凭据的 `internal` transport 优先提示本机平台认证器；挑战状态仅在服务端内存保存五分钟且一次性使用；登录成功后仍只创建普通内存 DEK 会话。默认来源为 `http://localhost:3000`，部署时用 `PASSKEY_ORIGIN` 和 `PASSKEY_RP_ID` 固定配置，来源/RP ID 变更会使已有 Passkey 不可用
+- 不提供能在重启后独立解锁数据的 TOTP：6 位动态码不能安全充当 KEK，若服务端可读取 TOTP 种子再解密 DEK，会破坏数据库静态加密的威胁模型
 - 加解密统一走 `crypto` 模块（`encrypt`/`decrypt_string`/`encrypt_cents`/`decrypt_cents`），handler 里不要直接碰密文
 - 加密字段无法 SQL 筛选/排序/求和，汇总统计都在 Rust 里做
 - 默认账户在解锁后由 `auth` 创建；默认收支分类只在首次 setup 时创建（字段需 DEK 加密，不能在 db 初始化时做）
@@ -47,7 +49,7 @@
 - 订阅服务存于 `subscriptions`，包含服务名、每次金额、支出分类、周期（day/week/month/quarter/year）、到期时间和备注；订阅页按到期时间展示状态，一键支出时由用户选择账户并生成普通 expense 账单，成功后以到期时间和当前时间中较晚者为基准自动顺延一个周期；订阅仍可手动删除
 - `/dashboard` 对用户统一称为“仪表板”，集中账户概览、快速记账及收支图表，底部不再显示账单流水；普通收支、转账与借还必须合并在同一“快速记账”卡片内用页签切换，不能再拆成独立操作卡片。日报按今日 24 小时、周/月/年报分别按近 7/30/365 个自然日聚合，Chart.js 使用平滑面积折线图；普通收支汇总和图表仍不包含转账与借还。`/transfers`、`/debts` 的 GET 只重定向到仪表板。借贷对象由 `/debt-people` 独立管理并显示在顶部导航
 - 仪表板与独立 `/bills/new` 页面必须共用 `templates/quick_entry.html` 的快速记账组件；账单列表页只保留“记一笔”入口，不能把整套快速记账组件嵌入列表。记一笔页面创建普通收支、转账或借还后均返回 `/bills`
-- `/bills` 的基础搜索只显示日期区间和关键词并按 AND 筛选；普通支出金额区间和 AND/OR 组合模式放在独立 `/bills/search` 高级搜索页。关键词覆盖流水类型、账户、分类/对象和备注；筛选与筛选后汇总必须在 Rust 中解密后完成
-- `/statistics` 是独立支出统计页，提供近 7/14/30/90/365 天快捷区间，也允许用户选择开始和结束日期（均包含）；至少展示区间支出总额、笔数、平均值、分类排行和付款账户排行，统计仍须在 Rust 中解密后完成
+- `/bills` 的基础搜索只显示日期区间和关键词并按 AND 筛选；独立 `/bills/search` 高级搜索页增加收支类型、精确分类、收入金额区间、支出金额区间及 AND/OR 组合模式。两组金额同时启用时按各自类型匹配其中一个区间，再与其他条件组合；关键词覆盖流水类型、账户、分类/对象和备注。筛选与筛选后汇总必须在 Rust 中解密后完成
+- `/statistics` 是独立收支统计页，提供近 7/14/30/90/365 天快捷区间，也允许用户选择开始和结束日期（均包含）；至少展示收入、支出、结余、各自笔数与均值、收入/支出的分类和账户排行及占比饼图，统计仍须在 Rust 中解密后完成
 - 所有 HTTP 500 响应由统一中间件渲染为客户端可见的错误页，必须显示原始错误详情并同时写入服务端日志，禁止空白页或吞掉错误
 - 路由路径参数用 axum 0.8 语法 `{id}`

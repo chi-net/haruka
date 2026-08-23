@@ -6,6 +6,7 @@ mod handlers;
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
+    time::Instant,
 };
 
 use axum::{
@@ -21,6 +22,9 @@ use sea_orm::{DatabaseConnection, EntityTrait};
 
 use crypto::Dek;
 use entity::meta;
+use webauthn_rs::prelude::{
+    Passkey, PasskeyAuthentication, PasskeyRegistration, Url, Webauthn, WebauthnBuilder,
+};
 
 const SESSION_COOKIE: &str = "haruka_session";
 
@@ -32,6 +36,13 @@ pub struct AppState {
     pub db: DatabaseConnection,
     sessions: Arc<RwLock<HashMap<String, Dek>>>,
     pub balance_writes: Arc<tokio::sync::Mutex<()>>,
+    webauthn: Arc<Webauthn>,
+    passkey_registrations:
+        Arc<tokio::sync::Mutex<HashMap<String, (Instant, PasskeyRegistration, String)>>>,
+    passkey_enrollments:
+        Arc<tokio::sync::Mutex<HashMap<String, (Instant, PasskeyAuthentication, Passkey, String)>>>,
+    passkey_authentications:
+        Arc<tokio::sync::Mutex<HashMap<String, (Instant, PasskeyAuthentication)>>>,
 }
 
 impl AppState {
@@ -96,10 +107,28 @@ async fn require_unlock(State(state): State<AppState>, mut req: Request, next: N
 #[tokio::main]
 async fn main() {
     let db = db::init().await;
+    let passkey_origin =
+        std::env::var("PASSKEY_ORIGIN").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let passkey_rp_id = std::env::var("PASSKEY_RP_ID").unwrap_or_else(|_| {
+        Url::parse(&passkey_origin)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+            .unwrap_or_else(|| "localhost".to_string())
+    });
+    let origin = Url::parse(&passkey_origin).expect("PASSKEY_ORIGIN 不是有效 URL");
+    let webauthn = WebauthnBuilder::new(&passkey_rp_id, &origin)
+        .expect("Passkey RP 配置无效")
+        .rp_name("haruka")
+        .build()
+        .expect("Passkey 配置无效");
     let state = AppState {
         db,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         balance_writes: Arc::new(tokio::sync::Mutex::new(())),
+        webauthn: Arc::new(webauthn),
+        passkey_registrations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        passkey_enrollments: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        passkey_authentications: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
 
     let protected = Router::new()
@@ -188,6 +217,22 @@ async fn main() {
             "/settings/recovery",
             post(handlers::auth::generate_recovery),
         )
+        .route(
+            "/settings/passkeys/register/start",
+            post(handlers::passkeys::start_registration),
+        )
+        .route(
+            "/settings/passkeys/register/finish",
+            post(handlers::passkeys::finish_registration),
+        )
+        .route(
+            "/settings/passkeys/register/complete",
+            post(handlers::passkeys::complete_registration),
+        )
+        .route(
+            "/settings/passkeys/{id}/delete",
+            post(handlers::passkeys::delete),
+        )
         .route("/lock", post(handlers::auth::lock))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -207,6 +252,14 @@ async fn main() {
             "/recover",
             get(handlers::auth::recover_form).post(handlers::auth::recover),
         )
+        .route(
+            "/passkey/auth/start",
+            post(handlers::passkeys::start_authentication),
+        )
+        .route(
+            "/passkey/auth/finish",
+            post(handlers::passkeys::finish_authentication),
+        )
         .merge(protected)
         .with_state(state)
         .layer(middleware::from_fn(handlers::render_server_error));
@@ -216,5 +269,6 @@ async fn main() {
         .await
         .expect("端口绑定失败");
     println!("haruka 已启动: http://{addr}");
+    println!("Passkey 来源: {passkey_origin}（RP ID: {passkey_rp_id}）");
     axum::serve(listener, app).await.expect("服务器运行失败");
 }

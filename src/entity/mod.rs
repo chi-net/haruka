@@ -5,6 +5,7 @@ pub mod category;
 pub mod debt_person;
 pub mod debt_record;
 pub mod meta;
+pub mod passkey;
 pub mod recovery;
 pub mod subscription;
 pub mod transfer;

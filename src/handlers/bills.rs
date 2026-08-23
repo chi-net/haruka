@@ -74,10 +74,15 @@ struct BillsTemplate {
     search_mode: String,
     start_date: String,
     end_date: String,
+    flow_kind: String,
+    category: String,
+    min_income: String,
+    max_income: String,
     min_expense: String,
     max_expense: String,
     keyword: String,
     has_filters: bool,
+    search_categories: Vec<CategoryOption>,
 }
 
 #[derive(Template)]
@@ -134,6 +139,14 @@ pub struct BillsQuery {
     #[serde(default)]
     end_date: String,
     #[serde(default)]
+    flow_kind: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    min_income: String,
+    #[serde(default)]
+    max_income: String,
+    #[serde(default)]
     min_expense: String,
     #[serde(default)]
     max_expense: String,
@@ -145,6 +158,10 @@ struct LedgerFilter {
     mode_or: bool,
     start_date: Option<chrono::NaiveDate>,
     end_date: Option<chrono::NaiveDate>,
+    flow_kind: String,
+    category: String,
+    min_income: Option<i64>,
+    max_income: Option<i64>,
     min_expense: Option<i64>,
     max_expense: Option<i64>,
     keyword: String,
@@ -193,6 +210,18 @@ impl LedgerFilter {
         {
             return Err(bad_request("开始日期不能晚于结束日期"));
         }
+        let flow_kind = match query.flow_kind.as_str() {
+            "income" | "expense" => query.flow_kind.clone(),
+            _ => String::new(),
+        };
+        let min_income = parse_search_amount(&query.min_income, "最低收入")?;
+        let max_income = parse_search_amount(&query.max_income, "最高收入")?;
+        if min_income
+            .zip(max_income)
+            .is_some_and(|(min, max)| min > max)
+        {
+            return Err(bad_request("最低收入不能大于最高收入"));
+        }
         let min_expense = parse_search_amount(&query.min_expense, "最低支出")?;
         let max_expense = parse_search_amount(&query.max_expense, "最高支出")?;
         if min_expense
@@ -205,6 +234,10 @@ impl LedgerFilter {
             mode_or: query.mode == "or",
             start_date,
             end_date,
+            flow_kind,
+            category: query.category.trim().to_string(),
+            min_income,
+            max_income,
             min_expense,
             max_expense,
             keyword: query.keyword.trim().to_lowercase(),
@@ -214,6 +247,10 @@ impl LedgerFilter {
     fn is_active(&self) -> bool {
         self.start_date.is_some()
             || self.end_date.is_some()
+            || !self.flow_kind.is_empty()
+            || !self.category.is_empty()
+            || self.min_income.is_some()
+            || self.max_income.is_some()
             || self.min_expense.is_some()
             || self.max_expense.is_some()
             || !self.keyword.is_empty()
@@ -228,16 +265,32 @@ impl LedgerFilter {
                     && self.end_date.is_none_or(|end| date <= end),
             );
         }
-        if self.min_expense.is_some() || self.max_expense.is_some() {
-            conditions.push(
-                row.is_expense
-                    && self
-                        .min_expense
-                        .is_none_or(|minimum| row.amount_cents >= minimum)
-                    && self
-                        .max_expense
-                        .is_none_or(|maximum| row.amount_cents <= maximum),
-            );
+        if !self.flow_kind.is_empty() {
+            conditions.push(row.bill_kind == self.flow_kind);
+        }
+        if !self.category.is_empty() {
+            conditions.push(!row.bill_kind.is_empty() && row.subject == self.category);
+        }
+        let income_range = self.min_income.is_some() || self.max_income.is_some();
+        let expense_range = self.min_expense.is_some() || self.max_expense.is_some();
+        if income_range || expense_range {
+            let income_matches = income_range
+                && row.bill_kind == "income"
+                && self
+                    .min_income
+                    .is_none_or(|minimum| row.amount_cents >= minimum)
+                && self
+                    .max_income
+                    .is_none_or(|maximum| row.amount_cents <= maximum);
+            let expense_matches = expense_range
+                && row.is_expense
+                && self
+                    .min_expense
+                    .is_none_or(|minimum| row.amount_cents >= minimum)
+                && self
+                    .max_expense
+                    .is_none_or(|maximum| row.amount_cents <= maximum);
+            conditions.push(income_matches || expense_matches);
         }
         if !self.keyword.is_empty() {
             let haystack = format!(
@@ -602,6 +655,10 @@ async fn render_list(
 ) -> HandlerResult<Html<String>> {
     if !advanced_search {
         query.mode = "and".into();
+        query.flow_kind.clear();
+        query.category.clear();
+        query.min_income.clear();
+        query.max_income.clear();
         query.min_expense.clear();
         query.max_expense.clear();
     }
@@ -629,6 +686,11 @@ async fn render_list(
     let net = total_income
         .checked_sub(total_expense)
         .ok_or_else(|| err500("汇总金额超出范围"))?;
+    let search_categories = if advanced_search {
+        category_options(state, dek).await?
+    } else {
+        Vec::new()
+    };
     let html = BillsTemplate {
         page_heading: if advanced_search {
             "高级搜索".into()
@@ -648,10 +710,15 @@ async fn render_list(
         search_mode: if query.mode == "or" { "or" } else { "and" }.into(),
         start_date: query.start_date,
         end_date: query.end_date,
+        flow_kind: query.flow_kind,
+        category: query.category,
+        min_income: query.min_income,
+        max_income: query.max_income,
         min_expense: query.min_expense,
         max_expense: query.max_expense,
         keyword: query.keyword,
         has_filters,
+        search_categories,
     }
     .render()
     .map_err(err500)?;

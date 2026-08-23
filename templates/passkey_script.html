@@ -1,0 +1,168 @@
+<script>
+function harukaB64urlToBytes(value) {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4);
+  const binary = atob(padded);
+  return Uint8Array.from(binary, character => character.charCodeAt(0));
+}
+
+function harukaBytesToB64url(value) {
+  if (value === null || value === undefined) return null;
+  const bytes = new Uint8Array(value);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function harukaCreateOptions(payload, authenticatorMode) {
+  const options = payload.options.publicKey;
+  options.challenge = harukaB64urlToBytes(options.challenge);
+  options.user.id = harukaB64urlToBytes(options.user.id);
+  if (options.excludeCredentials) {
+    for (const item of options.excludeCredentials) item.id = harukaB64urlToBytes(item.id);
+  }
+  options.extensions = Object.assign({}, options.extensions || {}, {
+    prf: { eval: { first: harukaB64urlToBytes(payload.prf_input) } }
+  });
+  options.authenticatorSelection = Object.assign({}, options.authenticatorSelection || {});
+  if (authenticatorMode === 'platform') {
+    // Firefox/macOS 不会总是从无偏好的挑战中选择 iCloud 钥匙串，明确请求本机平台凭据。
+    options.authenticatorSelection.authenticatorAttachment = 'platform';
+    options.authenticatorSelection.residentKey = 'required';
+    options.authenticatorSelection.requireResidentKey = true;
+    options.hints = ['client-device'];
+  } else {
+    delete options.authenticatorSelection.authenticatorAttachment;
+    options.authenticatorSelection.residentKey = 'preferred';
+    options.authenticatorSelection.requireResidentKey = false;
+    options.hints = ['hybrid', 'security-key'];
+  }
+  return { publicKey: options };
+}
+
+function harukaRequestOptions(payload) {
+  const options = payload.options.publicKey;
+  options.challenge = harukaB64urlToBytes(options.challenge);
+  const allowed = options.allowCredentials || [];
+  const hasPlatformCredential = allowed.some(item => (item.transports || []).includes('internal'));
+  const hasUnknownTransport = allowed.some(item => !item.transports || item.transports.length === 0);
+  for (const item of allowed) item.id = harukaB64urlToBytes(item.id);
+  // 登录没有 authenticatorAttachment 参数，只能用注册时保存的 transport 和 hints 引导选择器。
+  options.hints = (hasPlatformCredential || hasUnknownTransport)
+    ? ['client-device', 'hybrid', 'security-key']
+    : ['hybrid', 'security-key'];
+  options.extensions = Object.assign({}, options.extensions || {}, {
+    prf: { eval: { first: harukaB64urlToBytes(payload.prf_input) } }
+  });
+  return { publicKey: options };
+}
+
+function harukaRegistrationCredential(credential) {
+  const extensions = credential.getClientExtensionResults();
+  return {
+    json: {
+      id: credential.id,
+      rawId: harukaBytesToB64url(credential.rawId),
+      type: credential.type,
+      response: {
+        clientDataJSON: harukaBytesToB64url(credential.response.clientDataJSON),
+        attestationObject: harukaBytesToB64url(credential.response.attestationObject),
+        transports: credential.response.getTransports ? credential.response.getTransports() : undefined
+      },
+      clientExtensionResults: extensions
+    },
+    prfEnabled: Boolean(extensions.prf && extensions.prf.enabled)
+  };
+}
+
+function harukaAuthenticationCredential(credential) {
+  const extensions = credential.getClientExtensionResults();
+  const result = extensions.prf && extensions.prf.results && extensions.prf.results.first;
+  if (!result) throw new Error('此浏览器或认证器没有返回 WebAuthn PRF 结果，无法解锁加密数据');
+  return {
+    json: {
+      id: credential.id,
+      rawId: harukaBytesToB64url(credential.rawId),
+      type: credential.type,
+      response: {
+        clientDataJSON: harukaBytesToB64url(credential.response.clientDataJSON),
+        authenticatorData: harukaBytesToB64url(credential.response.authenticatorData),
+        signature: harukaBytesToB64url(credential.response.signature),
+        userHandle: harukaBytesToB64url(credential.response.userHandle)
+      },
+      clientExtensionResults: extensions
+    },
+    prfResult: harukaBytesToB64url(result)
+  };
+}
+
+async function harukaJson(url, body) {
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify(body || {})
+  });
+  if (!response.ok) {
+    const raw = await response.text();
+    let message = raw;
+    if ((response.headers.get('content-type') || '').includes('text/html')) {
+      message = new DOMParser().parseFromString(raw, 'text/html').body.textContent.trim();
+    }
+    throw new Error(message || `请求失败（HTTP ${response.status}）`);
+  }
+  return response.json();
+}
+
+async function harukaRequireWebAuthn() {
+  if (!window.PublicKeyCredential || !navigator.credentials) {
+    throw new Error('当前浏览器不支持 Passkey');
+  }
+  if (PublicKeyCredential.getClientCapabilities) {
+    const capabilities = await PublicKeyCredential.getClientCapabilities();
+    if (capabilities['extension:prf'] === false) {
+      throw new Error('当前浏览器明确不支持 WebAuthn PRF，无法用于解锁加密数据');
+    }
+  }
+}
+
+async function harukaEnrollPasskey(name, authenticatorMode) {
+  await harukaRequireWebAuthn();
+  const start = await harukaJson('/settings/passkeys/register/start', { name });
+  const created = await navigator.credentials.create(harukaCreateOptions(start, authenticatorMode || 'platform'));
+  if (!created) throw new Error('浏览器没有创建 Passkey');
+  const registration = harukaRegistrationCredential(created);
+  const confirm = await harukaJson('/settings/passkeys/register/finish', {
+    flow_id: start.flow_id,
+    credential: registration.json,
+    prf_enabled: registration.prfEnabled
+  });
+  const asserted = await navigator.credentials.get(harukaRequestOptions(confirm));
+  if (!asserted) throw new Error('浏览器没有确认 Passkey');
+  const authentication = harukaAuthenticationCredential(asserted);
+  await harukaJson('/settings/passkeys/register/complete', {
+    flow_id: confirm.flow_id,
+    credential: authentication.json,
+    prf_result: authentication.prfResult
+  });
+}
+
+async function harukaLoginWithPasskey() {
+  await harukaRequireWebAuthn();
+  const start = await harukaJson('/passkey/auth/start', {});
+  const asserted = await navigator.credentials.get(harukaRequestOptions(start));
+  if (!asserted) throw new Error('浏览器没有返回 Passkey');
+  const authentication = harukaAuthenticationCredential(asserted);
+  const result = await harukaJson('/passkey/auth/finish', {
+    flow_id: start.flow_id,
+    credential: authentication.json,
+    prf_result: authentication.prfResult
+  });
+  return result.redirect || '/dashboard';
+}
+
+function harukaPasskeyError(error) {
+  if (error && error.name === 'NotAllowedError') return '已取消 Passkey 操作，或操作等待超时。';
+  if (error && error.name === 'SecurityError') return 'Passkey 来源配置不匹配；请使用服务器配置的域名访问。';
+  return error && error.message ? error.message : 'Passkey 操作失败';
+}
+</script>

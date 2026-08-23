@@ -7,7 +7,7 @@ use axum::{
 use chrono::{Duration, NaiveDate};
 use rust_decimal::Decimal;
 use sea_orm::EntityTrait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::{
@@ -47,11 +47,34 @@ struct StatisticsTemplate {
     start_date: String,
     end_date: String,
     period_label: String,
+    total_income: String,
     total_expense: String,
+    net: String,
+    income_count: usize,
     expense_count: usize,
+    average_income: String,
     average_expense: String,
-    category_rankings: Vec<RankingRow>,
-    account_rankings: Vec<RankingRow>,
+    income_category_rankings: Vec<RankingRow>,
+    expense_category_rankings: Vec<RankingRow>,
+    income_account_rankings: Vec<RankingRow>,
+    expense_account_rankings: Vec<RankingRow>,
+    has_cashflow: bool,
+    has_income: bool,
+    has_expense: bool,
+    charts_json: String,
+}
+
+#[derive(Serialize)]
+struct ChartSeries {
+    labels: Vec<String>,
+    values: Vec<i64>,
+}
+
+#[derive(Serialize)]
+struct StatisticsCharts {
+    cashflow: ChartSeries,
+    income_categories: ChartSeries,
+    expense_categories: ChartSeries,
 }
 
 fn bad_request(msg: &str) -> (StatusCode, String) {
@@ -93,6 +116,29 @@ fn ranking_rows(values: HashMap<String, (i64, usize)>, total: i64) -> Vec<Rankin
             }
         })
         .collect()
+}
+
+fn chart_series(values: &HashMap<String, (i64, usize)>) -> ChartSeries {
+    let mut values = values.iter().collect::<Vec<_>>();
+    values.sort_by(|left, right| right.1 .0.cmp(&left.1 .0));
+    ChartSeries {
+        labels: values.iter().map(|(name, _)| (*name).clone()).collect(),
+        values: values.iter().map(|(_, value)| value.0).collect(),
+    }
+}
+
+fn add_ranking_value(
+    values: &mut HashMap<String, (i64, usize)>,
+    name: String,
+    amount: i64,
+) -> HandlerResult<()> {
+    let value = values.entry(name).or_default();
+    value.0 = value
+        .0
+        .checked_add(amount)
+        .ok_or_else(|| err500("统计金额超出范围"))?;
+    value.1 += 1;
+    Ok(())
 }
 
 pub async fn show(
@@ -151,53 +197,86 @@ pub async fn show(
         })
         .collect();
 
+    let mut total_income = 0i64;
     let mut total_expense = 0i64;
+    let mut income_count = 0usize;
     let mut expense_count = 0usize;
-    let mut categories: HashMap<String, (i64, usize)> = HashMap::new();
-    let mut account_values: HashMap<String, (i64, usize)> = HashMap::new();
+    let mut income_categories: HashMap<String, (i64, usize)> = HashMap::new();
+    let mut expense_categories: HashMap<String, (i64, usize)> = HashMap::new();
+    let mut income_accounts: HashMap<String, (i64, usize)> = HashMap::new();
+    let mut expense_accounts: HashMap<String, (i64, usize)> = HashMap::new();
     for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
         let date = bill.happened_at.date();
-        if bill.kind != "expense" || date < start_date || date > end_date {
+        if date < start_date || date > end_date {
             continue;
         }
         let amount = crypto::decrypt_cents(&dek, &bill.amount);
-        total_expense = total_expense
-            .checked_add(amount)
-            .ok_or_else(|| err500("统计金额超出范围"))?;
-        expense_count += 1;
         let category_name = crypto::decrypt_string(&dek, &bill.category);
-        let category_value = categories.entry(category_name).or_default();
-        category_value.0 = category_value
-            .0
-            .checked_add(amount)
-            .ok_or_else(|| err500("统计金额超出范围"))?;
-        category_value.1 += 1;
         let account_name = account_names
             .get(&bill.account_id)
             .cloned()
             .unwrap_or_else(|| "已删除账户".into());
-        let account_value = account_values.entry(account_name).or_default();
-        account_value.0 = account_value
-            .0
-            .checked_add(amount)
-            .ok_or_else(|| err500("统计金额超出范围"))?;
-        account_value.1 += 1;
+        if bill.kind == "income" {
+            total_income = total_income
+                .checked_add(amount)
+                .ok_or_else(|| err500("统计金额超出范围"))?;
+            income_count += 1;
+            add_ranking_value(&mut income_categories, category_name, amount)?;
+            add_ranking_value(&mut income_accounts, account_name, amount)?;
+        } else if bill.kind == "expense" {
+            total_expense = total_expense
+                .checked_add(amount)
+                .ok_or_else(|| err500("统计金额超出范围"))?;
+            expense_count += 1;
+            add_ranking_value(&mut expense_categories, category_name, amount)?;
+            add_ranking_value(&mut expense_accounts, account_name, amount)?;
+        }
     }
-    let average = if expense_count == 0 {
+    let average_income = if income_count == 0 {
+        0
+    } else {
+        total_income / income_count as i64
+    };
+    let average_expense = if expense_count == 0 {
         0
     } else {
         total_expense / expense_count as i64
     };
+    let net = total_income
+        .checked_sub(total_expense)
+        .ok_or_else(|| err500("统计金额超出范围"))?;
+    let charts_json = serde_json::to_string(&StatisticsCharts {
+        cashflow: ChartSeries {
+            labels: vec!["收入".into(), "支出".into()],
+            values: vec![total_income, total_expense],
+        },
+        income_categories: chart_series(&income_categories),
+        expense_categories: chart_series(&expense_categories),
+    })
+    .map_err(err500)?
+    .replace('<', "\\u003c")
+    .replace('>', "\\u003e")
+    .replace('&', "\\u0026");
     let html = StatisticsTemplate {
         period: period.into(),
         start_date: start_date.format("%Y-%m-%d").to_string(),
         end_date: end_date.format("%Y-%m-%d").to_string(),
         period_label,
+        total_income: super::fmt_cents(total_income),
         total_expense: super::fmt_cents(total_expense),
+        net: super::fmt_cents(net),
+        income_count,
         expense_count,
-        average_expense: super::fmt_cents(average),
-        category_rankings: ranking_rows(categories, total_expense),
-        account_rankings: ranking_rows(account_values, total_expense),
+        average_income: super::fmt_cents(average_income),
+        average_expense: super::fmt_cents(average_expense),
+        income_category_rankings: ranking_rows(income_categories, total_income),
+        expense_category_rankings: ranking_rows(expense_categories, total_expense),
+        income_account_rankings: ranking_rows(income_accounts, total_income),
+        expense_account_rankings: ranking_rows(expense_accounts, total_expense),
+        has_cashflow: total_income > 0 || total_expense > 0,
+        has_income: total_income > 0,
+        has_expense: total_expense > 0,
+        charts_json,
     }
     .render()
     .map_err(err500)?;
