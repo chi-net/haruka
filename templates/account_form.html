@@ -4,8 +4,18 @@
 <h1 class="text-xl font-bold mb-4">{{ heading }}</h1>
 <form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-md">
   <div>
-    <label class="block text-sm text-gray-600 mb-1">名称</label>
+    <label class="block text-sm text-gray-600 mb-1">账户名称</label>
     <input name="name" value="{{ name }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">卡号（可选）</label>
+    <input name="card_number" value="{{ card_number }}" autocomplete="off" spellcheck="false" placeholder="例如：6222 0000 0000 1234" class="w-full border border-gray-300 rounded px-3 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    <p class="text-xs text-gray-400 mt-1">账户列表中仅显示后四位。</p>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">账户用户名（可选）</label>
+    <input name="account_username" value="{{ account_username }}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如：haruka_user" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    <p class="text-xs text-gray-400 mt-1">账户列表中显示前三位和后两位。</p>
   </div>
   <div>
     <label class="block text-sm text-gray-600 mb-1">备注</label>
