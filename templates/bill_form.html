@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} - haruka{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-4">{{ heading }}</h1>
+<form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-md">
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">类型</label>
+    <div class="flex gap-4 text-sm">
+      <label class="flex items-center gap-1">
+        <input type="radio" name="kind" value="expense" {% if kind == "expense" %}checked{% endif %}> 支出
+      </label>
+      <label class="flex items-center gap-1">
+        <input type="radio" name="kind" value="income" {% if kind == "income" %}checked{% endif %}> 收入
+      </label>
+    </div>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">金额</label>
+    <input name="amount" type="number" step="0.01" min="0.01" value="{{ amount }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">账户</label>
+    <select name="account_id" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      {% for a in accounts %}
+      <option value="{{ a.id }}" {% if a.id == account_id %}selected{% endif %}>{{ a.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">分类</label>
+    <input name="category" value="{{ category }}" list="categories" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    <datalist id="categories">
+      <option value="餐饮">
+      <option value="交通">
+      <option value="购物">
+      <option value="居住">
+      <option value="娱乐">
+      <option value="工资">
+      <option value="其他">
+    </datalist>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">时间</label>
+    <input name="happened_at" type="datetime-local" value="{{ happened_at }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">备注</label>
+    <input name="note" value="{{ note }}" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div class="flex gap-3">
+    <button type="submit" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">保存</button>
+    <a href="/bills" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300 hover:bg-gray-50">取消</a>
+  </div>
+</form>
+{% endblock %}

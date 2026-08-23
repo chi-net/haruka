@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}账单 - haruka{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-xl font-bold">账单</h1>
+  <a href="/bills/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">记一笔</a>
+</div>
+<div class="grid grid-cols-3 gap-3 mb-4 text-center">
+  <div class="bg-white rounded-lg border border-gray-200 py-3">
+    <div class="text-xs text-gray-500">总收入</div>
+    <div class="font-mono text-green-600">+{{ total_income }}</div>
+  </div>
+  <div class="bg-white rounded-lg border border-gray-200 py-3">
+    <div class="text-xs text-gray-500">总支出</div>
+    <div class="font-mono text-red-600">-{{ total_expense }}</div>
+  </div>
+  <div class="bg-white rounded-lg border border-gray-200 py-3">
+    <div class="text-xs text-gray-500">结余</div>
+    <div class="font-mono">{{ net }}</div>
+  </div>
+</div>
+{% if bills.is_empty() %}
+<p class="text-gray-500 text-sm">还没有账单。</p>
+{% else %}
+<div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+<table class="w-full text-sm">
+  <thead class="bg-gray-50 text-gray-500">
+    <tr>
+      <th class="text-left px-4 py-2 font-medium">时间</th>
+      <th class="text-left px-4 py-2 font-medium">账户</th>
+      <th class="text-left px-4 py-2 font-medium">分类</th>
+      <th class="text-left px-4 py-2 font-medium">备注</th>
+      <th class="text-right px-4 py-2 font-medium">金额</th>
+      <th class="px-4 py-2"></th>
+    </tr>
+  </thead>
+  <tbody class="divide-y divide-gray-100">
+    {% for b in bills %}
+    <tr>
+      <td class="px-4 py-2 text-gray-500">{{ b.happened_at }}</td>
+      <td class="px-4 py-2">{{ b.account_name }}</td>
+      <td class="px-4 py-2">{{ b.category }}</td>
+      <td class="px-4 py-2 text-gray-500">{{ b.note }}</td>
+      <td class="px-4 py-2 text-right font-mono {% if b.kind == "income" %}text-green-600{% else %}text-red-600{% endif %}">
+        {% if b.kind == "income" %}+{% else %}-{% endif %}{{ b.amount }}
+      </td>
+      <td class="px-4 py-2 text-right whitespace-nowrap">
+        <a href="/bills/{{ b.id }}/edit" class="text-blue-600 hover:underline mr-3">编辑</a>
+        <form method="post" action="/bills/{{ b.id }}/delete" class="inline" hx-confirm="确认删除这条账单？">
+          <button type="submit" class="text-red-600 hover:underline">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

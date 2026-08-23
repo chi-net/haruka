@@ -1,0 +1,270 @@
+use askama::Template;
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::{Html, Redirect},
+    Form,
+};
+use chrono::NaiveDateTime;
+use rust_decimal::{prelude::ToPrimitive, Decimal};
+use sea_orm::{
+    ActiveModelTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryOrder, Set,
+};
+use serde::Deserialize;
+use std::{collections::HashMap, str::FromStr};
+
+use crate::entity::{account, bill};
+
+type HandlerResult<T> = Result<T, (StatusCode, String)>;
+
+fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
+    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+fn bad_request(msg: &str) -> (StatusCode, String) {
+    (StatusCode::BAD_REQUEST, msg.to_string())
+}
+
+struct BillRow {
+    id: i64,
+    account_name: String,
+    kind: String,
+    amount: String,
+    category: String,
+    note: String,
+    happened_at: String,
+}
+
+struct AccountOption {
+    id: i64,
+    name: String,
+}
+
+#[derive(Template)]
+#[template(path = "bills.html")]
+struct BillsTemplate {
+    bills: Vec<BillRow>,
+    total_income: String,
+    total_expense: String,
+    net: String,
+}
+
+#[derive(Template)]
+#[template(path = "bill_form.html")]
+struct BillFormTemplate {
+    heading: String,
+    action: String,
+    accounts: Vec<AccountOption>,
+    account_id: i64,
+    kind: String,
+    amount: String,
+    category: String,
+    note: String,
+    happened_at: String,
+}
+
+#[derive(Deserialize)]
+pub struct BillFormData {
+    account_id: String,
+    kind: String,
+    amount: String,
+    category: String,
+    note: String,
+    happened_at: String,
+}
+
+struct ParsedBill {
+    account_id: i64,
+    kind: String,
+    amount: i64,
+    category: String,
+    note: String,
+    happened_at: NaiveDateTime,
+}
+
+const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
+const DISPLAY_FMT: &str = "%Y-%m-%d %H:%M";
+
+fn parse_form(form: BillFormData) -> HandlerResult<ParsedBill> {
+    let account_id: i64 = form.account_id.parse().map_err(|_| bad_request("账户无效"))?;
+    if form.kind != "income" && form.kind != "expense" {
+        return Err(bad_request("类型必须是收入或支出"));
+    }
+    let amount_dec = Decimal::from_str(form.amount.trim())
+        .map_err(|_| bad_request("金额格式不正确"))?
+        .round_dp(2);
+    if amount_dec <= Decimal::ZERO {
+        return Err(bad_request("金额必须大于 0"));
+    }
+    let amount = (amount_dec * Decimal::from(100))
+        .to_i64()
+        .ok_or_else(|| bad_request("金额超出范围"))?;
+    if form.category.trim().is_empty() {
+        return Err(bad_request("分类不能为空"));
+    }
+    let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
+        .map_err(|_| bad_request("时间格式不正确"))?;
+    Ok(ParsedBill {
+        account_id,
+        kind: form.kind,
+        amount,
+        category: form.category.trim().to_string(),
+        note: form.note.trim().to_string(),
+        happened_at,
+    })
+}
+
+async fn account_options(db: &DatabaseConnection) -> HandlerResult<Vec<AccountOption>> {
+    let accounts = account::Entity::find()
+        .order_by_asc(account::Column::Id)
+        .all(db)
+        .await
+        .map_err(err500)?;
+    if accounts.is_empty() {
+        return Err(bad_request("请先创建账户"));
+    }
+    Ok(accounts
+        .into_iter()
+        .map(|a| AccountOption { id: a.id, name: a.name })
+        .collect())
+}
+
+pub async fn list(State(db): State<DatabaseConnection>) -> HandlerResult<Html<String>> {
+    let bills = bill::Entity::find()
+        .order_by_desc(bill::Column::HappenedAt)
+        .order_by_desc(bill::Column::Id)
+        .all(&db)
+        .await
+        .map_err(err500)?;
+    let accounts = account::Entity::find().all(&db).await.map_err(err500)?;
+    let names: HashMap<i64, String> = accounts.into_iter().map(|a| (a.id, a.name)).collect();
+
+    let mut total_income: i64 = 0;
+    let mut total_expense: i64 = 0;
+    let mut rows = Vec::with_capacity(bills.len());
+    for b in bills {
+        if b.kind == "income" {
+            total_income += b.amount;
+        } else {
+            total_expense += b.amount;
+        }
+        rows.push(BillRow {
+            id: b.id,
+            account_name: names.get(&b.account_id).cloned().unwrap_or_else(|| "已删除账户".into()),
+            kind: b.kind,
+            amount: super::fmt_cents(b.amount),
+            category: b.category,
+            note: b.note,
+            happened_at: b.happened_at.format(DISPLAY_FMT).to_string(),
+        });
+    }
+
+    let html = BillsTemplate {
+        bills: rows,
+        total_income: super::fmt_cents(total_income),
+        total_expense: super::fmt_cents(total_expense),
+        net: super::fmt_cents(total_income - total_expense),
+    }
+    .render()
+    .map_err(err500)?;
+    Ok(Html(html))
+}
+
+pub async fn new_form(State(db): State<DatabaseConnection>) -> HandlerResult<Html<String>> {
+    let accounts = account_options(&db).await?;
+    let first_id = accounts[0].id;
+    let html = BillFormTemplate {
+        heading: "记一笔".into(),
+        action: "/bills".into(),
+        accounts,
+        account_id: first_id,
+        kind: "expense".into(),
+        amount: String::new(),
+        category: String::new(),
+        note: String::new(),
+        happened_at: chrono::Local::now().naive_local().format(TIME_FMT).to_string(),
+    }
+    .render()
+    .map_err(err500)?;
+    Ok(Html(html))
+}
+
+pub async fn create(
+    State(db): State<DatabaseConnection>,
+    Form(form): Form<BillFormData>,
+) -> HandlerResult<Redirect> {
+    let parsed = parse_form(form)?;
+    bill::ActiveModel {
+        account_id: Set(parsed.account_id),
+        kind: Set(parsed.kind),
+        amount: Set(parsed.amount),
+        category: Set(parsed.category),
+        note: Set(parsed.note),
+        happened_at: Set(parsed.happened_at),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .map_err(err500)?;
+    Ok(Redirect::to("/bills"))
+}
+
+pub async fn edit_form(
+    State(db): State<DatabaseConnection>,
+    Path(id): Path<i64>,
+) -> HandlerResult<Html<String>> {
+    let b = bill::Entity::find_by_id(id)
+        .one(&db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
+    let accounts = account_options(&db).await?;
+    let html = BillFormTemplate {
+        heading: "编辑账单".into(),
+        action: format!("/bills/{id}/edit"),
+        accounts,
+        account_id: b.account_id,
+        kind: b.kind,
+        amount: super::fmt_cents(b.amount),
+        category: b.category,
+        note: b.note,
+        happened_at: b.happened_at.format(TIME_FMT).to_string(),
+    }
+    .render()
+    .map_err(err500)?;
+    Ok(Html(html))
+}
+
+pub async fn update(
+    State(db): State<DatabaseConnection>,
+    Path(id): Path<i64>,
+    Form(form): Form<BillFormData>,
+) -> HandlerResult<Redirect> {
+    let parsed = parse_form(form)?;
+    let b = bill::Entity::find_by_id(id)
+        .one(&db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
+    let mut active = b.into_active_model();
+    active.account_id = Set(parsed.account_id);
+    active.kind = Set(parsed.kind);
+    active.amount = Set(parsed.amount);
+    active.category = Set(parsed.category);
+    active.note = Set(parsed.note);
+    active.happened_at = Set(parsed.happened_at);
+    active.update(&db).await.map_err(err500)?;
+    Ok(Redirect::to("/bills"))
+}
+
+pub async fn delete(
+    State(db): State<DatabaseConnection>,
+    Path(id): Path<i64>,
+) -> HandlerResult<Redirect> {
+    bill::Entity::delete_by_id(id)
+        .exec(&db)
+        .await
+        .map_err(err500)?;
+    Ok(Redirect::to("/bills"))
+}
