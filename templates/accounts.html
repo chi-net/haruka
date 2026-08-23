@@ -29,7 +29,8 @@
       <td class="px-4 py-2 text-gray-500">
         {% if !a.card_number.is_empty() %}<div class="font-mono">卡号 {{ a.card_number }}</div>{% endif %}
         {% if !a.account_username.is_empty() %}<div>用户名 {{ a.account_username }}</div>{% endif %}
-        {% if a.card_number.is_empty() && a.account_username.is_empty() %}—{% endif %}
+        {% if !a.credit_summary.is_empty() %}<div class="text-xs mt-0.5">{{ a.credit_summary }}</div>{% endif %}
+        {% if a.card_number.is_empty() && a.account_username.is_empty() && a.credit_summary.is_empty() %}—{% endif %}
       </td>
       <td class="px-4 py-2 text-gray-500">{{ a.note }}</td>
       <td class="px-4 py-2 text-right font-mono">{{ a.balance }}</td>

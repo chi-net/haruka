@@ -43,6 +43,7 @@ struct AccountRow {
     kind_label: String,
     card_number: String,
     account_username: String,
+    credit_summary: String,
     note: String,
     balance: String,
 }
@@ -56,6 +57,8 @@ struct AccountFormTemplate {
     account_kind: String,
     card_number: String,
     account_username: String,
+    credit_limit: String,
+    billing_day: String,
     note: String,
 }
 
@@ -73,6 +76,8 @@ pub struct AccountFormData {
     account_kind: String,
     card_number: String,
     account_username: String,
+    credit_limit: String,
+    billing_day: String,
     note: String,
 }
 
@@ -84,7 +89,13 @@ pub struct AccountBalanceFormData {
 fn valid_account_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "payment" | "bank" | "stored_value" | "investment" | "other"
+        "payment"
+            | "bank"
+            | "stored_value"
+            | "credit_card"
+            | "credit_service"
+            | "investment"
+            | "other"
     )
 }
 
@@ -93,34 +104,11 @@ fn account_kind_label(kind: &str) -> &'static str {
         "payment" => "支付账户",
         "bank" => "银行账户",
         "stored_value" => "储值卡账户",
+        "credit_card" => "信用卡",
+        "credit_service" => "信贷服务",
         "investment" => "投资账户",
         _ => "其他",
     }
-}
-
-fn mask_card_number(value: &str) -> String {
-    if value.is_empty() {
-        return String::new();
-    }
-    let mut suffix: Vec<char> = value.chars().rev().take(4).collect();
-    suffix.reverse();
-    format!("•••• {}", suffix.into_iter().collect::<String>())
-}
-
-fn mask_account_username(value: &str) -> String {
-    let chars: Vec<char> = value.chars().collect();
-    if chars.is_empty() {
-        return String::new();
-    }
-    if chars.len() <= 5 {
-        if chars.len() == 1 {
-            return format!("{}•••", chars[0]);
-        }
-        return format!("{}•••{}", chars[0], chars[chars.len() - 1]);
-    }
-    let prefix: String = chars[..3].iter().collect();
-    let suffix: String = chars[chars.len() - 2..].iter().collect();
-    format!("{prefix}•••{suffix}")
 }
 
 async fn save_account_detail(
@@ -130,13 +118,17 @@ async fn save_account_detail(
     kind: &str,
     card_number: &str,
     account_username: &str,
+    credit_limit: i64,
+    billing_day: i32,
 ) -> HandlerResult<()> {
-    let (card_number, account_username) = match kind {
-        "payment" => ("", account_username.trim()),
-        "bank" | "stored_value" => (card_number.trim(), ""),
-        _ => ("", ""),
+    let (card_number, account_username, credit_limit, billing_day) = match kind {
+        "payment" => ("", account_username.trim(), 0, 0),
+        "bank" | "stored_value" => (card_number.trim(), "", 0, 0),
+        "credit_card" => (card_number.trim(), "", credit_limit, billing_day),
+        "credit_service" => ("", account_username.trim(), credit_limit, billing_day),
+        _ => ("", "", 0, 0),
     };
-    if card_number.is_empty() && account_username.is_empty() {
+    if card_number.is_empty() && account_username.is_empty() && credit_limit == 0 {
         account_detail::Entity::delete_by_id(account_id)
             .exec(&state.db)
             .await
@@ -148,12 +140,16 @@ async fn save_account_detail(
         account_id: Set(account_id),
         card_number: Set(crypto::encrypt(dek, card_number.as_bytes())),
         account_username: Set(crypto::encrypt(dek, account_username.as_bytes())),
+        credit_limit: Set(crypto::encrypt_cents(dek, credit_limit)),
+        billing_day: Set(billing_day),
     })
     .on_conflict(
         OnConflict::column(account_detail::Column::AccountId)
             .update_columns([
                 account_detail::Column::CardNumber,
                 account_detail::Column::AccountUsername,
+                account_detail::Column::CreditLimit,
+                account_detail::Column::BillingDay,
             ])
             .to_owned(),
     )
@@ -249,6 +245,29 @@ fn parse_balance(value: &str) -> HandlerResult<i64> {
         .ok_or_else(|| bad_request("余额超出范围"))
 }
 
+fn parse_credit_settings(kind: &str, limit: &str, day: &str) -> HandlerResult<(i64, i32)> {
+    if kind != "credit_card" && kind != "credit_service" {
+        return Ok((0, 0));
+    }
+    let decimal = Decimal::from_str(limit.trim())
+        .map_err(|_| bad_request("授信额格式不正确"))?
+        .round_dp(2);
+    if decimal <= Decimal::ZERO {
+        return Err(bad_request("授信额必须大于 0"));
+    }
+    let credit_limit = (decimal * Decimal::from(100))
+        .to_i64()
+        .ok_or_else(|| bad_request("授信额超出范围"))?;
+    let billing_day: i32 = day
+        .trim()
+        .parse()
+        .map_err(|_| bad_request("账单日必须是 1 到 31"))?;
+    if !(1..=31).contains(&billing_day) {
+        return Err(bad_request("账单日必须是 1 到 31"));
+    }
+    Ok((credit_limit, billing_day))
+}
+
 pub async fn list(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
@@ -267,7 +286,7 @@ pub async fn list(
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let details: HashMap<i64, (String, String)> = account_detail::Entity::find()
+    let details: HashMap<i64, (String, String, String)> = account_detail::Entity::find()
         .all(&state.db)
         .await
         .map_err(err500)?
@@ -275,11 +294,22 @@ pub async fn list(
         .map(|detail| {
             let card_number = crypto::decrypt_string(&dek, &detail.card_number);
             let account_username = crypto::decrypt_string(&dek, &detail.account_username);
+            let credit_limit = crypto::decrypt_cents(&dek, &detail.credit_limit);
+            let credit_summary = if detail.billing_day > 0 {
+                format!(
+                    "授信额 {} · 每月 {} 日",
+                    super::fmt_cents(credit_limit),
+                    detail.billing_day
+                )
+            } else {
+                String::new()
+            };
             (
                 detail.account_id,
                 (
-                    mask_card_number(&card_number),
-                    mask_account_username(&account_username),
+                    super::mask_card_number(&card_number),
+                    super::mask_account_username(&account_username),
+                    credit_summary,
                 ),
             )
         })
@@ -344,7 +374,7 @@ pub async fn list(
     let rows = accounts
         .into_iter()
         .map(|account| {
-            let (card_number, account_username) =
+            let (card_number, account_username, credit_summary) =
                 details.get(&account.id).cloned().unwrap_or_default();
             AccountRow {
                 id: account.id,
@@ -352,6 +382,7 @@ pub async fn list(
                 kind_label: account_kind_label(&account.kind).into(),
                 card_number,
                 account_username,
+                credit_summary,
                 note: crypto::decrypt_string(&dek, &account.note),
                 balance: super::fmt_cents(net.get(&account.id).copied().unwrap_or_default()),
             }
@@ -372,6 +403,8 @@ pub async fn new_form() -> Html<String> {
         account_kind: DEFAULT_ACCOUNT_KIND.into(),
         card_number: String::new(),
         account_username: String::new(),
+        credit_limit: String::new(),
+        billing_day: String::new(),
         note: String::new(),
     }
     .render()
@@ -390,6 +423,8 @@ pub async fn create(
     if !valid_account_kind(&form.account_kind) {
         return Err(bad_request("账户类型无效"));
     }
+    let (credit_limit, billing_day) =
+        parse_credit_settings(&form.account_kind, &form.credit_limit, &form.billing_day)?;
     let account = account::ActiveModel {
         name: Set(crypto::encrypt(&dek, form.name.trim().as_bytes())),
         kind: Set(form.account_kind.clone()),
@@ -408,6 +443,8 @@ pub async fn create(
         &form.account_kind,
         &form.card_number,
         &form.account_username,
+        credit_limit,
+        billing_day,
     )
     .await?;
     Ok(Redirect::to("/accounts"))
@@ -435,6 +472,15 @@ pub async fn edit_form(
         .as_ref()
         .map(|detail| crypto::decrypt_string(&dek, &detail.account_username))
         .unwrap_or_default();
+    let credit_limit = detail
+        .as_ref()
+        .map(|detail| super::fmt_cents(crypto::decrypt_cents(&dek, &detail.credit_limit)))
+        .unwrap_or_default();
+    let billing_day = detail
+        .as_ref()
+        .filter(|detail| detail.billing_day > 0)
+        .map(|detail| detail.billing_day.to_string())
+        .unwrap_or_default();
     let html = AccountFormTemplate {
         heading: "编辑账户".into(),
         action: format!("/accounts/{id}/edit"),
@@ -442,6 +488,8 @@ pub async fn edit_form(
         account_kind: account.kind,
         card_number,
         account_username,
+        credit_limit,
+        billing_day,
         note: crypto::decrypt_string(&dek, &account.note),
     }
     .render()
@@ -461,6 +509,8 @@ pub async fn update(
     if !valid_account_kind(&form.account_kind) {
         return Err(bad_request("账户类型无效"));
     }
+    let (credit_limit, billing_day) =
+        parse_credit_settings(&form.account_kind, &form.credit_limit, &form.billing_day)?;
     let account = account::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -478,6 +528,8 @@ pub async fn update(
         &form.account_kind,
         &form.card_number,
         &form.account_username,
+        credit_limit,
+        billing_day,
     )
     .await?;
     Ok(Redirect::to("/accounts"))

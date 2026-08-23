@@ -13,6 +13,8 @@
       <option value="payment" {% if account_kind == "payment" %}selected{% endif %}>支付账户</option>
       <option value="bank" {% if account_kind == "bank" %}selected{% endif %}>银行账户</option>
       <option value="stored_value" {% if account_kind == "stored_value" %}selected{% endif %}>储值卡账户</option>
+      <option value="credit_card" {% if account_kind == "credit_card" %}selected{% endif %}>信用卡</option>
+      <option value="credit_service" {% if account_kind == "credit_service" %}selected{% endif %}>信贷服务</option>
       <option value="investment" {% if account_kind == "investment" %}selected{% endif %}>投资账户</option>
       <option value="other" {% if account_kind == "other" %}selected{% endif %}>其他</option>
     </select>
@@ -20,12 +22,22 @@
   <div id="card-number-field">
     <label class="block text-sm text-gray-600 mb-1">卡号（可选）</label>
     <input name="card_number" value="{{ card_number }}" autocomplete="off" spellcheck="false" placeholder="例如：6222 0000 0000 1234" class="w-full border border-gray-300 rounded px-3 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-    <p class="text-xs text-gray-400 mt-1">银行账户和储值卡账户可填写，列表中仅显示后四位。</p>
+    <p class="text-xs text-gray-400 mt-1">银行、储值卡和信用卡可填写，列表中仅显示后四位。</p>
   </div>
   <div id="account-username-field">
     <label class="block text-sm text-gray-600 mb-1">账户用户名（可选）</label>
     <input name="account_username" value="{{ account_username }}" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如：haruka_user" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-    <p class="text-xs text-gray-400 mt-1">支付账户可填写，列表中显示前三位和后两位。</p>
+    <p class="text-xs text-gray-400 mt-1">支付账户和信贷服务可填写，列表中显示前三位和后两位。</p>
+  </div>
+  <div id="credit-settings-field" class="grid grid-cols-2 gap-3">
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">授信额</label>
+      <input id="credit-limit" name="credit_limit" type="number" step="0.01" min="0.01" value="{{ credit_limit }}" placeholder="10000.00" class="w-full border border-gray-300 rounded px-3 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">账单日</label>
+      <input id="billing-day" name="billing_day" type="number" min="1" max="31" value="{{ billing_day }}" placeholder="例如：5" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
   </div>
   <div>
     <label class="block text-sm text-gray-600 mb-1">备注</label>
@@ -41,9 +53,16 @@
   const select = document.getElementById('account-kind');
   const card = document.getElementById('card-number-field');
   const username = document.getElementById('account-username-field');
+  const credit = document.getElementById('credit-settings-field');
+  const creditLimit = document.getElementById('credit-limit');
+  const billingDay = document.getElementById('billing-day');
   const updateFields = () => {
-    card.classList.toggle('hidden', select.value !== 'bank' && select.value !== 'stored_value');
-    username.classList.toggle('hidden', select.value !== 'payment');
+    const isCredit = select.value === 'credit_card' || select.value === 'credit_service';
+    card.classList.toggle('hidden', select.value !== 'bank' && select.value !== 'stored_value' && select.value !== 'credit_card');
+    username.classList.toggle('hidden', select.value !== 'payment' && select.value !== 'credit_service');
+    credit.classList.toggle('hidden', !isCredit);
+    creditLimit.required = isCredit;
+    billingDay.required = isCredit;
   };
   select.addEventListener('change', updateFields);
   updateFields();

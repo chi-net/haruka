@@ -7,6 +7,10 @@ pub struct Model {
     pub account_id: i64,
     pub card_number: String,
     pub account_username: String,
+    /// 授信额（整数分密文），非信用类账户加密保存 0
+    pub credit_limit: String,
+    /// 账单日 1..=31，非信用类账户为 0
+    pub billing_day: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

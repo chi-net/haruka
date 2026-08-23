@@ -13,7 +13,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto,
-    entity::{account, bill, category},
+    entity::{account, account_detail, bill, category},
     AppState, SessionDek,
 };
 
@@ -134,13 +134,43 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
     if accounts.is_empty() {
         return Err(bad_request("请先创建账户"));
     }
+    let details: HashMap<i64, account_detail::Model> = account_detail::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|detail| (detail.account_id, detail))
+        .collect();
     Ok(accounts
         .into_iter()
         .map(|a| AccountOption {
             id: a.id,
-            name: crypto::decrypt_string(dek, &a.name),
+            name: account_display_name(dek, &a, details.get(&a.id)),
         })
         .collect())
+}
+
+fn account_display_name(
+    dek: &crypto::Dek,
+    account: &account::Model,
+    detail: Option<&account_detail::Model>,
+) -> String {
+    let name = crypto::decrypt_string(dek, &account.name);
+    let Some(detail) = detail else {
+        return name;
+    };
+    let card_number = crypto::decrypt_string(dek, &detail.card_number);
+    if !card_number.is_empty() {
+        return format!("{name} · 卡号 {}", super::mask_card_number(&card_number));
+    }
+    let username = crypto::decrypt_string(dek, &detail.account_username);
+    if !username.is_empty() {
+        return format!(
+            "{name} · 用户名 {}",
+            super::mask_account_username(&username)
+        );
+    }
+    name
 }
 
 async fn category_options(
@@ -190,9 +220,16 @@ pub async fn list(
         .all(&state.db)
         .await
         .map_err(err500)?;
+    let details: HashMap<i64, account_detail::Model> = account_detail::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|detail| (detail.account_id, detail))
+        .collect();
     let names: HashMap<i64, String> = accounts
         .into_iter()
-        .map(|a| (a.id, crypto::decrypt_string(&dek, &a.name)))
+        .map(|a| (a.id, account_display_name(&dek, &a, details.get(&a.id))))
         .collect();
 
     let mut total_income: i64 = 0;
