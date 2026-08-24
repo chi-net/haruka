@@ -5,6 +5,7 @@ use axum::{
     response::{Html, Redirect},
     Form,
 };
+use chrono::Datelike;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{
     sea_query::OnConflict, ActiveModelTrait, ColumnTrait, Condition, EntityTrait, IntoActiveModel,
@@ -15,7 +16,10 @@ use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto, currency,
-    entity::{account, account_detail, bill, debt_record, installment_item, transfer},
+    entity::{
+        account, account_detail, bill, debt_person, debt_record, installment_item,
+        installment_plan, transfer,
+    },
     AppState, SessionDek,
 };
 
@@ -50,6 +54,42 @@ struct AccountRow {
     credit_summary: String,
     note: String,
     balance: String,
+}
+
+struct AccountLedgerRow {
+    happened_at: String,
+    record_type: String,
+    subject: String,
+    note: String,
+    amount: String,
+    money_class: String,
+    detail_url: String,
+}
+
+#[derive(Template)]
+#[template(path = "account_detail.html")]
+struct AccountDetailTemplate {
+    id: i64,
+    name: String,
+    kind_label: String,
+    currency: String,
+    card_number: String,
+    account_username: String,
+    credit_summary: String,
+    note: String,
+    created_at: String,
+    balance: String,
+    month_label: String,
+    month_income: String,
+    month_expense: String,
+    month_net: String,
+    total_income: String,
+    total_expense: String,
+    records: Vec<AccountLedgerRow>,
+    page: usize,
+    per_page: usize,
+    total_pages: usize,
+    total_records: usize,
 }
 
 #[derive(Template)]
@@ -95,6 +135,14 @@ pub struct AccountBalanceFormData {
 
 #[derive(Default, Deserialize)]
 pub struct AccountsQuery {
+    #[serde(default)]
+    page: usize,
+    #[serde(default)]
+    per_page: usize,
+}
+
+#[derive(Default, Deserialize)]
+pub struct AccountDetailQuery {
     #[serde(default)]
     page: usize,
     #[serde(default)]
@@ -469,6 +517,279 @@ pub async fn list(
 
     let html = AccountsTemplate {
         accounts: rows,
+        page: pagination.page,
+        per_page: pagination.per_page,
+        total_pages: pagination.total_pages,
+        total_records,
+    }
+    .render()
+    .map_err(err500)?;
+    Ok(Html(html))
+}
+
+pub async fn detail(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+    Query(query): Query<AccountDetailQuery>,
+) -> HandlerResult<Html<String>> {
+    let account = account::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    let detail = account_detail::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?;
+    let account_bills = bill::Entity::find()
+        .filter(bill::Column::AccountId.eq(id))
+        .order_by_desc(bill::Column::HappenedAt)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let account_transfers = transfer::Entity::find()
+        .filter(
+            Condition::any()
+                .add(transfer::Column::FromAccountId.eq(id))
+                .add(transfer::Column::ToAccountId.eq(id)),
+        )
+        .order_by_desc(transfer::Column::HappenedAt)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let account_debts = debt_record::Entity::find()
+        .filter(debt_record::Column::AccountId.eq(id))
+        .order_by_desc(debt_record::Column::HappenedAt)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+
+    let today = chrono::Local::now().date_naive();
+    let month_start = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
+        .ok_or_else(|| err500("无法计算本月开始日期"))?;
+    let mut month_income = 0i64;
+    let mut month_expense = 0i64;
+    let mut total_income = 0i64;
+    let mut total_expense = 0i64;
+    for item in &account_bills {
+        let amount = crypto::decrypt_cents(&dek, &item.amount);
+        let total = if item.kind == "income" {
+            &mut total_income
+        } else {
+            &mut total_expense
+        };
+        *total = total
+            .checked_add(amount)
+            .ok_or_else(|| err500("账户收支汇总金额超出范围"))?;
+        if item.happened_at.date() >= month_start && item.happened_at.date() <= today {
+            let monthly = if item.kind == "income" {
+                &mut month_income
+            } else {
+                &mut month_expense
+            };
+            *monthly = monthly
+                .checked_add(amount)
+                .ok_or_else(|| err500("账户月度汇总金额超出范围"))?;
+        }
+    }
+    let month_net = month_income
+        .checked_sub(month_expense)
+        .ok_or_else(|| err500("账户月结余超出范围"))?;
+
+    let other_account_names: HashMap<i64, String> = account::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|item| (item.id, crypto::decrypt_string(&dek, &item.name)))
+        .collect();
+    let person_names: HashMap<i64, String> = debt_person::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|person| (person.id, crypto::decrypt_string(&dek, &person.name)))
+        .collect();
+    let installment_plans: HashMap<i64, i64> = installment_plan::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|plan| (plan.bill_id, plan.id))
+        .collect();
+
+    let mut records =
+        Vec::with_capacity(account_bills.len() + account_transfers.len() + account_debts.len());
+    for item in account_bills {
+        let incoming = item.kind == "income";
+        let amount = crypto::decrypt_cents(&dek, &item.amount);
+        records.push((
+            item.happened_at,
+            AccountLedgerRow {
+                happened_at: item.happened_at.format("%Y-%m-%d %H:%M").to_string(),
+                record_type: if incoming {
+                    "收入".into()
+                } else if installment_plans.contains_key(&item.id) {
+                    "支出 · 分期".into()
+                } else {
+                    "支出".into()
+                },
+                subject: crypto::decrypt_string(&dek, &item.category),
+                note: crypto::decrypt_string(&dek, &item.note),
+                amount: format!(
+                    "{}{}",
+                    if incoming { "+" } else { "-" },
+                    currency::format(amount, &account.currency)
+                ),
+                money_class: if incoming {
+                    "text-green-600"
+                } else {
+                    "text-red-600"
+                }
+                .into(),
+                detail_url: installment_plans
+                    .get(&item.id)
+                    .map(|plan_id| format!("/installments/{plan_id}"))
+                    .unwrap_or_default(),
+            },
+        ));
+    }
+    for item in account_transfers {
+        let incoming = item.to_account_id == id;
+        let amount = if incoming {
+            super::transfer_to_cents(&dek, &item)
+        } else {
+            crypto::decrypt_cents(&dek, &item.amount)
+        };
+        let counterpart_id = if incoming {
+            item.from_account_id
+        } else {
+            item.to_account_id
+        };
+        let counterpart = other_account_names
+            .get(&counterpart_id)
+            .cloned()
+            .unwrap_or_else(|| "已删除账户".into());
+        records.push((
+            item.happened_at,
+            AccountLedgerRow {
+                happened_at: item.happened_at.format("%Y-%m-%d %H:%M").to_string(),
+                record_type: if incoming {
+                    "转入".into()
+                } else {
+                    "转出".into()
+                },
+                subject: if incoming {
+                    format!("来自 {counterpart}")
+                } else {
+                    format!("转至 {counterpart}")
+                },
+                note: crypto::decrypt_string(&dek, &item.note),
+                amount: format!(
+                    "{}{}",
+                    if incoming { "+" } else { "-" },
+                    currency::format(amount, &account.currency)
+                ),
+                money_class: if incoming {
+                    "text-green-600"
+                } else {
+                    "text-red-600"
+                }
+                .into(),
+                detail_url: String::new(),
+            },
+        ));
+    }
+    for item in account_debts {
+        let incoming = matches!(item.kind.as_str(), "borrow" | "repayment_received");
+        let amount = crypto::decrypt_cents(&dek, &item.amount);
+        records.push((
+            item.happened_at,
+            AccountLedgerRow {
+                happened_at: item.happened_at.format("%Y-%m-%d %H:%M").to_string(),
+                record_type: match item.kind.as_str() {
+                    "lend" => "借出",
+                    "borrow" => "借入",
+                    "repayment_received" => "收回还款",
+                    "repayment_paid" => "归还借款",
+                    _ => "借还",
+                }
+                .into(),
+                subject: person_names
+                    .get(&item.person_id)
+                    .cloned()
+                    .unwrap_or_else(|| "已删除对象".into()),
+                note: crypto::decrypt_string(&dek, &item.note),
+                amount: format!(
+                    "{}{}",
+                    if incoming { "+" } else { "-" },
+                    currency::format(amount, &account.currency)
+                ),
+                money_class: if incoming {
+                    "text-green-600"
+                } else {
+                    "text-red-600"
+                }
+                .into(),
+                detail_url: String::new(),
+            },
+        ));
+    }
+    records.sort_by(|left, right| right.0.cmp(&left.0));
+    let records = records.into_iter().map(|(_, row)| row).collect::<Vec<_>>();
+    let total_records = records.len();
+    let pagination = super::pagination(total_records, query.page, query.per_page);
+    let records = records
+        .into_iter()
+        .skip(pagination.start)
+        .take(pagination.per_page)
+        .collect();
+
+    let card_number = detail
+        .as_ref()
+        .map(|item| crypto::decrypt_string(&dek, &item.card_number))
+        .unwrap_or_default();
+    let account_username = detail
+        .as_ref()
+        .map(|item| crypto::decrypt_string(&dek, &item.account_username))
+        .unwrap_or_default();
+    let credit_summary = detail
+        .as_ref()
+        .filter(|item| item.billing_day > 0)
+        .map(|item| {
+            format!(
+                "授信额 {} · 每月 {} 日出账",
+                currency::format(
+                    crypto::decrypt_cents(&dek, &item.credit_limit),
+                    &account.currency
+                ),
+                item.billing_day
+            )
+        })
+        .unwrap_or_default();
+    let html = AccountDetailTemplate {
+        id,
+        name: crypto::decrypt_string(&dek, &account.name),
+        kind_label: account_kind_label(&account.kind).into(),
+        currency: account.currency.clone(),
+        card_number,
+        account_username,
+        credit_summary,
+        note: crypto::decrypt_string(&dek, &account.note),
+        created_at: account
+            .created_at
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
+        balance: currency::format(current_balance(&state, &dek, id).await?, &account.currency),
+        month_label: format!("{} 年 {} 月", today.year(), today.month()),
+        month_income: currency::format(month_income, &account.currency),
+        month_expense: currency::format(month_expense, &account.currency),
+        month_net: currency::format(month_net, &account.currency),
+        total_income: currency::format(total_income, &account.currency),
+        total_expense: currency::format(total_expense, &account.currency),
+        records,
         page: pagination.page,
         per_page: pagination.per_page,
         total_pages: pagination.total_pages,

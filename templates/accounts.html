@@ -30,7 +30,7 @@
     {% for a in accounts %}
     <tr>
       <td class="px-4 py-2">
-        <div>{{ a.name }}</div>
+        <div><a href="/accounts/{{ a.id }}" class="font-medium text-blue-600 hover:underline">{{ a.name }}</a></div>
         <div class="text-xs text-gray-400 mt-0.5">{{ a.kind_label }}</div>
       </td>
       <td class="px-4 py-2 text-gray-500">
@@ -42,6 +42,7 @@
       <td class="px-4 py-2 text-gray-500">{{ a.note }}</td>
       <td class="px-4 py-2 text-right font-mono">{{ a.balance }}</td>
       <td class="px-4 py-2 text-right whitespace-nowrap">
+        <a href="/accounts/{{ a.id }}" class="text-blue-600 hover:underline mr-3">详情</a>
         <a href="/accounts/{{ a.id }}/balance" class="text-blue-600 hover:underline mr-3">设置余额</a>
         <a href="/accounts/{{ a.id }}/edit" class="text-blue-600 hover:underline mr-3">编辑</a>
         <form method="post" action="/accounts/{{ a.id }}/delete" class="inline" hx-confirm="删除账户将同时删除其所有账单，确认？">

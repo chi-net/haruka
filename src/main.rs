@@ -233,6 +233,7 @@ async fn main() {
             get(handlers::accounts::list).post(handlers::accounts::create),
         )
         .route("/accounts/new", get(handlers::accounts::new_form))
+        .route("/accounts/{id}", get(handlers::accounts::detail))
         .route(
             "/accounts/{id}/edit",
             get(handlers::accounts::edit_form).post(handlers::accounts::update),
