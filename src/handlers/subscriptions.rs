@@ -76,10 +76,8 @@ struct SubscriptionsTemplate {
     has_filters: bool,
     categories: Vec<CategoryOption>,
     currencies: &'static [currency::CurrencyOption],
-    page: usize,
     per_page: usize,
-    total_pages: usize,
-    total_records: usize,
+    pagination: super::PaginationView,
 }
 
 #[derive(Template)]
@@ -447,20 +445,37 @@ async fn render_list(
         due_soon_count,
         expired_count,
         mode: if mode_or { "or" } else { "and" }.into(),
-        keyword: query.keyword,
-        status: query.status,
-        period: query.period,
-        currency: query.currency,
-        category: query.category,
-        start_date: query.start_date,
-        end_date: query.end_date,
+        keyword: query.keyword.clone(),
+        status: query.status.clone(),
+        period: query.period.clone(),
+        currency: query.currency.clone(),
+        category: query.category.clone(),
+        start_date: query.start_date.clone(),
+        end_date: query.end_date.clone(),
         has_filters,
         categories: expense_categories(state, dek).await?,
         currencies: currency::CURRENCIES,
-        page: pagination.page,
         per_page: pagination.per_page,
-        total_pages: pagination.total_pages,
-        total_records,
+        pagination: super::pagination_view(
+            &pagination,
+            total_records,
+            if advanced_search {
+                "/subscriptions/search"
+            } else {
+                "/subscriptions"
+            },
+            "个订阅",
+            [
+                ("mode", query.mode.clone()),
+                ("keyword", query.keyword.clone()),
+                ("status", query.status.clone()),
+                ("period", query.period.clone()),
+                ("currency", query.currency.clone()),
+                ("category", query.category.clone()),
+                ("start_date", query.start_date.clone()),
+                ("end_date", query.end_date.clone()),
+            ],
+        ),
     }
     .render()
     .map_err(err500)?;

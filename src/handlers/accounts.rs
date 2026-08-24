@@ -39,10 +39,8 @@ fn bad_request(msg: &str) -> (StatusCode, String) {
 #[template(path = "accounts.html")]
 struct AccountsTemplate {
     accounts: Vec<AccountRow>,
-    page: usize,
     per_page: usize,
-    total_pages: usize,
-    total_records: usize,
+    pagination: super::PaginationView,
 }
 
 struct AccountRow {
@@ -86,10 +84,8 @@ struct AccountDetailTemplate {
     total_income: String,
     total_expense: String,
     records: Vec<AccountLedgerRow>,
-    page: usize,
     per_page: usize,
-    total_pages: usize,
-    total_records: usize,
+    pagination: super::PaginationView,
 }
 
 #[derive(Template)]
@@ -517,10 +513,14 @@ pub async fn list(
 
     let html = AccountsTemplate {
         accounts: rows,
-        page: pagination.page,
         per_page: pagination.per_page,
-        total_pages: pagination.total_pages,
-        total_records,
+        pagination: super::pagination_view(
+            &pagination,
+            total_records,
+            "/accounts",
+            "个账户",
+            std::iter::empty::<(String, String)>(),
+        ),
     }
     .render()
     .map_err(err500)?;
@@ -790,10 +790,14 @@ pub async fn detail(
         total_income: currency::format(total_income, &account.currency),
         total_expense: currency::format(total_expense, &account.currency),
         records,
-        page: pagination.page,
         per_page: pagination.per_page,
-        total_pages: pagination.total_pages,
-        total_records,
+        pagination: super::pagination_view(
+            &pagination,
+            total_records,
+            &format!("/accounts/{id}"),
+            "条流水",
+            std::iter::empty::<(String, String)>(),
+        ),
     }
     .render()
     .map_err(err500)?;

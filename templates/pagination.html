@@ -1,0 +1,37 @@
+<nav class="flex flex-wrap items-center justify-between gap-3 mt-4 text-sm" aria-label="分页">
+  <span class="text-gray-500">共 {{ pagination.total_records }} {{ pagination.unit }} · 第 {{ pagination.page }} / {{ pagination.total_pages }} 页</span>
+  <div class="flex flex-wrap items-center justify-end gap-1.5">
+    {% if pagination.page > 1 %}
+    <form method="get" action="{{ pagination.action }}">
+      {% for param in pagination.params %}<input type="hidden" name="{{ param.name }}" value="{{ param.value }}">{% endfor %}
+      <input type="hidden" name="page" value="{{ pagination.page - 1 }}"><input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+      <button class="border border-gray-300 rounded px-2.5 py-1.5 text-gray-600 hover:bg-gray-50">上一页</button>
+    </form>
+    {% endif %}
+    {% for link in pagination.links %}
+      {% if link.is_gap %}<span class="px-1 text-gray-400" aria-hidden="true">…</span>
+      {% else if link.is_current %}<span class="min-w-8 rounded border border-blue-600 bg-blue-600 px-2 py-1.5 text-center text-white" aria-current="page">{{ link.page }}</span>
+      {% else %}
+      <form method="get" action="{{ pagination.action }}">
+        {% for param in pagination.params %}<input type="hidden" name="{{ param.name }}" value="{{ param.value }}">{% endfor %}
+        <input type="hidden" name="page" value="{{ link.page }}"><input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+        <button class="min-w-8 rounded border border-gray-300 px-2 py-1.5 text-gray-600 hover:bg-gray-50" aria-label="第 {{ link.page }} 页">{{ link.page }}</button>
+      </form>
+      {% endif %}
+    {% endfor %}
+    {% if pagination.page < pagination.total_pages %}
+    <form method="get" action="{{ pagination.action }}">
+      {% for param in pagination.params %}<input type="hidden" name="{{ param.name }}" value="{{ param.value }}">{% endfor %}
+      <input type="hidden" name="page" value="{{ pagination.page + 1 }}"><input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+      <button class="border border-gray-300 rounded px-2.5 py-1.5 text-gray-600 hover:bg-gray-50">下一页</button>
+    </form>
+    {% endif %}
+    <form method="get" action="{{ pagination.action }}" class="ml-1 flex items-center gap-1.5">
+      {% for param in pagination.params %}<input type="hidden" name="{{ param.name }}" value="{{ param.value }}">{% endfor %}
+      <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+      <label class="sr-only">跳转页码</label>
+      <input name="page" type="number" min="1" max="{{ pagination.total_pages }}" value="{{ pagination.page }}" required class="w-16 rounded border border-gray-300 px-2 py-1.5 text-center font-mono text-sm" aria-label="跳转页码">
+      <button class="rounded border border-gray-300 px-2.5 py-1.5 text-gray-600 hover:bg-gray-50">跳转</button>
+    </form>
+  </div>
+</nav>

@@ -92,10 +92,9 @@ struct BillsTemplate {
     has_filters: bool,
     search_categories: Vec<CategoryOption>,
     default_currency: String,
-    page: usize,
     per_page: usize,
-    total_pages: usize,
     total_records: usize,
+    pagination: super::PaginationView,
 }
 
 #[derive(Template)]
@@ -820,22 +819,42 @@ async fn render_list(
         total_expense: currency::format(total_expense, &default_currency),
         net: currency::format(net, &default_currency),
         search_mode: if query.mode == "or" { "or" } else { "and" }.into(),
-        start_date: query.start_date,
-        end_date: query.end_date,
-        flow_kind: query.flow_kind,
-        category: query.category,
-        min_income: query.min_income,
-        max_income: query.max_income,
-        min_expense: query.min_expense,
-        max_expense: query.max_expense,
-        keyword: query.keyword,
+        start_date: query.start_date.clone(),
+        end_date: query.end_date.clone(),
+        flow_kind: query.flow_kind.clone(),
+        category: query.category.clone(),
+        min_income: query.min_income.clone(),
+        max_income: query.max_income.clone(),
+        min_expense: query.min_expense.clone(),
+        max_expense: query.max_expense.clone(),
+        keyword: query.keyword.clone(),
         has_filters,
         search_categories,
         default_currency,
-        page: pagination.page,
         per_page: pagination.per_page,
-        total_pages: pagination.total_pages,
         total_records,
+        pagination: super::pagination_view(
+            &pagination,
+            total_records,
+            if advanced_search {
+                "/bills/search"
+            } else {
+                "/bills"
+            },
+            "条流水",
+            [
+                ("mode", query.mode.clone()),
+                ("start_date", query.start_date.clone()),
+                ("end_date", query.end_date.clone()),
+                ("flow_kind", query.flow_kind.clone()),
+                ("category", query.category.clone()),
+                ("min_income", query.min_income.clone()),
+                ("max_income", query.max_income.clone()),
+                ("min_expense", query.min_expense.clone()),
+                ("max_expense", query.max_expense.clone()),
+                ("keyword", query.keyword.clone()),
+            ],
+        ),
     }
     .render()
     .map_err(err500)?;

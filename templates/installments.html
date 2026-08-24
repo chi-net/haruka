@@ -44,9 +44,6 @@
   </a>
   {% endfor %}
 </div>
-<nav class="flex flex-wrap items-center justify-between gap-3 mt-4 text-sm" aria-label="分期分页"><span class="text-gray-500">共 {{ total_records }} 个 · 第 {{ page }} / {{ total_pages }} 页</span><div class="flex items-center gap-2">
-{% if page > 1 %}<form method="get" action="{{ search_action }}"><input type="hidden" name="page" value="{{ page - 1 }}"><input type="hidden" name="per_page" value="{{ per_page }}"><input type="hidden" name="mode" value="{{ mode }}"><input type="hidden" name="keyword" value="{{ keyword }}"><input type="hidden" name="status" value="{{ status }}"><input type="hidden" name="method" value="{{ method }}"><input type="hidden" name="start_date" value="{{ start_date }}"><input type="hidden" name="end_date" value="{{ end_date }}"><button class="border border-gray-300 rounded px-3 py-1.5 text-gray-600 hover:bg-gray-50">上一页</button></form>{% endif %}
-{% if page < total_pages %}<form method="get" action="{{ search_action }}"><input type="hidden" name="page" value="{{ page + 1 }}"><input type="hidden" name="per_page" value="{{ per_page }}"><input type="hidden" name="mode" value="{{ mode }}"><input type="hidden" name="keyword" value="{{ keyword }}"><input type="hidden" name="status" value="{{ status }}"><input type="hidden" name="method" value="{{ method }}"><input type="hidden" name="start_date" value="{{ start_date }}"><input type="hidden" name="end_date" value="{{ end_date }}"><button class="border border-gray-300 rounded px-3 py-1.5 text-gray-600 hover:bg-gray-50">下一页</button></form>{% endif %}
-</div></nav>
+{% include "pagination.html" %}
 {% endif %}
 {% endblock %}

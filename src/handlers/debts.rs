@@ -56,10 +56,8 @@ struct DebtPeopleTemplate {
     min_payable: String,
     max_payable: String,
     has_filters: bool,
-    page: usize,
     per_page: usize,
-    total_pages: usize,
-    total_records: usize,
+    pagination: super::PaginationView,
 }
 
 #[derive(Template)]
@@ -532,17 +530,33 @@ async fn render_people(
         people: rows,
         default_currency,
         mode: if mode_or { "or" } else { "and" }.into(),
-        keyword: query.keyword,
-        relationship: query.relationship,
-        min_receivable: query.min_receivable,
-        max_receivable: query.max_receivable,
-        min_payable: query.min_payable,
-        max_payable: query.max_payable,
+        keyword: query.keyword.clone(),
+        relationship: query.relationship.clone(),
+        min_receivable: query.min_receivable.clone(),
+        max_receivable: query.max_receivable.clone(),
+        min_payable: query.min_payable.clone(),
+        max_payable: query.max_payable.clone(),
         has_filters,
-        page: pagination.page,
         per_page: pagination.per_page,
-        total_pages: pagination.total_pages,
-        total_records,
+        pagination: super::pagination_view(
+            &pagination,
+            total_records,
+            if advanced_search {
+                "/debt-people/search"
+            } else {
+                "/debt-people"
+            },
+            "人",
+            [
+                ("mode", query.mode.clone()),
+                ("keyword", query.keyword.clone()),
+                ("relationship", query.relationship.clone()),
+                ("min_receivable", query.min_receivable.clone()),
+                ("max_receivable", query.max_receivable.clone()),
+                ("min_payable", query.min_payable.clone()),
+                ("max_payable", query.max_payable.clone()),
+            ],
+        ),
     }
     .render()
     .map_err(err500)?;

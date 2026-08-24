@@ -151,6 +151,28 @@ pub struct Pagination {
     pub start: usize,
 }
 
+pub struct PageLink {
+    pub page: usize,
+    pub is_gap: bool,
+    pub is_current: bool,
+}
+
+pub struct PaginationParam {
+    pub name: String,
+    pub value: String,
+}
+
+pub struct PaginationView {
+    pub action: String,
+    pub page: usize,
+    pub per_page: usize,
+    pub total_pages: usize,
+    pub total_records: usize,
+    pub unit: String,
+    pub links: Vec<PageLink>,
+    pub params: Vec<PaginationParam>,
+}
+
 pub fn pagination(
     total_records: usize,
     requested_page: usize,
@@ -168,6 +190,70 @@ pub fn pagination(
         per_page,
         total_pages,
         start: (page - 1) * per_page,
+    }
+}
+
+pub fn pagination_view<I, K, V>(
+    pagination: &Pagination,
+    total_records: usize,
+    action: &str,
+    unit: &str,
+    params: I,
+) -> PaginationView
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: Into<String>,
+    V: Into<String>,
+{
+    let mut pages = vec![1usize];
+    for candidate in 2..=3.min(pagination.total_pages) {
+        pages.push(candidate);
+    }
+    let window_start = pagination.page.saturating_sub(2).max(1);
+    let window_end = pagination
+        .page
+        .saturating_add(2)
+        .min(pagination.total_pages);
+    for candidate in window_start..=window_end {
+        pages.push(candidate);
+    }
+    pages.push(pagination.total_pages);
+    pages.sort_unstable();
+    pages.dedup();
+
+    let mut links = Vec::new();
+    let mut previous = 0usize;
+    for page in pages {
+        if previous > 0 && page > previous + 1 {
+            links.push(PageLink {
+                page: 0,
+                is_gap: true,
+                is_current: false,
+            });
+        }
+        links.push(PageLink {
+            page,
+            is_gap: false,
+            is_current: page == pagination.page,
+        });
+        previous = page;
+    }
+
+    PaginationView {
+        action: action.into(),
+        page: pagination.page,
+        per_page: pagination.per_page,
+        total_pages: pagination.total_pages,
+        total_records,
+        unit: unit.into(),
+        links,
+        params: params
+            .into_iter()
+            .map(|(name, value)| PaginationParam {
+                name: name.into(),
+                value: value.into(),
+            })
+            .collect(),
     }
 }
 

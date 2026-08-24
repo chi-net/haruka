@@ -99,10 +99,8 @@ struct InstallmentsTemplate {
     start_date: String,
     end_date: String,
     has_filters: bool,
-    page: usize,
     per_page: usize,
-    total_pages: usize,
-    total_records: usize,
+    pagination: super::PaginationView,
 }
 
 #[derive(Template)]
@@ -122,10 +120,9 @@ struct InstallmentDetailTemplate {
     schedule: Vec<ScheduleRow>,
     repayment_accounts: Vec<RepaymentAccountOption>,
     plan_id: i64,
-    page: usize,
     per_page: usize,
-    total_pages: usize,
     total_records: usize,
+    pagination: super::PaginationView,
 }
 
 #[derive(Deserialize)]
@@ -620,16 +617,31 @@ async fn render_list(
             .into(),
             plans: rows,
             mode: if mode_or { "or" } else { "and" }.into(),
-            keyword: query.keyword,
-            status: query.status,
-            method: query.method,
-            start_date: query.start_date,
-            end_date: query.end_date,
+            keyword: query.keyword.clone(),
+            status: query.status.clone(),
+            method: query.method.clone(),
+            start_date: query.start_date.clone(),
+            end_date: query.end_date.clone(),
             has_filters,
-            page: pagination.page,
             per_page: pagination.per_page,
-            total_pages: pagination.total_pages,
-            total_records,
+            pagination: super::pagination_view(
+                &pagination,
+                total_records,
+                if advanced_search {
+                    "/installments/search"
+                } else {
+                    "/installments"
+                },
+                "个分期",
+                [
+                    ("mode", query.mode.clone()),
+                    ("keyword", query.keyword.clone()),
+                    ("status", query.status.clone()),
+                    ("method", query.method.clone()),
+                    ("start_date", query.start_date.clone()),
+                    ("end_date", query.end_date.clone()),
+                ],
+            ),
         }
         .render()
         .map_err(err500)?,
@@ -770,10 +782,15 @@ pub async fn detail(
             schedule,
             repayment_accounts,
             plan_id: id,
-            page: pagination.page,
             per_page: pagination.per_page,
-            total_pages: pagination.total_pages,
             total_records,
+            pagination: super::pagination_view(
+                &pagination,
+                total_records,
+                &format!("/installments/{id}"),
+                "期",
+                std::iter::empty::<(String, String)>(),
+            ),
         }
         .render()
         .map_err(err500)?,
