@@ -1,0 +1,14 @@
+.git
+.github
+.agents
+.codex
+target
+node_modules
+.DS_Store
+.env
+.env.*
+haruka.db
+haruka.db-*
+README.md
+AGENTS.md
+LICENSE

@@ -29,7 +29,12 @@ Tailwind 样式由 `assets/tailwind.css` 扫描模板和 Rust 源码后编译到
 
 ## GitHub Actions 构建
 
-仓库内的 `.github/workflows/build.yml` 会在 push、Pull Request 或手动触发时执行以下检查：
+仓库内有两条构建工作流：
+
+- `.github/workflows/build.yml` 会在 push、Pull Request 或手动触发时构建 Linux 二进制；
+- `.github/workflows/container.yml` 会构建 `linux/amd64` 和 `linux/arm64` 镜像。Pull Request 只验证镜像能够构建，推送到 `main` 或推送 `v*` 标签时才发布到 GHCR。
+
+二进制工作流会执行以下检查：
 
 1. 使用 `npm ci` 安装锁定的前端依赖并重新生成 Tailwind CSS；
 2. 检查生成的 `static/app.css` 是否已经提交；
@@ -38,7 +43,71 @@ Tailwind 样式由 `assets/tailwind.css` 扫描模板和 Rust 源码后编译到
 
 从 GitHub Actions 页面下载并解压 `haruka-linux-x86_64.tar.gz` 后即可取得在 Ubuntu 24.04 x86_64 上构建的可执行文件。Tailwind CSS 已嵌入二进制，部署机器不需要安装 Node.js，也不需要额外复制 `templates/` 或 `static/`。其他操作系统或较旧的 Linux 发行版建议按照“本地运行”一节从源码构建。
 
+容器工作流使用仓库自带的 `GITHUB_TOKEN` 发布 `ghcr.io/<仓库所有者>/haruka`，不需要额外配置镜像仓库密码。`main` 对应 `latest` 和 `main` 标签，版本标签（例如 `v0.2.0`）会发布 `0.2.0`、`0.2` 等标签，同时每次构建还会生成提交 SHA 标签。首次发布后可在 GitHub Packages 设置中将镜像改为 Public；如果保持 Private，部署机器需要先使用具有 `read:packages` 权限的令牌执行 `docker login ghcr.io`。
+
 ## 部署
+
+### 使用 GHCR 镜像部署
+
+镜像默认监听容器内的 `0.0.0.0:3000`，默认把 SQLite 数据库放在 `/data/haruka.db`。下面使用 Docker 命名卷保存整个数据库目录，并只把服务发布到宿主机回环地址，适合在 Caddy、Nginx 等 HTTPS 反向代理后运行：
+
+如需先在本机从当前源码构建镜像，可执行 `docker build --tag haruka:local .`；多阶段 Dockerfile 会在构建阶段重新生成 Tailwind CSS 和 release 二进制，最终镜像不包含 Node.js、Rust 工具链或源码。
+
+```sh
+export HARUKA_IMAGE='ghcr.io/YOUR_GITHUB_OWNER/haruka:latest'
+
+docker volume create haruka-data
+docker pull "$HARUKA_IMAGE"
+docker run -d \
+  --name haruka \
+  --restart unless-stopped \
+  --publish 127.0.0.1:3000:3000 \
+  --mount type=volume,src=haruka-data,dst=/data \
+  --env PORT=3000 \
+  --env PASSKEY_ORIGIN='https://haruka.example.com' \
+  --env PASSKEY_RP_ID='haruka.example.com' \
+  "$HARUKA_IMAGE"
+```
+
+将 `YOUR_GITHUB_OWNER` 替换为发布镜像的 GitHub 用户名或组织名，并把 Passkey 两项改成实际对外域名。升级时保留同一个命名卷并重建容器：
+
+```sh
+docker pull "$HARUKA_IMAGE"
+docker rm --force haruka
+docker run -d \
+  --name haruka \
+  --restart unless-stopped \
+  --publish 127.0.0.1:3000:3000 \
+  --mount type=volume,src=haruka-data,dst=/data \
+  --env PORT=3000 \
+  --env PASSKEY_ORIGIN='https://haruka.example.com' \
+  --env PASSKEY_RP_ID='haruka.example.com' \
+  "$HARUKA_IMAGE"
+```
+
+也可以使用 Compose：
+
+```yaml
+services:
+  haruka:
+    image: ghcr.io/YOUR_GITHUB_OWNER/haruka:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      PORT: "3000"
+      PASSKEY_ORIGIN: https://haruka.example.com
+      PASSKEY_RP_ID: haruka.example.com
+    volumes:
+      - haruka-data:/data
+
+volumes:
+  haruka-data:
+```
+
+保存为 `compose.yaml` 后执行 `docker compose up -d`。镜像已经设置 `DATABASE_URL=sqlite:///data/haruka.db?mode=rwc`；如需改用其他容器内目录或文件名，可在 `environment` 中覆盖。备份时应备份整个 `haruka-data` 卷，因为 SQLite 运行时可能同时存在 WAL 和 SHM 文件。
+
+如果要直接向局域网发布而不使用同机反向代理，可把端口映射改成 `3000:3000`。Passkey 在非 localhost 环境仍然需要 HTTPS，不能仅靠开放 HTTP 端口使用。
 
 ### 监听地址和端口
 
