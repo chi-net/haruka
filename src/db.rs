@@ -1,9 +1,9 @@
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema, Statement};
 
 use crate::entity::{
-    account, account_detail, bill, category, debt_person, debt_record, exchange_rate,
-    installment_item, installment_plan, meta, passkey, preference, recovery, subscription,
-    transfer,
+    account, account_detail, balance_adjustment, bill, category, debt_person, debt_record,
+    exchange_rate, installment_item, installment_plan, meta, passkey, preference, recovery,
+    subscription, transfer,
 };
 
 pub async fn init() -> DatabaseConnection {
@@ -70,6 +70,11 @@ pub async fn init() -> DatabaseConnection {
         "INTEGER NOT NULL DEFAULT 0",
     )
     .await;
+    let mut create_balance_adjustments =
+        schema.create_table_from_entity(balance_adjustment::Entity);
+    db.execute(builder.build(create_balance_adjustments.if_not_exists()))
+        .await
+        .expect("建表失败");
     let mut create_bills = schema.create_table_from_entity(bill::Entity);
     db.execute(builder.build(create_bills.if_not_exists()))
         .await

@@ -226,7 +226,7 @@ pub async fn show(
             currency: account.currency.clone(),
         })
         .collect::<Vec<_>>();
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Utc::now().naive_utc();
     let reminder_deadline = now + Duration::days(7);
     let all_subscription_reminders = subscription::Entity::find()
         .order_by_asc(subscription::Column::ExpiresAt)
@@ -242,7 +242,7 @@ pub async fn show(
                 crypto::decrypt_string(&dek, &subscription.category),
                 subscription.currency
             ),
-            due_at: subscription.expires_at.format("%Y-%m-%d %H:%M").to_string(),
+            due_at: subscription.expires_at.format(TIME_FMT).to_string(),
             amount: currency::format(
                 crypto::decrypt_cents(&dek, &subscription.amount),
                 &subscription.currency,
@@ -460,10 +460,7 @@ pub async fn show(
         categories,
         quick_entry_heading: "快速记账".into(),
         quick_redirect_to: "/dashboard".into(),
-        happened_at: chrono::Local::now()
-            .naive_local()
-            .format(TIME_FMT)
-            .to_string(),
+        happened_at: chrono::Utc::now().naive_utc().format(TIME_FMT).to_string(),
         net_assets: currency::format(net_assets, &default_currency),
         month_income: currency::format(month_income, &default_currency),
         month_expense: currency::format(month_expense, &default_currency),

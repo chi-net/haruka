@@ -36,7 +36,7 @@
   </div>
   <div>
     <label class="block text-sm text-gray-600 mb-1">时间</label>
-    <input name="happened_at" type="datetime-local" value="{{ happened_at }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <span data-utc-field><input data-utc-picker data-utc-value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"><input data-utc-target type="hidden" name="happened_at" value="{{ happened_at }}"></span>
   </div>
   <div>
     <label class="block text-sm text-gray-600 mb-1">备注</label>
@@ -55,7 +55,7 @@
     <tbody class="divide-y divide-gray-100">
       {% for r in records %}
       <tr>
-        <td class="px-4 py-2 text-gray-500">{{ r.happened_at }}</td>
+        <td class="px-4 py-2 text-gray-500"><time data-utc-time="{{ r.happened_at }}">{{ r.happened_at }}</time></td>
         <td class="px-4 py-2">{{ r.person_name }}</td>
         <td class="px-4 py-2">{{ r.kind_label }}</td>
         <td class="px-4 py-2">{{ r.account_name }}</td>

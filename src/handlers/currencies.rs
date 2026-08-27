@@ -95,12 +95,8 @@ pub async fn converter(
     let converted = (amount * info.rate).round_dp(4).normalize();
     let fetched_at = info
         .fetched_at
-        .map(|time| {
-            time.with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M:%S %:z")
-                .to_string()
-        })
-        .unwrap_or_else(|| "同币种换算，无需更新汇率".into());
+        .map(|time| time.format("%Y-%m-%dT%H:%M").to_string())
+        .unwrap_or_default();
     let html = CurrencyConverterTemplate {
         currencies: currency::CURRENCIES,
         amount: query.amount,

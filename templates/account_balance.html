@@ -8,7 +8,7 @@
     <div>
       <label class="block text-sm text-gray-600 mb-1">目标余额</label>
       <input name="balance" inputmode="decimal" required autofocus placeholder="0.00" class="w-full border border-gray-300 rounded px-3 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-      <p class="text-xs text-gray-400 mt-1">允许负数，最多保留两位小数。此操作不会新增记录，后续账单、转账和借还记录会继续在该余额上增减。</p>
+      <p class="text-xs text-gray-400 mt-1">最多保留两位小数，并会在账单中新增一条不可删除的“余额调整”流水。普通账户不允许负数；信用账户不能低于负授信额。</p>
     </div>
     <div class="flex gap-3">
       <button type="submit" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">设置余额</button>

@@ -897,7 +897,7 @@ pub async fn set_paid(
         } else {
             format!("{category_name} · {original_note}")
         };
-        let happened_at = chrono::Local::now().naive_local();
+        let happened_at = chrono::Utc::now().naive_utc();
         let transaction = state.db.begin().await.map_err(err500)?;
         let principal_transfer = transfer::ActiveModel {
             from_account_id: Set(repayment_account_id),

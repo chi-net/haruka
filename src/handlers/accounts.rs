@@ -2,23 +2,23 @@ use askama::Template;
 use axum::{
     extract::{Extension, Path, Query, State},
     http::StatusCode,
-    response::{Html, Redirect},
-    Form,
+    response::{Html, IntoResponse, Redirect},
+    Form, Json,
 };
 use chrono::Datelike;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{
     sea_query::OnConflict, ActiveModelTrait, ColumnTrait, Condition, EntityTrait, IntoActiveModel,
-    QueryFilter, QueryOrder, Set,
+    QueryFilter, QueryOrder, Set, TransactionTrait,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto, currency,
     entity::{
-        account, account_detail, bill, debt_person, debt_record, installment_item,
-        installment_plan, transfer,
+        account, account_detail, balance_adjustment, bill, debt_person, debt_record,
+        installment_item, installment_plan, transfer,
     },
     AppState, SessionDek,
 };
@@ -71,7 +71,7 @@ struct AccountDetailTemplate {
     name: String,
     kind_label: String,
     currency: String,
-    card_number: String,
+    card_number_masked: String,
     account_username: String,
     credit_summary: String,
     note: String,
@@ -86,6 +86,11 @@ struct AccountDetailTemplate {
     records: Vec<AccountLedgerRow>,
     per_page: usize,
     pagination: super::PaginationView,
+}
+
+#[derive(Serialize)]
+pub struct CardNumberResponse {
+    card_number: String,
 }
 
 #[derive(Template)]
@@ -187,7 +192,11 @@ async fn save_account_detail(
         "credit_service" => ("", account_username.trim(), credit_limit, billing_day),
         _ => ("", "", 0, 0),
     };
-    if card_number.is_empty() && account_username.is_empty() && credit_limit == 0 {
+    if !matches!(kind, "credit_card" | "credit_service")
+        && card_number.is_empty()
+        && account_username.is_empty()
+        && credit_limit == 0
+    {
         account_detail::Entity::delete_by_id(account_id)
             .exec(&state.db)
             .await
@@ -358,8 +367,8 @@ fn parse_credit_settings(kind: &str, limit: &str, day: &str) -> HandlerResult<(i
     let decimal = Decimal::from_str(limit.trim())
         .map_err(|_| bad_request("授信额格式不正确"))?
         .round_dp(2);
-    if decimal <= Decimal::ZERO {
-        return Err(bad_request("授信额必须大于 0"));
+    if decimal < Decimal::ZERO {
+        return Err(bad_request("授信额不能小于 0"));
     }
     let credit_limit = (decimal * Decimal::from(100))
         .to_i64()
@@ -564,6 +573,12 @@ pub async fn detail(
         .all(&state.db)
         .await
         .map_err(err500)?;
+    let account_adjustments = balance_adjustment::Entity::find()
+        .filter(balance_adjustment::Column::AccountId.eq(id))
+        .order_by_desc(balance_adjustment::Column::HappenedAt)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
 
     let today = chrono::Local::now().date_naive();
     let month_start = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
@@ -619,15 +634,19 @@ pub async fn detail(
         .map(|plan| (plan.bill_id, plan.id))
         .collect();
 
-    let mut records =
-        Vec::with_capacity(account_bills.len() + account_transfers.len() + account_debts.len());
+    let mut records = Vec::with_capacity(
+        account_bills.len()
+            + account_transfers.len()
+            + account_debts.len()
+            + account_adjustments.len(),
+    );
     for item in account_bills {
         let incoming = item.kind == "income";
         let amount = crypto::decrypt_cents(&dek, &item.amount);
         records.push((
             item.happened_at,
             AccountLedgerRow {
-                happened_at: item.happened_at.format("%Y-%m-%d %H:%M").to_string(),
+                happened_at: item.happened_at.format("%Y-%m-%dT%H:%M").to_string(),
                 record_type: if incoming {
                     "收入".into()
                 } else if installment_plans.contains_key(&item.id) {
@@ -674,7 +693,7 @@ pub async fn detail(
         records.push((
             item.happened_at,
             AccountLedgerRow {
-                happened_at: item.happened_at.format("%Y-%m-%d %H:%M").to_string(),
+                happened_at: item.happened_at.format("%Y-%m-%dT%H:%M").to_string(),
                 record_type: if incoming {
                     "转入".into()
                 } else {
@@ -707,7 +726,7 @@ pub async fn detail(
         records.push((
             item.happened_at,
             AccountLedgerRow {
-                happened_at: item.happened_at.format("%Y-%m-%d %H:%M").to_string(),
+                happened_at: item.happened_at.format("%Y-%m-%dT%H:%M").to_string(),
                 record_type: match item.kind.as_str() {
                     "lend" => "借出",
                     "borrow" => "借入",
@@ -732,6 +751,26 @@ pub async fn detail(
                     "text-red-600"
                 }
                 .into(),
+                detail_url: String::new(),
+            },
+        ));
+    }
+    for item in account_adjustments {
+        let from_balance = crypto::decrypt_cents(&dek, &item.from_balance);
+        let to_balance = crypto::decrypt_cents(&dek, &item.to_balance);
+        records.push((
+            item.happened_at,
+            AccountLedgerRow {
+                happened_at: item.happened_at.format("%Y-%m-%dT%H:%M").to_string(),
+                record_type: "余额调整".into(),
+                subject: "强制设置余额".into(),
+                note: format!(
+                    "{} → {}",
+                    currency::format(from_balance, &account.currency),
+                    currency::format(to_balance, &account.currency)
+                ),
+                amount: currency::format(to_balance, &account.currency),
+                money_class: "text-amber-700".into(),
                 detail_url: String::new(),
             },
         ));
@@ -773,15 +812,15 @@ pub async fn detail(
         name: crypto::decrypt_string(&dek, &account.name),
         kind_label: account_kind_label(&account.kind).into(),
         currency: account.currency.clone(),
-        card_number,
+        card_number_masked: if card_number.is_empty() {
+            String::new()
+        } else {
+            super::mask_card_number(&card_number)
+        },
         account_username,
         credit_summary,
         note: crypto::decrypt_string(&dek, &account.note),
-        created_at: account
-            .created_at
-            .with_timezone(&chrono::Local)
-            .format("%Y-%m-%d %H:%M")
-            .to_string(),
+        created_at: account.created_at.format("%Y-%m-%dT%H:%M").to_string(),
         balance: currency::format(current_balance(&state, &dek, id).await?, &account.currency),
         month_label: format!("{} 年 {} 月", today.year(), today.month()),
         month_income: currency::format(month_income, &account.currency),
@@ -802,6 +841,31 @@ pub async fn detail(
     .render()
     .map_err(err500)?;
     Ok(Html(html))
+}
+
+pub async fn card_number(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+) -> HandlerResult<impl IntoResponse> {
+    account::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    let detail = account_detail::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "这个账户没有卡号".into()))?;
+    let card_number = crypto::decrypt_string(&dek, &detail.card_number);
+    if card_number.is_empty() {
+        return Err((StatusCode::NOT_FOUND, "这个账户没有卡号".into()));
+    }
+    Ok((
+        [("cache-control", "no-store"), ("pragma", "no-cache")],
+        Json(CardNumberResponse { card_number }),
+    ))
 }
 
 pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<String>> {
@@ -961,6 +1025,12 @@ pub async fn update(
                 .await
                 .map_err(err500)?
                 .is_some()
+            || balance_adjustment::Entity::find()
+                .filter(balance_adjustment::Column::AccountId.eq(id))
+                .one(&state.db)
+                .await
+                .map_err(err500)?
+                .is_some()
             || crypto::decrypt_cents(&dek, &account.balance_offset) != 0;
         if has_activity {
             return Err(bad_request(
@@ -1035,13 +1105,28 @@ pub async fn force_balance(
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     let target = parse_balance(&form.balance)?;
     ensure_allowed_balance(&state, &dek, id, target).await?;
+    let previous = current_balance(&state, &dek, id).await?;
     let offset = target
         .checked_sub(transaction_balance(&state, &dek, id).await?)
         .ok_or_else(|| bad_request("余额超出范围"))?;
+    let now = chrono::Utc::now().naive_utc();
+    let transaction = state.db.begin().await.map_err(err500)?;
     let mut active = account.into_active_model();
     active.balance_offset = Set(crypto::encrypt_cents(&dek, offset));
-    active.update(&state.db).await.map_err(err500)?;
-    Ok(Redirect::to("/accounts"))
+    active.update(&transaction).await.map_err(err500)?;
+    balance_adjustment::ActiveModel {
+        account_id: Set(id),
+        from_balance: Set(crypto::encrypt_cents(&dek, previous)),
+        to_balance: Set(crypto::encrypt_cents(&dek, target)),
+        happened_at: Set(now),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    }
+    .insert(&transaction)
+    .await
+    .map_err(err500)?;
+    transaction.commit().await.map_err(err500)?;
+    Ok(Redirect::to(&format!("/accounts/{id}")))
 }
 
 pub async fn delete(

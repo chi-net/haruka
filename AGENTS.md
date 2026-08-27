@@ -20,7 +20,7 @@
 ## 加密（envelope）
 
 - DEK（随机 32 字节）加密数据；KEK 由 Argon2id(密码, salt) 派生并 wrap DEK；`meta` 表存 salt + nonce + wrapped_dek。密码不落盘，改密码只需重 wrap
-- 字段级加密：XChaCha20-Poly1305，每条随机 nonce，存 `base64(nonce||ct)` 于原 TEXT 列。加密字段：accounts.name/balance_offset/note、account_details.card_number/account_username/credit_limit、bills.amount/category/note、transfers.amount/to_amount/note、debt_people.name/note、debt_records.amount/note、categories.name、subscriptions.name/amount/category/note、passkeys.name、installment_plans.annual_rate_bps/fee、installment_items.principal/interest/fee/total；账户类型、账单日、各记录 kind、账户外键、分类/账单的 is_food、happened_at、订阅周期/到期时间、分期期限/还款方式/还款日/计划状态、分期还款账户/自动流水外键、Passkey 公钥凭据和时间戳为明文
+- 字段级加密：XChaCha20-Poly1305，每条随机 nonce，存 `base64(nonce||ct)` 于原 TEXT 列。加密字段：accounts.name/balance_offset/note、account_details.card_number/account_username/credit_limit、balance_adjustments.from_balance/to_balance、bills.amount/category/note、transfers.amount/to_amount/note、debt_people.name/note、debt_records.amount/note、categories.name、subscriptions.name/amount/category/note、passkeys.name、installment_plans.annual_rate_bps/fee、installment_items.principal/interest/fee/total；账户类型、账单日、各记录 kind、账户外键、分类/账单的 is_food、happened_at、订阅周期/到期时间、分期期限/还款方式/还款日/计划状态、分期还款账户/自动流水外键、Passkey 公钥凭据和时间戳为明文
 - DEK 按客户端会话仅存服务端内存（`AppState.sessions`）；浏览器只保存无过期时间的 `HttpOnly` 随机会话 Cookie，不保存密码或 DEK。Cookie 丢失、主动锁定或服务重启后需重新使用密码或 Passkey 解锁；`require_unlock` 中间件把未解锁请求重定向到 `/unlock`（无 meta 时去 `/setup`）
 - setup/unlock/recover 表单禁用 htmx boost，确保会话 Cookie 和重定向走完整浏览器导航；解锁成功直接进入 `/dashboard`
 - 密码只用于当次 Argon2id 派生并用 `Zeroizing` 尽快清除，不落盘、不进入 Cookie 或会话；恢复密码会使现有客户端会话全部失效
@@ -38,19 +38,20 @@
 - 账单时间 `happened_at` 精确到分钟（`NaiveDateTime`），表单用 `datetime-local`，格式 `%Y-%m-%dT%H:%M`
 - 删除一律用 POST 表单（`/xxx/{id}/delete`），配合 `hx-confirm` 确认
 - 删账户会级联删其账单、转账和借还记录（FK `on_delete = Cascade`）；删借贷对象会级联删其借还记录
-- 卡号和账户用户名分开加密存于 `account_details`；列表中卡号只显示后四位，用户名显示前三位和后两位（短用户名需进一步掩码）
+- 卡号和账户用户名分开加密存于 `account_details`；列表中卡号只显示后四位，用户名显示前三位和后两位（短用户名需进一步掩码）。账户详情页也默认只显示卡号掩码，完整卡号不得写入页面 HTML；用户点击复制时才通过已解锁会话保护且禁止缓存的接口读取并直接写入剪贴板，不在页面上展开
+- 所有包含时分的业务时间（账单、转账、借还、余额调整、订阅到期等）统一以 UTC 存储；无时区的数据库 `DateTime` 列按 UTC 解释。`datetime-local` 在浏览器中显示/接收访问者当地时间，提交前转换为 UTC，所有时间戳展示也由浏览器转换回访问者当地时间；账单日、分期到期日等纯日期字段不做时区转换
 - 账户类型直接存于 `accounts.kind`：payment（支付，用户名）、bank（银行，卡号）、stored_value（储值卡，卡号）、credit_card（信用卡，卡号 + 授信额 + 账单日）、credit_service（信贷服务，用户名 + 授信额 + 账单日）、investment（投资）、other（其他）；切换类型需清除不适用的账户详情
-- 授信额以整数分加密存于 `account_details.credit_limit`，账单日明文存于 `billing_day`（1..=31）；账单的账户下拉和列表需附带掩码后的卡号或用户名
+- 授信额以整数分加密存于 `account_details.credit_limit`，允许为 0；0 授信的信用卡或信贷服务不允许出现负余额。账单日明文存于 `billing_day`（1..=31）；账单的账户下拉和列表需附带掩码后的卡号或用户名
 - 默认货币存于单行 `preferences` 表，首次为 CNY；账户原币存于 `accounts.currency`，订阅原币存于 `subscriptions.currency`。账单和借还金额以关联账户的原币计价，单账户余额始终显示原币；仪表板、账单汇总/金额搜索、借贷汇总和统计统一按当日最近可用汇率折算为默认货币，禁止直接相加不同货币金额
 - 汇率使用 Frankfurter v2 的公开参考汇率并持久缓存于 `exchange_rates`；支持货币包含 TRY（土耳其里拉）和 RUB（俄罗斯卢布）；休市日取最近可用交易日，网络失败时可回退已有的同货币对历史缓存，无任何缓存时必须向客户端显示明确错误，禁止静默按 1:1 换算。`/currency-converter` 提供独立参考换算并显示汇率数据日期和缓存抓取更新时间
 - 跨币种转账的表单金额是转出账户原币，实际转入金额默认按操作当日的当前可用汇率填写，但允许用户按真实到账金额覆盖；`transfers.amount` 保存转出金额，`transfers.to_amount` 保存最终转入金额。删除、余额计算和流水展示必须分别使用两端金额。同币种转账禁止自定义转入金额。已有余额或流水的账户禁止直接修改货币
 - 除信用卡和信贷服务外，所有账户余额都不得低于 0；信用卡和信贷服务的余额不得低于负授信额，且不能作为转账的转出账户（允许其他账户向其转入）。普通支出、订阅支出、转账、借还、删除记录、修改账户类型/授信额和强制余额等所有可能降低余额的入口都必须在写库前校验，不能绕过限制
-- 强制设置余额不创建账单；将“目标余额 - 当前资金记录净额”以整数分加密存入 `accounts.balance_offset`。账户余额为 offset 加账单、转账和借还记录的资金净额
+- 强制设置余额将“目标余额 - 当前资金记录净额”以整数分加密存入 `accounts.balance_offset`，并在同一事务中向 `balance_adjustments` 写入加密的调整前/后余额作为不可删除的审计流水；账户余额为 offset 加账单、转账和借还记录的资金净额，余额调整流水本身不重复影响余额，也不计入收入/支出统计
 - 转账单独存于 `transfers`，转出账户扣款、转入账户加款，不计入普通收入/支出汇总
 - 借还记录 kind：lend（我借给对方，账户扣款）、borrow（我向对方借入，账户加款）、repayment_received（对方还我，账户加款）、repayment_paid（我还对方，账户扣款）；借贷对象单独存于 `debt_people`
 - 收支分类由设置页 CRUD，存于 `categories`；新建或编辑账单只能选择对应 income/expense 类型下仍存在的分类，删除分类不改写历史账单
 - 支出分类可标记 `is_food`；创建或编辑账单时将标记快照存入 `bills.is_food`，保证分类后续改名或删除不改变历史恩格尔系数。恩格尔系数按本月食品支出 / 本月总支出计算
-- 订阅服务存于 `subscriptions`，包含服务名、每次金额、支出分类、周期（day/week/month/quarter/year）、到期时间和备注；订阅页按到期时间展示状态，一键支出时由用户选择账户并生成普通 expense 账单，成功后以到期时间和当前时间中较晚者为基准自动顺延一个周期；订阅仍可手动删除
+- 订阅服务存于 `subscriptions`，包含服务名、每次金额、支出分类、周期（day/week/month/quarter/year）、到期时间和备注；订阅页按到期时间展示状态，一键支出时由用户选择账户并生成完全独立的普通 expense 账单，成功后以到期时间和当前时间中较晚者为基准自动顺延一个周期；订阅仍可手动删除，删除订阅不得影响此前生成的账单
 - 只有信用卡或信贷服务的 expense 账单可以创建分期。短期可选 3/6/9/12/24 期，24 期以上按 3/5/10/15/20/30 年选择但仍逐月生成月供；还款方式支持等额本息、等额本金、等本等息，年利率和总手续费由用户分别输入，总手续费均摊到各期。`installment_plans` 与原账单一对一，`installment_items` 固化每期本金、利息、手续费和合计；分期账单禁止直接编辑。每期还款必须选择一个与信用账户同币种的非信用账户，信用卡/信贷服务禁止作为还款渠道；还款操作在一个数据库事务中把本金自动转账至信用账户、把利息与手续费自动记为“分期费用”支出并保存两条流水 ID，然后才标记已还。自动流水禁止单独编辑或删除，只能从分期详情撤销；已有还款时禁止删除原分期账单
 - `/installments` 是独立分期看板并显示在顶部导航，详情页逐月展示还款日、本金、利息、手续费、月供和逾期/已还状态；计划列表和期次表均分页。原 expense 账单在创建时立即按全部消费本金影响信用账户余额，计划利息与手续费仅在实际还款时计入账户余额
 - `/dashboard` 对用户统一称为“仪表板”，集中账户概览、快速记账及收支图表，底部不再显示账单流水；普通收支、转账与借还必须合并在同一“快速记账”卡片内用页签切换，不能再拆成独立操作卡片。日报按今日 24 小时、周/月/年报分别按近 7/30/365 个自然日聚合，Chart.js 使用平滑面积折线图；普通收支汇总和图表仍不包含转账与借还。`/transfers`、`/debts` 的 GET 只重定向到仪表板。借贷对象由 `/debt-people` 独立管理并显示在顶部导航

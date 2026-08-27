@@ -17,8 +17,8 @@ use std::{collections::HashMap, str::FromStr};
 use crate::{
     crypto, currency,
     entity::{
-        account, account_detail, bill, category, debt_person, debt_record, installment_item,
-        installment_plan, transfer,
+        account, account_detail, balance_adjustment, bill, category, debt_person, debt_record,
+        installment_item, installment_plan, transfer,
     },
     AppState, SessionDek,
 };
@@ -361,7 +361,6 @@ fn signed_amount(kind: &str, amount: i64) -> HandlerResult<i64> {
 }
 
 const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
-const DISPLAY_FMT: &str = "%Y-%m-%d %H:%M";
 
 fn parse_form(form: BillFormData) -> HandlerResult<ParsedBill> {
     let account_id: i64 = form
@@ -545,7 +544,7 @@ pub(crate) async fn ledger_rows(
             .unwrap_or(&default_currency);
         let converted = rates.convert(amount, bill_currency).map_err(err500)?;
         rows.push(LedgerRow {
-            happened_at: bill.happened_at.format(DISPLAY_FMT).to_string(),
+            happened_at: bill.happened_at.format(TIME_FMT).to_string(),
             record_type: if incoming {
                 "收入".into()
             } else if installment_plan_ids.contains_key(&bill.id) {
@@ -604,7 +603,7 @@ pub(crate) async fn ledger_rows(
             .map(String::as_str)
             .unwrap_or(&default_currency);
         rows.push(LedgerRow {
-            happened_at: transfer.happened_at.format(DISPLAY_FMT).to_string(),
+            happened_at: transfer.happened_at.format(TIME_FMT).to_string(),
             record_type: "转账".into(),
             account_name: format!(
                 "{} → {}",
@@ -653,7 +652,7 @@ pub(crate) async fn ledger_rows(
             .unwrap_or(&default_currency);
         let converted = rates.convert(amount, record_currency).map_err(err500)?;
         rows.push(LedgerRow {
-            happened_at: record.happened_at.format(DISPLAY_FMT).to_string(),
+            happened_at: record.happened_at.format(TIME_FMT).to_string(),
             record_type: debt_kind_label(&record.kind).into(),
             account_name: account_names
                 .get(&record.account_id)
@@ -682,6 +681,43 @@ pub(crate) async fn ledger_rows(
             sort_key: record.happened_at,
             bill_kind: String::new(),
             amount_cents: converted,
+            is_expense: false,
+        });
+    }
+
+    for adjustment in balance_adjustment::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+    {
+        let adjustment_currency = account_currencies
+            .get(&adjustment.account_id)
+            .map(String::as_str)
+            .unwrap_or(&default_currency);
+        let from_balance = crypto::decrypt_cents(dek, &adjustment.from_balance);
+        let to_balance = crypto::decrypt_cents(dek, &adjustment.to_balance);
+        rows.push(LedgerRow {
+            happened_at: adjustment.happened_at.format(TIME_FMT).to_string(),
+            record_type: "余额调整".into(),
+            account_name: account_names
+                .get(&adjustment.account_id)
+                .cloned()
+                .unwrap_or_else(|| "已删除账户".into()),
+            subject: "强制设置余额".into(),
+            note: format!(
+                "{} → {}",
+                currency::format(from_balance, adjustment_currency),
+                currency::format(to_balance, adjustment_currency)
+            ),
+            amount: currency::format(to_balance, adjustment_currency),
+            money_class: "text-amber-700".into(),
+            edit_url: String::new(),
+            detail_url: String::new(),
+            delete_action: String::new(),
+            delete_confirm: String::new(),
+            sort_key: adjustment.happened_at,
+            bill_kind: String::new(),
+            amount_cents: 0,
             is_expense: false,
         });
     }
@@ -876,10 +912,7 @@ pub async fn new_form(
         transfer_sources,
         people: people_options(&state, &dek).await?,
         categories: category_options(&state, &dek).await?,
-        happened_at: chrono::Local::now()
-            .naive_local()
-            .format(TIME_FMT)
-            .to_string(),
+        happened_at: chrono::Utc::now().naive_utc().format(TIME_FMT).to_string(),
         quick_entry_heading: "记一笔".into(),
         quick_redirect_to: "/bills".into(),
         first_due_date: (chrono::Local::now().date_naive() + chrono::Months::new(1))

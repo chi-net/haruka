@@ -132,7 +132,7 @@ pub async fn show(
         .map(|passkey| PasskeyRow {
             id: passkey.id,
             name: crypto::decrypt_string(&dek, &passkey.name),
-            created_at: passkey.created_at.format("%Y-%m-%d %H:%M").to_string(),
+            created_at: passkey.created_at.format("%Y-%m-%dT%H:%M").to_string(),
         })
         .collect();
     let html = SettingsTemplate {

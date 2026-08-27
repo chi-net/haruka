@@ -18,7 +18,7 @@
   <dl class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5 text-sm">
     <div class="bg-gray-50 rounded p-3"><dt class="text-xs text-gray-500">参考汇率</dt><dd class="font-mono mt-1">{{ rate }}</dd></div>
     <div class="bg-gray-50 rounded p-3"><dt class="text-xs text-gray-500">汇率数据日期</dt><dd class="font-mono mt-1">{{ rate_date }}</dd></div>
-    <div class="bg-gray-50 rounded p-3"><dt class="text-xs text-gray-500">上次汇率更新时间</dt><dd class="font-mono mt-1">{{ fetched_at }}</dd></div>
+    <div class="bg-gray-50 rounded p-3"><dt class="text-xs text-gray-500">上次汇率更新时间</dt><dd class="font-mono mt-1">{% if same_currency %}同币种换算，无需更新汇率{% else %}<time data-utc-time="{{ fetched_at }}">{{ fetched_at }}</time>{% endif %}</dd></div>
   </dl>
   {% if !same_currency %}<p class="text-xs text-gray-400 mt-4">参考数据来自 Frankfurter v2。休市日会采用最近可用交易日；网络失败时可能显示本地历史缓存。</p>{% endif %}
 </section>

@@ -19,7 +19,6 @@ use crate::{
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
 const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
-const DISPLAY_FMT: &str = "%Y-%m-%d %H:%M";
 
 fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
@@ -317,7 +316,7 @@ async fn render_list(
     if !query.currency.is_empty() && !currency::valid(&query.currency) {
         query.currency.clear();
     }
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Utc::now().naive_utc();
     let soon = now + Duration::days(7);
     let keyword = query.keyword.trim().to_lowercase();
     let category_filter = query.category.trim().to_lowercase();
@@ -356,7 +355,7 @@ async fn render_list(
                 ),
                 category,
                 period_label: period_label(&subscription.period).into(),
-                expires_at: subscription.expires_at.format(DISPLAY_FMT).to_string(),
+                expires_at: subscription.expires_at.format(TIME_FMT).to_string(),
                 note: crypto::decrypt_string(dek, &subscription.note),
                 expired,
                 due_soon,
@@ -496,10 +495,7 @@ pub async fn new_form(
         currencies: currency::CURRENCIES,
         category: String::new(),
         period: "month".into(),
-        expires_at: chrono::Local::now()
-            .naive_local()
-            .format(TIME_FMT)
-            .to_string(),
+        expires_at: chrono::Utc::now().naive_utc().format(TIME_FMT).to_string(),
         note: String::new(),
     }
     .render()
@@ -602,7 +598,7 @@ pub async fn create_expense(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("付款账户不存在"))?;
-    let now = chrono::Local::now().naive_local();
+    let now = chrono::Utc::now().naive_utc();
     let amount = currency::convert_cents(
         &state,
         subscription_amount,

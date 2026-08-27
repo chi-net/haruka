@@ -53,6 +53,55 @@ window.harukaReadErrorResponse = async function(response) {
   return window.harukaErrorMessage(raw, response.headers.get('content-type') || '', response.status);
 };
 
+// Database datetime values are UTC without a suffix. Datetime pickers and
+// rendered timestamps always use the visitor's browser timezone.
+window.harukaUtcDate = function(value) {
+  if (!value) return null;
+  const normalized = /(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}:00Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+window.harukaLocalDateTimeValue = function(date) {
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+window.harukaUtcDateTimeValue = function(date) {
+  const pad = value => String(value).padStart(2, '0');
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+};
+
+window.harukaInitLocalTimes = function(root) {
+  const scope = root && root.querySelectorAll ? root : document;
+  scope.querySelectorAll('[data-utc-time]').forEach(element => {
+    const raw = element.dataset.utcTime;
+    const date = window.harukaUtcDate(raw);
+    element.textContent = date ? window.harukaLocalDateTimeValue(date).replace('T', ' ') : raw;
+    if (date) element.dateTime = date.toISOString();
+  });
+  scope.querySelectorAll('[data-utc-picker]').forEach(picker => {
+    if (picker.dataset.utcPickerReady === 'true') return;
+    const field = picker.closest('[data-utc-field]');
+    const target = field && field.querySelector('[data-utc-target]');
+    if (!target) return;
+    const stored = target.value || picker.dataset.utcValue;
+    const date = window.harukaUtcDate(stored);
+    if (date) picker.value = window.harukaLocalDateTimeValue(date);
+    const syncUtc = () => {
+      if (!picker.value) {
+        target.value = '';
+        return;
+      }
+      const localDate = new Date(picker.value);
+      target.value = Number.isNaN(localDate.getTime()) ? '' : window.harukaUtcDateTimeValue(localDate);
+    };
+    picker.addEventListener('input', syncUtc);
+    picker.addEventListener('change', syncUtc);
+    picker.dataset.utcPickerReady = 'true';
+  });
+};
+
 window.harukaShowError = function(message, status) {
   let notice = document.getElementById('haruka-error-notice');
   if (!notice) {
@@ -76,6 +125,8 @@ document.addEventListener('htmx:responseError', event => {
 });
 document.addEventListener('htmx:sendError', () => window.harukaShowError('无法连接服务器，请检查网络或服务是否正在运行。'));
 document.addEventListener('htmx:timeout', () => window.harukaShowError('请求超时，请稍后重试。'));
+document.addEventListener('DOMContentLoaded', () => window.harukaInitLocalTimes(document));
+document.addEventListener('htmx:afterSwap', event => window.harukaInitLocalTimes(event.detail.target));
 </script>
 </body>
 </html>

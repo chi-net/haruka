@@ -1,5 +1,6 @@
 pub mod account;
 pub mod account_detail;
+pub mod balance_adjustment;
 pub mod bill;
 pub mod category;
 pub mod debt_person;
