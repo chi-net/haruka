@@ -13,6 +13,8 @@ pub struct Model {
     pub name: String,
     pub dek_nonce: Vec<u8>,
     pub wrapped_dek: Vec<u8>,
+    /// 同一凭据在浏览器/认证器兼容路径下产生的其他 PRF 包裹。
+    pub dek_wrappers: String,
     pub created_at: DateTimeUtc,
 }
 

@@ -60,6 +60,7 @@ function harukaRequestOptions(payload, authenticatorMode) {
 
 function harukaRegistrationCredential(credential) {
   const extensions = credential.getClientExtensionResults();
+  const result = extensions.prf && extensions.prf.results && extensions.prf.results.first;
   return {
     json: {
       id: credential.id,
@@ -72,7 +73,8 @@ function harukaRegistrationCredential(credential) {
       },
       clientExtensionResults: extensions
     },
-    prfEnabled: Boolean(extensions.prf && extensions.prf.enabled)
+    prfEnabled: Boolean(extensions.prf && extensions.prf.enabled),
+    prfResult: harukaBytesToB64url(result)
   };
 }
 
@@ -134,9 +136,11 @@ async function harukaEnrollPasskey(name, authenticatorMode) {
   const confirm = await harukaJson('/settings/passkeys/register/finish', {
     flow_id: start.flow_id,
     credential: registration.json,
-    prf_enabled: registration.prfEnabled
+    prf_enabled: registration.prfEnabled,
+    prf_result: registration.prfResult
   });
-  const asserted = await navigator.credentials.get(harukaRequestOptions(confirm));
+  if (confirm.complete) return;
+  const asserted = await navigator.credentials.get(harukaRequestOptions(confirm, authenticatorMode || 'platform'));
   if (!asserted) throw new Error('浏览器没有确认 Passkey');
   const authentication = harukaAuthenticationCredential(asserted);
   await harukaJson('/settings/passkeys/register/complete', {
@@ -157,7 +161,14 @@ async function harukaLoginWithPasskey(authenticatorMode) {
     credential: authentication.json,
     prf_result: authentication.prfResult
   });
-  return result.redirect || '/dashboard';
+  return result;
+}
+
+async function harukaRepairPasskey(flowId, password) {
+  return harukaJson('/passkey/auth/repair', {
+    flow_id: flowId,
+    password
+  });
 }
 
 function harukaPasskeyError(error) {

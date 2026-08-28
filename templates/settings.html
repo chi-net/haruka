@@ -43,7 +43,7 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium">Passkey 登录</h2>
-  <p class="text-sm text-gray-500 mt-1 mb-3">使用设备解锁、Touch ID、Windows Hello 或安全密钥直接解锁账本，服务重启后也可使用。需要浏览器与认证器支持 WebAuthn PRF。</p>
+  <p class="text-sm text-gray-500 mt-1 mb-3">使用设备解锁、Touch ID、Windows Hello 或安全密钥直接解锁账本，服务重启后也可使用。需要浏览器与认证器支持 WebAuthn PRF；创建与确认会保持同一种认证器路径。</p>
   <form id="passkey-enroll-form" class="flex flex-wrap gap-2 mb-4">
     <input id="passkey-name" required maxlength="80" autocomplete="off" placeholder="例如：MacBook Touch ID" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
     <select id="passkey-authenticator" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">

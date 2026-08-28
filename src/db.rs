@@ -25,6 +25,13 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_passkeys.if_not_exists()))
         .await
         .expect("建表失败");
+    ensure_column(
+        &db,
+        "passkeys",
+        "dek_wrappers",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    .await;
     let mut create_preferences = schema.create_table_from_entity(preference::Entity);
     db.execute(builder.build(create_preferences.if_not_exists()))
         .await

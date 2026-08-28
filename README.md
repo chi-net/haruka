@@ -208,6 +208,8 @@ PASSKEY_ORIGIN=https://haruka.example.com PASSKEY_RP_ID=haruka.example.com cargo
 
 生产环境必须使用 HTTPS。已有 Passkey 与来源和 RP ID 绑定，后续不要随意更改这两个值。
 
+Firefox/macOS 的原生 Passkey 与安全密钥路径曾存在 PRF 输出不一致问题。haruka 注册时会保持创建与确认使用同一种认证器路径；如果已有凭据在 Firefox 返回了不同于注册时的 PRF，登录页会要求输入一次主密码，为该凭据增加当前浏览器的兼容包裹。原有 Safari 或其他浏览器的包裹会保留，不需要删除 Passkey。外部安全密钥用户仍建议使用已包含相关修复的最新 Firefox。
+
 # 预计的 Features
 
 - 内置订阅管理，妈妈再也不用担心我忘了续费啦！

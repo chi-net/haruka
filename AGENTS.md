@@ -25,7 +25,7 @@
 - setup/unlock/recover 表单禁用 htmx boost，确保会话 Cookie 和重定向走完整浏览器导航；解锁成功直接进入 `/dashboard`
 - 密码只用于当次 Argon2id 派生并用 `Zeroizing` 尽快清除，不落盘、不进入 Cookie 或会话；恢复密码会使现有客户端会话全部失效
 - 密码恢复使用 BIP-39 英文 12 词助记词；明文助记词只展示一次且不落盘，`recovery` 表只保存恢复密钥包裹 DEK 后的 nonce + ciphertext；在设置页重置助记词必须重新验证主密码
-- Passkey 使用 WebAuthn 用户验证并要求 PRF 扩展；PRF 以固定域分隔输入产生每凭据 32 字节 KEK，`passkeys` 只保存公钥凭据（含认证器 transports）、PRF-KEK 包裹后的 DEK 和加密名称。注册必须在已解锁设置页完成，默认明确请求可发现的本机平台凭据（兼容 Firefox/macOS 的 iCloud 钥匙串），也允许用户改选手机或安全密钥；登录页将本机和外部认证器拆成两个入口，本机入口必须清空 `allowCredentials` 走可发现凭据流程并提示 `client-device`，外部入口保留凭据白名单并提示 `hybrid`/`security-key`；挑战状态仅在服务端内存保存五分钟且一次性使用；登录成功后仍只创建普通内存 DEK 会话。本地默认来源为当前监听端口对应的 `http://localhost:<端口>`，部署时用 `PASSKEY_ORIGIN` 和 `PASSKEY_RP_ID` 固定配置，来源/RP ID 变更会使已有 Passkey 不可用
+- Passkey 使用 WebAuthn 用户验证并要求 PRF 扩展；PRF 以固定域分隔输入产生每凭据 32 字节 KEK，`passkeys` 只保存公钥凭据（含认证器 transports）、PRF-KEK 包裹后的 DEK 和加密名称。注册必须在已解锁设置页完成，优先直接使用 `create()` 返回的 PRF；若需追加认证，必须继续使用用户选择的本机或外部认证器模式，禁止切换路径。默认明确请求可发现的本机平台凭据（兼容 Firefox/macOS 的 iCloud 钥匙串），也允许用户改选手机或安全密钥；登录页将本机和外部认证器拆成两个入口，本机入口必须清空 `allowCredentials` 走可发现凭据流程并提示 `client-device`，外部入口保留凭据白名单并提示 `hybrid`/`security-key`。若 Firefox/macOS 等实现对同一凭据返回不同的 PRF，验证 WebAuthn 后允许用户用主密码做一次兼容绑定，将额外 PRF 包裹存入 `passkeys.dek_wrappers`，登录时依次尝试且不得覆盖原包裹；修复流只在服务端内存保存五分钟。普通挑战状态同样仅在服务端内存保存五分钟且一次性使用；登录成功后仍只创建普通内存 DEK 会话。本地默认来源为当前监听端口对应的 `http://localhost:<端口>`，部署时用 `PASSKEY_ORIGIN` 和 `PASSKEY_RP_ID` 固定配置，来源/RP ID 变更会使已有 Passkey 不可用
 - 不提供能在重启后独立解锁数据的 TOTP：6 位动态码不能安全充当 KEK，若服务端可读取 TOTP 种子再解密 DEK，会破坏数据库静态加密的威胁模型
 - 加解密统一走 `crypto` 模块（`encrypt`/`decrypt_string`/`encrypt_cents`/`decrypt_cents`），handler 里不要直接碰密文
 - 加密字段无法 SQL 筛选/排序/求和，汇总统计都在 Rust 里做
@@ -39,7 +39,7 @@
 - 删除一律用 POST 表单（`/xxx/{id}/delete`），配合 `hx-confirm` 确认
 - 删账户会级联删其账单、转账和借还记录（FK `on_delete = Cascade`）；删借贷对象会级联删其借还记录
 - 卡号和账户用户名分开加密存于 `account_details`；列表中卡号只显示后四位，用户名显示前三位和后两位（短用户名需进一步掩码）。账户详情页也默认只显示卡号掩码，完整卡号不得写入页面 HTML；用户点击复制时才通过已解锁会话保护且禁止缓存的接口读取并直接写入剪贴板，不在页面上展开
-- 所有包含时分的业务时间（账单、转账、借还、余额调整、订阅到期等）统一以 UTC 存储；无时区的数据库 `DateTime` 列按 UTC 解释。`datetime-local` 在浏览器中显示/接收访问者当地时间，提交前转换为 UTC，所有时间戳展示也由浏览器转换回访问者当地时间；账单日、分期到期日等纯日期字段不做时区转换
+- 所有包含时分的业务时间（账单、转账、借还、余额调整、订阅到期等）统一以 UTC 存储；旧数据同样已经按 UTC+0 存储，不得进行时区迁移或整体偏移。无时区的数据库 `DateTime` 列按 UTC 解释。`datetime-local` 在浏览器中显示/接收访问者当地时间，提交前转换为 UTC，所有时间戳展示也由浏览器转换回访问者当地时间；账单日、分期到期日等纯日期字段不做时区转换
 - 账户类型直接存于 `accounts.kind`：payment（支付，用户名）、bank（银行，卡号）、stored_value（储值卡，卡号）、credit_card（信用卡，卡号 + 授信额 + 账单日）、credit_service（信贷服务，用户名 + 授信额 + 账单日）、investment（投资）、other（其他）；切换类型需清除不适用的账户详情
 - 授信额以整数分加密存于 `account_details.credit_limit`，允许为 0；0 授信的信用卡或信贷服务不允许出现负余额。账单日明文存于 `billing_day`（1..=31）；账单的账户下拉和列表需附带掩码后的卡号或用户名
 - 默认货币存于单行 `preferences` 表，首次为 CNY；账户原币存于 `accounts.currency`，订阅原币存于 `subscriptions.currency`。账单和借还金额以关联账户的原币计价，单账户余额始终显示原币；仪表板、账单汇总/金额搜索、借贷汇总和统计统一按当日最近可用汇率折算为默认货币，禁止直接相加不同货币金额

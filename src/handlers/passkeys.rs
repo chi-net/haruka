@@ -8,11 +8,16 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use webauthn_rs::prelude::{Passkey, PublicKeyCredential, RegisterPublicKeyCredential, Uuid};
+use zeroize::Zeroizing;
 
-use crate::{crypto, entity::passkey, AppState, SessionDek};
+use crate::{
+    crypto,
+    entity::{meta, passkey},
+    AppState, SessionDek,
+};
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
 
@@ -20,6 +25,13 @@ const CEREMONY_TTL: Duration = Duration::from_secs(5 * 60);
 const USER_ID: u128 = 0x6861_7275_6b61_0000_0000_0000_0000_0001;
 // WebAuthn PRF 的输入不需要保密；固定且带域分隔的输入可让同一凭据稳定地产生 KEK。
 const PRF_INPUT: &[u8] = b"haruka passkey DEK wrapping key v1";
+const MAX_COMPATIBLE_WRAPPERS: usize = 8;
+
+#[derive(Serialize, Deserialize)]
+struct CompatibleWrapper {
+    dek_nonce: String,
+    wrapped_dek: String,
+}
 
 fn err500(error: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
@@ -45,6 +57,80 @@ fn decode_prf(value: &str) -> HandlerResult<[u8; crypto::DEK_LEN]> {
 fn passkey_from_row(row: &passkey::Model) -> HandlerResult<Passkey> {
     serde_json::from_str(&row.credential)
         .map_err(|error| err500(format!("Passkey 数据损坏: {error}")))
+}
+
+fn compatible_wrappers(row: &passkey::Model) -> HandlerResult<Vec<CompatibleWrapper>> {
+    serde_json::from_str(&row.dek_wrappers)
+        .map_err(|error| err500(format!("Passkey 兼容密钥数据损坏: {error}")))
+}
+
+fn unwrap_passkey_dek(row: &passkey::Model, kek: &[u8]) -> HandlerResult<Option<crypto::Dek>> {
+    if let Some(dek) = crypto::unwrap_dek(&row.dek_nonce, &row.wrapped_dek, kek) {
+        return Ok(Some(dek));
+    }
+    for wrapper in compatible_wrappers(row)? {
+        let nonce = URL_SAFE_NO_PAD
+            .decode(wrapper.dek_nonce)
+            .map_err(|_| err500("Passkey 兼容 nonce 数据损坏"))?;
+        let wrapped = URL_SAFE_NO_PAD
+            .decode(wrapper.wrapped_dek)
+            .map_err(|_| err500("Passkey 兼容密钥数据损坏"))?;
+        if let Some(dek) = crypto::unwrap_dek(&nonce, &wrapped, kek) {
+            return Ok(Some(dek));
+        }
+    }
+    Ok(None)
+}
+
+async fn add_compatible_wrapper(
+    state: &AppState,
+    row: passkey::Model,
+    dek: &crypto::Dek,
+    kek: &[u8],
+) -> HandlerResult<()> {
+    if unwrap_passkey_dek(&row, kek)?.is_some() {
+        return Ok(());
+    }
+    let mut wrappers = compatible_wrappers(&row)?;
+    if wrappers.len() >= MAX_COMPATIBLE_WRAPPERS {
+        return Err(bad_request("这个 Passkey 的浏览器兼容绑定数量已达上限"));
+    }
+    let (nonce, wrapped) = crypto::wrap_dek(dek, kek);
+    wrappers.push(CompatibleWrapper {
+        dek_nonce: URL_SAFE_NO_PAD.encode(nonce),
+        wrapped_dek: URL_SAFE_NO_PAD.encode(wrapped),
+    });
+    let mut active = row.into_active_model();
+    active.dek_wrappers = Set(serde_json::to_string(&wrappers).map_err(err500)?);
+    active.update(&state.db).await.map_err(err500)?;
+    Ok(())
+}
+
+async fn store_registered_passkey(
+    state: &AppState,
+    dek: &crypto::Dek,
+    credential: Passkey,
+    name: &str,
+    prf_result: &str,
+) -> HandlerResult<()> {
+    let kek = decode_prf(prf_result)?;
+    let (dek_nonce, wrapped_dek) = crypto::wrap_dek(dek, &kek);
+    let credential_id = credential.cred_id().as_ref().to_vec();
+    let credential = serde_json::to_string(&credential).map_err(err500)?;
+    passkey::ActiveModel {
+        credential_id: Set(credential_id),
+        credential: Set(credential),
+        name: Set(crypto::encrypt(dek, name.as_bytes())),
+        dek_nonce: Set(dek_nonce),
+        wrapped_dek: Set(wrapped_dek),
+        dek_wrappers: Set("[]".into()),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    }
+    .insert(&state.db)
+    .await
+    .map_err(err500)?;
+    Ok(())
 }
 
 async fn all_passkeys(state: &AppState) -> HandlerResult<Vec<(passkey::Model, Passkey)>> {
@@ -105,10 +191,13 @@ pub struct FinishRegistration {
     flow_id: String,
     credential: RegisterPublicKeyCredential,
     prf_enabled: bool,
+    #[serde(default)]
+    prf_result: Option<String>,
 }
 
 pub async fn finish_registration(
     State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Json(form): Json<FinishRegistration>,
 ) -> HandlerResult<Json<Value>> {
     let entry = state
@@ -143,7 +232,12 @@ pub async fn finish_registration(
         return Err(bad_request("该 Passkey 已注册"));
     }
 
-    // 注册响应常常只报告 PRF 已启用而不返回结果，因此固定追加一次认证来取得 KEK。
+    if let Some(prf_result) = form.prf_result.filter(|value| !value.is_empty()) {
+        store_registered_passkey(&state, &dek, credential, &name, &prf_result).await?;
+        return Ok(Json(json!({ "ok": true, "complete": true })));
+    }
+
+    // 部分认证器在创建时只报告 PRF 已启用而不返回结果，此时追加一次同路径认证取得 KEK。
     let (options, authentication) = state
         .webauthn
         .start_passkey_authentication(std::slice::from_ref(&credential))
@@ -159,6 +253,7 @@ pub async fn finish_registration(
         (Instant::now(), authentication, credential, name),
     );
     Ok(Json(json!({
+        "complete": false,
         "flow_id": id,
         "options": options,
         "prf_input": URL_SAFE_NO_PAD.encode(PRF_INPUT),
@@ -193,22 +288,7 @@ pub async fn complete_registration(
     }
     credential.update_credential(&result);
 
-    let kek = decode_prf(&form.prf_result)?;
-    let (dek_nonce, wrapped_dek) = crypto::wrap_dek(&dek, &kek);
-    let credential_id = credential.cred_id().as_ref().to_vec();
-    let credential = serde_json::to_string(&credential).map_err(err500)?;
-    passkey::ActiveModel {
-        credential_id: Set(credential_id),
-        credential: Set(credential),
-        name: Set(crypto::encrypt(&dek, name.as_bytes())),
-        dek_nonce: Set(dek_nonce),
-        wrapped_dek: Set(wrapped_dek),
-        created_at: Set(chrono::Utc::now()),
-        ..Default::default()
-    }
-    .insert(&state.db)
-    .await
-    .map_err(err500)?;
+    store_registered_passkey(&state, &dek, credential, &name, &form.prf_result).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -273,17 +353,95 @@ pub async fn finish_authentication(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("Passkey 不存在"))?;
-    let kek = decode_prf(&form.prf_result)?;
-    let dek = crypto::unwrap_dek(&row.dek_nonce, &row.wrapped_dek, kek)
-        .ok_or_else(|| bad_request("Passkey PRF 输出无法解锁数据"))?;
-
     let mut credential = passkey_from_row(&row)?;
     if credential.update_credential(&result) == Some(true) {
         let encoded = serde_json::to_string(&credential).map_err(err500)?;
-        let mut active = row.into_active_model();
+        let mut active = row.clone().into_active_model();
         active.credential = Set(encoded);
         active.update(&state.db).await.map_err(err500)?;
     }
+    let kek = crypto::Dek::new(decode_prf(&form.prf_result)?);
+    let Some(dek) = unwrap_passkey_dek(&row, kek.as_slice())? else {
+        let id = flow_id();
+        let mut repairs = state.passkey_repairs.lock().await;
+        repairs.retain(|_, (created, _, _)| created.elapsed() < CEREMONY_TTL);
+        if repairs.len() >= 64 {
+            repairs.clear();
+        }
+        repairs.insert(id.clone(), (Instant::now(), row.id, kek));
+        let mut response = Json(json!({
+            "repair_required": true,
+            "repair_flow_id": id,
+            "error": "Firefox/macOS 返回了与注册时不同的 PRF 输出，请用主密码进行一次兼容绑定"
+        }))
+        .into_response();
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            "no-store".parse().expect("固定响应头无效"),
+        );
+        return Ok(response);
+    };
+    crate::handlers::auth::ensure_default_account(&state, &dek).await?;
+    state.remove_session(&headers);
+    let mut response = Json(json!({ "redirect": "/dashboard" })).into_response();
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, state.create_session(&dek));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        "no-store".parse().expect("固定响应头无效"),
+    );
+    Ok(response)
+}
+
+#[derive(Deserialize)]
+pub struct RepairAuthentication {
+    flow_id: String,
+    password: String,
+}
+
+pub async fn repair_authentication(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(form): Json<RepairAuthentication>,
+) -> HandlerResult<Response> {
+    let entry = {
+        let mut repairs = state.passkey_repairs.lock().await;
+        repairs.retain(|_, (created, _, _)| created.elapsed() < CEREMONY_TTL);
+        repairs.get(&form.flow_id).cloned()
+    };
+    let Some((created, passkey_id, passkey_kek)) = entry else {
+        return Err(bad_request(
+            "Passkey 兼容修复请求不存在或已过期，请重新使用 Passkey",
+        ));
+    };
+    if created.elapsed() >= CEREMONY_TTL {
+        return Err(bad_request(
+            "Passkey 兼容修复请求已过期，请重新使用 Passkey",
+        ));
+    }
+
+    let password = Zeroizing::new(form.password);
+    let metadata = meta::Entity::find_by_id(1)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "尚未设置密码".into()))?;
+    let password_kek = crypto::derive_kek(password.as_str(), &metadata.salt);
+    let dek = crypto::unwrap_dek(
+        &metadata.dek_nonce,
+        &metadata.wrapped_dek,
+        password_kek.as_slice(),
+    )
+    .ok_or((StatusCode::UNAUTHORIZED, "主密码错误".into()))?;
+    let row = passkey::Entity::find_by_id(passkey_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("Passkey 不存在"))?;
+    add_compatible_wrapper(&state, row, &dek, passkey_kek.as_slice()).await?;
+    state.passkey_repairs.lock().await.remove(&form.flow_id);
+
     crate::handlers::auth::ensure_default_account(&state, &dek).await?;
     state.remove_session(&headers);
     let mut response = Json(json!({ "redirect": "/dashboard" })).into_response();

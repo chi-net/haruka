@@ -126,6 +126,7 @@ pub struct AppState {
         Arc<tokio::sync::Mutex<HashMap<String, (Instant, PasskeyAuthentication, Passkey, String)>>>,
     passkey_authentications:
         Arc<tokio::sync::Mutex<HashMap<String, (Instant, PasskeyAuthentication)>>>,
+    passkey_repairs: Arc<tokio::sync::Mutex<HashMap<String, (Instant, i64, Dek)>>>,
 }
 
 impl AppState {
@@ -223,6 +224,7 @@ async fn main() {
         passkey_registrations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         passkey_enrollments: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         passkey_authentications: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        passkey_repairs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
 
     let protected = Router::new()
@@ -383,6 +385,10 @@ async fn main() {
         .route(
             "/passkey/auth/finish",
             post(handlers::passkeys::finish_authentication),
+        )
+        .route(
+            "/passkey/auth/repair",
+            post(handlers::passkeys::repair_authentication),
         )
         .merge(protected)
         .with_state(state)
