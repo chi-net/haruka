@@ -23,6 +23,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY templates ./templates
 COPY --from=web-assets /app/static/app.css ./static/app.css
+COPY static/service-worker.js ./static/service-worker.js
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
