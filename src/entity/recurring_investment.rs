@@ -12,6 +12,8 @@ pub struct Model {
     pub fund_account_id: i64,
     /// 每个交易日从扣款账户转出的整数分（密文）。
     pub amount: String,
+    /// 手续费率基点（1 bp = 0.01%）密文。
+    pub fee_rate_bps: String,
     pub start_date: Date,
     pub next_trade_date: Date,
     pub active: bool,

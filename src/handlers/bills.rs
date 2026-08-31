@@ -18,7 +18,7 @@ use crate::{
     crypto, currency,
     entity::{
         account, account_detail, balance_adjustment, bill, category, debt_person, debt_record,
-        installment_item, installment_plan, transfer,
+        installment_item, installment_plan, investment_execution, transfer,
     },
     AppState, SessionDek,
 };
@@ -994,6 +994,17 @@ pub async fn edit_form(
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
+    if investment_execution::Entity::find()
+        .filter(investment_execution::Column::FeeBillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "定投手续费流水不能单独编辑；删除定投计划不会影响已有手续费流水",
+        ));
+    }
     if installment_item::Entity::find()
         .filter(installment_item::Column::ChargeBillId.eq(id))
         .one(&state.db)
@@ -1047,6 +1058,17 @@ pub async fn update(
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
+    if investment_execution::Entity::find()
+        .filter(investment_execution::Column::FeeBillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "定投手续费流水不能单独编辑；删除定投计划不会影响已有手续费流水",
+        ));
+    }
     if installment_item::Entity::find()
         .filter(installment_item::Column::ChargeBillId.eq(id))
         .one(&state.db)
@@ -1115,6 +1137,17 @@ pub async fn delete(
     Form(form): Form<DeleteFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
+    if investment_execution::Entity::find()
+        .filter(investment_execution::Column::FeeBillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "定投手续费流水不能单独删除；删除定投计划不会影响已有手续费流水",
+        ));
+    }
     if installment_item::Entity::find()
         .filter(installment_item::Column::ChargeBillId.eq(id))
         .one(&state.db)

@@ -1,17 +1,17 @@
 {% extends "base.html" %}
-{% block title %}设置余额 - haruka{% endblock %}
+{% block title %}{{ heading }} - haruka{% endblock %}
 {% block content %}
 <div class="max-w-md">
-  <h1 class="text-xl font-bold mb-2">设置账户余额</h1>
+  <h1 class="text-xl font-bold mb-2">{{ heading }}</h1>
   <p class="text-sm text-gray-500 mb-4">{{ account_name }} 当前余额：<span class="font-mono text-gray-900">{{ current_balance }}</span></p>
-  <form method="post" action="{{ action }}" hx-confirm="确认强制设置该账户的余额？" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
+  <form method="post" action="{{ action }}" hx-confirm="{{ confirm_message }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
     <div>
       <label class="block text-sm text-gray-600 mb-1">目标余额</label>
       <input name="balance" inputmode="decimal" required autofocus placeholder="0.00" class="w-full border border-gray-300 rounded px-3 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-      <p class="text-xs text-gray-400 mt-1">最多保留两位小数，并会在账单中新增一条不可删除的“余额调整”流水。普通账户不允许负数；信用账户不能低于负授信额。</p>
+      <p class="text-xs text-gray-400 mt-1">{{ help }}</p>
     </div>
     <div class="flex gap-3">
-      <button type="submit" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">设置余额</button>
+      <button type="submit" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">{{ button_label }}</button>
       <a href="/accounts" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300 hover:bg-gray-50">取消</a>
     </div>
   </form>

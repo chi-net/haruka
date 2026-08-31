@@ -16,7 +16,10 @@ use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto,
-    entity::{account, investment_execution, market_closed_day, recurring_investment, transfer},
+    entity::{
+        account, bill, category, investment_execution, market_closed_day, recurring_investment,
+        transfer,
+    },
     AppState, SessionDek,
 };
 
@@ -44,6 +47,36 @@ fn parse_amount(value: &str) -> HandlerResult<i64> {
     (decimal * Decimal::from(100))
         .to_i64()
         .ok_or_else(|| bad_request("定投金额超出范围"))
+}
+
+fn parse_fee_rate_bps(value: &str) -> HandlerResult<i64> {
+    if value.trim().is_empty() {
+        return Ok(0);
+    }
+    let decimal = Decimal::from_str(value.trim())
+        .map_err(|_| bad_request("手续费率格式不正确"))?
+        .round_dp(2);
+    if decimal < Decimal::ZERO || decimal > Decimal::from(100) {
+        return Err(bad_request("手续费率必须位于 0% 到 100% 之间"));
+    }
+    (decimal * Decimal::from(100))
+        .to_i64()
+        .ok_or_else(|| bad_request("手续费率超出范围"))
+}
+
+fn format_fee_rate(bps: i64) -> String {
+    format!("{}%", Decimal::new(bps, 2).normalize())
+}
+
+fn calculate_fee(amount: i64, fee_rate_bps: i64) -> HandlerResult<i64> {
+    let numerator = i128::from(amount)
+        .checked_mul(i128::from(fee_rate_bps))
+        .ok_or_else(|| bad_request("手续费计算超出范围"))?;
+    let rounded = numerator
+        .checked_add(5_000)
+        .ok_or_else(|| bad_request("手续费计算超出范围"))?
+        / 10_000;
+    i64::try_from(rounded).map_err(|_| bad_request("手续费计算超出范围"))
 }
 
 async fn is_trading_day(state: &AppState, date: NaiveDate) -> HandlerResult<bool> {
@@ -83,6 +116,7 @@ struct PlanRow {
     from_account: String,
     fund_account: String,
     amount: String,
+    fee_rate: String,
     currency: String,
     start_date: String,
     next_trade_date: String,
@@ -97,6 +131,7 @@ struct ExecutionRow {
     from_account: String,
     fund_account: String,
     amount: String,
+    fee: String,
 }
 
 struct ClosedDayRow {
@@ -127,6 +162,7 @@ struct InvestmentFormTemplate {
     action: String,
     name: String,
     amount: String,
+    fee_rate: String,
     from_account_id: i64,
     fund_account_id: i64,
     start_date: String,
@@ -153,6 +189,8 @@ pub struct InvestmentsQuery {
 pub struct InvestmentFormData {
     name: String,
     amount: String,
+    #[serde(default)]
+    fee_rate: String,
     from_account_id: i64,
     fund_account_id: i64,
     start_date: String,
@@ -164,6 +202,7 @@ pub struct InvestmentFormData {
 struct ParsedInvestment {
     name: String,
     amount: i64,
+    fee_rate_bps: i64,
     from_account: account::Model,
     fund_account: account::Model,
     start_date: NaiveDate,
@@ -233,6 +272,7 @@ async fn parse_form(state: &AppState, form: InvestmentFormData) -> HandlerResult
     Ok(ParsedInvestment {
         name: name.into(),
         amount: parse_amount(&form.amount)?,
+        fee_rate_bps: parse_fee_rate_bps(&form.fee_rate)?,
         from_account,
         fund_account,
         start_date,
@@ -291,6 +331,7 @@ pub async fn list(
                     crypto::decrypt_cents(&dek, &plan.amount),
                     &currency,
                 ),
+                fee_rate: format_fee_rate(crypto::decrypt_cents(&dek, &plan.fee_rate_bps)),
                 currency,
                 start_date: plan.start_date.format("%Y-%m-%d").to_string(),
                 next_trade_date: plan.next_trade_date.format("%Y-%m-%d").to_string(),
@@ -343,6 +384,13 @@ pub async fn list(
         .into_iter()
         .map(|transfer| (transfer.id, transfer))
         .collect::<HashMap<_, _>>();
+    let bills = bill::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|bill| (bill.id, bill))
+        .collect::<HashMap<_, _>>();
     let executions = investment_execution::Entity::find()
         .order_by_desc(investment_execution::Column::TradeDate)
         .order_by_desc(investment_execution::Column::Id)
@@ -355,6 +403,11 @@ pub async fn list(
             let currency = account_currencies
                 .get(&transfer.from_account_id)
                 .cloned()
+                .unwrap_or_default();
+            let fee = execution
+                .fee_bill_id
+                .and_then(|id| bills.get(&id))
+                .map(|bill| crypto::decrypt_cents(&dek, &bill.amount))
                 .unwrap_or_default();
             Some(ExecutionRow {
                 plan_name: all_plans
@@ -374,6 +427,7 @@ pub async fn list(
                     crypto::decrypt_cents(&dek, &transfer.amount),
                     &currency,
                 ),
+                fee: crate::currency::format(fee, &currency),
             })
         })
         .take(50)
@@ -434,6 +488,7 @@ pub async fn new_form(
         action: "/investments".into(),
         name: String::new(),
         amount: String::new(),
+        fee_rate: "0.00".into(),
         from_account_id: 0,
         fund_account_id: 0,
         start_date: today.clone(),
@@ -464,6 +519,7 @@ pub async fn create(
         from_account_id: Set(parsed.from_account.id),
         fund_account_id: Set(parsed.fund_account.id),
         amount: Set(crypto::encrypt_cents(&dek, parsed.amount)),
+        fee_rate_bps: Set(crypto::encrypt_cents(&dek, parsed.fee_rate_bps)),
         start_date: Set(parsed.start_date),
         next_trade_date: Set(next_trade_date),
         active: Set(parsed.active),
@@ -503,6 +559,7 @@ pub async fn edit_form(
         action: format!("/investments/{id}/edit"),
         name: crypto::decrypt_string(&dek, &plan.name),
         amount: super::fmt_cents(crypto::decrypt_cents(&dek, &plan.amount)),
+        fee_rate: super::fmt_cents(crypto::decrypt_cents(&dek, &plan.fee_rate_bps)),
         from_account_id: plan.from_account_id,
         fund_account_id: plan.fund_account_id,
         start_date: start_date.clone(),
@@ -541,6 +598,7 @@ pub async fn update(
     active.from_account_id = Set(parsed.from_account.id);
     active.fund_account_id = Set(parsed.fund_account.id);
     active.amount = Set(crypto::encrypt_cents(&dek, parsed.amount));
+    active.fee_rate_bps = Set(crypto::encrypt_cents(&dek, parsed.fee_rate_bps));
     active.start_date = Set(parsed.start_date);
     active.next_trade_date = Set(next_trade_date);
     active.active = Set(parsed.active);
@@ -579,6 +637,30 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> Handl
         return Err((StatusCode::NOT_FOUND, "定投计划不存在".into()));
     }
     Ok(Redirect::to("/investments"))
+}
+
+async fn ensure_fee_category(state: &AppState, dek: &crypto::Dek) -> HandlerResult<()> {
+    let exists = category::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .any(|item| {
+            item.kind == "expense" && crypto::decrypt_string(dek, &item.name) == "投资手续费"
+        });
+    if !exists {
+        category::ActiveModel {
+            kind: Set("expense".into()),
+            name: Set(crypto::encrypt(dek, "投资手续费".as_bytes())),
+            is_food: Set(false),
+            created_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        }
+        .insert(&state.db)
+        .await
+        .map_err(err500)?;
+    }
+    Ok(())
 }
 
 async fn execute_plan_day(
@@ -630,15 +712,23 @@ async fn execute_plan_day(
         return Err(bad_request("定投两端账户货币不一致，请先修改计划"));
     }
     let amount = crypto::decrypt_cents(dek, &plan.amount);
+    let fee_rate_bps = crypto::decrypt_cents(dek, &plan.fee_rate_bps);
+    let fee = calculate_fee(amount, fee_rate_bps)?;
+    let total_debit = amount
+        .checked_add(fee)
+        .ok_or_else(|| bad_request("定投本金和手续费合计超出范围"))?;
     super::accounts::ensure_balance_delta(
         state,
         dek,
         plan.from_account_id,
-        amount
+        total_debit
             .checked_neg()
             .ok_or_else(|| bad_request("定投金额超出范围"))?,
     )
     .await?;
+    if fee > 0 {
+        ensure_fee_category(state, dek).await?;
+    }
     let next_date = next_trading_day(
         state,
         trade_date
@@ -668,10 +758,35 @@ async fn execute_plan_day(
     .insert(&transaction)
     .await
     .map_err(err500)?;
+    let fee_bill_id = if fee > 0 {
+        Some(
+            bill::ActiveModel {
+                account_id: Set(plan.from_account_id),
+                kind: Set("expense".into()),
+                amount: Set(crypto::encrypt_cents(dek, fee)),
+                category: Set(crypto::encrypt(dek, "投资手续费".as_bytes())),
+                is_food: Set(false),
+                note: Set(crypto::encrypt(
+                    dek,
+                    format!("每日定投手续费 · {plan_name}").as_bytes(),
+                )),
+                happened_at: Set(happened_at),
+                created_at: Set(chrono::Utc::now()),
+                ..Default::default()
+            }
+            .insert(&transaction)
+            .await
+            .map_err(err500)?
+            .id,
+        )
+    } else {
+        None
+    };
     investment_execution::ActiveModel {
         plan_id: Set(plan.id),
         trade_date: Set(trade_date),
         transfer_id: Set(Some(transfer.id)),
+        fee_bill_id: Set(fee_bill_id),
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
     }

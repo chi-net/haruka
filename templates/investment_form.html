@@ -41,6 +41,11 @@
       <input name="amount" type="number" step="0.01" min="0.01" value="{{ amount }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
     <div>
+      <label class="block text-sm text-gray-600 mb-1">手续费率（%）</label>
+      <input name="fee_rate" type="number" step="0.01" min="0" max="100" value="{{ fee_rate }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <p class="text-xs text-gray-400 mt-1">按本金计算，实际费用单独记为支出。</p>
+    </div>
+    <div>
       <label class="block text-sm text-gray-600 mb-1">开始日期</label>
       <input name="start_date" type="date" min="{{ min_start_date }}" value="{{ start_date }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
       <p class="text-xs text-gray-400 mt-1">遇周末或休市日将顺延到下一交易日。</p>

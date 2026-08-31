@@ -6,8 +6,10 @@
     <div class="flex flex-wrap items-center gap-2"><h1 class="text-xl font-bold">账户详情</h1><span class="text-xs rounded-full bg-gray-100 text-gray-600 px-2 py-0.5">{{ kind_label }}</span><span class="text-xs rounded-full bg-blue-50 text-blue-700 px-2 py-0.5">{{ currency }}</span></div>
     <p class="text-sm text-gray-500 mt-1">创建于 <time data-utc-time="{{ created_at }}">{{ created_at }}</time></p>
   </div>
-  <div class="flex items-center gap-3 text-sm"><a href="/accounts/{{ id }}/balance" class="text-blue-600 hover:underline">设置余额</a><a href="/accounts/{{ id }}/edit" class="text-blue-600 hover:underline">编辑</a><a href="/accounts" class="text-gray-600 hover:underline">返回账户</a></div>
+  <div class="flex items-center gap-3 text-sm"><a href="/accounts/{{ id }}/balance" class="text-blue-600 hover:underline">{% if is_investment %}校准持仓价值{% else %}设置余额{% endif %}</a><a href="/accounts/{{ id }}/edit" class="text-blue-600 hover:underline">编辑</a><a href="/accounts" class="text-gray-600 hover:underline">返回账户</a></div>
 </div>
+
+{% if is_investment %}<div class="rounded-lg border border-blue-200 bg-blue-50 p-4 mb-5 text-sm text-blue-800"><span class="font-medium">每月手动平一次即可：</span>查看基金平台当前持仓总价值后进行校准，收益就增加，亏损就减少；haruka 不依赖基金净值 API，也不记录份额。</div>{% endif %}
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium mb-3">账户信息</h2>

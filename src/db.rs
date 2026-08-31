@@ -108,11 +108,19 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_recurring_investments.if_not_exists()))
         .await
         .expect("建表失败");
+    ensure_column(
+        &db,
+        "recurring_investments",
+        "fee_rate_bps",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
     let mut create_investment_executions =
         schema.create_table_from_entity(investment_execution::Entity);
     db.execute(builder.build(create_investment_executions.if_not_exists()))
         .await
         .expect("建表失败");
+    ensure_column(&db, "investment_executions", "fee_bill_id", "INTEGER").await;
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_investment_execution_plan_date ON investment_executions (plan_id, trade_date)".to_string(),

@@ -70,6 +70,7 @@ struct AccountDetailTemplate {
     id: i64,
     name: String,
     kind_label: String,
+    is_investment: bool,
     currency: String,
     card_number_masked: String,
     account_username: String,
@@ -112,9 +113,13 @@ struct AccountFormTemplate {
 #[derive(Template)]
 #[template(path = "account_balance.html")]
 struct AccountBalanceTemplate {
+    heading: String,
     account_name: String,
     current_balance: String,
     action: String,
+    help: String,
+    confirm_message: String,
+    button_label: String,
 }
 
 #[derive(Deserialize)]
@@ -811,6 +816,7 @@ pub async fn detail(
         id,
         name: crypto::decrypt_string(&dek, &account.name),
         kind_label: account_kind_label(&account.kind).into(),
+        is_investment: account.kind == "investment",
         currency: account.currency.clone(),
         card_number_masked: if card_number.is_empty() {
             String::new()
@@ -1079,12 +1085,36 @@ pub async fn balance_form(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     let html = AccountBalanceTemplate {
+        heading: if account.kind == "investment" {
+            "校准持仓价值"
+        } else {
+            "设置账户余额"
+        }
+        .into(),
         account_name: crypto::decrypt_string(&dek, &account.name),
         current_balance: currency::format(
             current_balance(&state, &dek, id).await?,
             &account.currency,
         ),
         action: format!("/accounts/{id}/balance"),
+        help: if account.kind == "investment" {
+            "填写本月查看到的实际持仓总价值。高于当前值会增加账面价值，低于当前值会扣减；差额记录为余额调整，不计入普通收入或支出。"
+        } else {
+            "最多保留两位小数，并会在账单中新增一条不可删除的“余额调整”流水。普通账户不允许负数；信用账户不能低于负授信额。"
+        }
+        .into(),
+        confirm_message: if account.kind == "investment" {
+            "确认按当前持仓价值校准该投资账户？"
+        } else {
+            "确认强制设置该账户的余额？"
+        }
+        .into(),
+        button_label: if account.kind == "investment" {
+            "确认校准"
+        } else {
+            "设置余额"
+        }
+        .into(),
     }
     .render()
     .map_err(err500)?;

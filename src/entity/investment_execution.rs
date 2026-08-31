@@ -9,6 +9,7 @@ pub struct Model {
     /// 中国大陆市场交易日（纯日期，不做时区转换）。
     pub trade_date: Date,
     pub transfer_id: Option<i64>,
+    pub fee_bill_id: Option<i64>,
     pub created_at: DateTimeUtc,
 }
 
@@ -28,6 +29,13 @@ pub enum Relation {
         on_delete = "SetNull"
     )]
     Transfer,
+    #[sea_orm(
+        belongs_to = "super::bill::Entity",
+        from = "Column::FeeBillId",
+        to = "super::bill::Column::Id",
+        on_delete = "SetNull"
+    )]
+    FeeBill,
 }
 
 impl Related<super::recurring_investment::Entity> for Entity {
@@ -39,6 +47,12 @@ impl Related<super::recurring_investment::Entity> for Entity {
 impl Related<super::transfer::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Transfer.def()
+    }
+}
+
+impl Related<super::bill::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::FeeBill.def()
     }
 }
 
