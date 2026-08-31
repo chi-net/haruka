@@ -5,6 +5,7 @@ pub mod currencies;
 pub mod dashboard;
 pub mod debts;
 pub mod installments;
+pub mod investments;
 pub mod passkeys;
 pub mod settings;
 pub mod statistics;
@@ -141,6 +142,20 @@ pub async fn stylesheet() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=3600"),
         ],
         include_str!("../../static/app.css"),
+    )
+}
+
+pub async fn service_worker() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/javascript; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-cache"),
+            (
+                header::HeaderName::from_static("service-worker-allowed"),
+                "/",
+            ),
+        ],
+        include_str!("../../static/service-worker.js"),
     )
 }
 

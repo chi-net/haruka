@@ -20,7 +20,7 @@
 ## 加密（envelope）
 
 - DEK（随机 32 字节）加密数据；KEK 由 Argon2id(密码, salt) 派生并 wrap DEK；`meta` 表存 salt + nonce + wrapped_dek。密码不落盘，改密码只需重 wrap
-- 字段级加密：XChaCha20-Poly1305，每条随机 nonce，存 `base64(nonce||ct)` 于原 TEXT 列。加密字段：accounts.name/balance_offset/note、account_details.card_number/account_username/credit_limit、balance_adjustments.from_balance/to_balance、bills.amount/category/note、transfers.amount/to_amount/note、debt_people.name/note、debt_records.amount/note、categories.name、subscriptions.name/amount/category/note、passkeys.name、installment_plans.annual_rate_bps/fee、installment_items.principal/interest/fee/total；账户类型、账单日、各记录 kind、账户外键、分类/账单的 is_food、happened_at、订阅周期/到期时间、分期期限/还款方式/还款日/计划状态、分期还款账户/自动流水外键、Passkey 公钥凭据和时间戳为明文
+- 字段级加密：XChaCha20-Poly1305，每条随机 nonce，存 `base64(nonce||ct)` 于原 TEXT 列。加密字段：accounts.name/balance_offset/note、account_details.card_number/account_username/credit_limit、balance_adjustments.from_balance/to_balance、bills.amount/category/note、transfers.amount/to_amount/note、debt_people.name/note、debt_records.amount/note、categories.name、subscriptions.name/amount/category/note、recurring_investments.name/amount/note、passkeys.name、installment_plans.annual_rate_bps/fee、installment_items.principal/interest/fee/total；账户类型、账单日、各记录 kind、账户外键、分类/账单的 is_food、happened_at、订阅周期/到期时间、定投起始日/下一交易日/执行日期、市场休市日、分期期限/还款方式/还款日/计划状态、分期还款账户/自动流水外键、Passkey 公钥凭据和时间戳为明文
 - DEK 按客户端会话仅存服务端内存（`AppState.sessions`）；浏览器只保存无过期时间的 `HttpOnly` 随机会话 Cookie，不保存密码或 DEK。Cookie 丢失、主动锁定或服务重启后需重新使用密码或 Passkey 解锁；`require_unlock` 中间件把未解锁请求重定向到 `/unlock`（无 meta 时去 `/setup`）
 - setup/unlock/recover 表单禁用 htmx boost，确保会话 Cookie 和重定向走完整浏览器导航；解锁成功直接进入 `/dashboard`
 - 密码只用于当次 Argon2id 派生并用 `Zeroizing` 尽快清除，不落盘、不进入 Cookie 或会话；恢复密码会使现有客户端会话全部失效
@@ -52,6 +52,7 @@
 - 收支分类由设置页 CRUD，存于 `categories`；新建或编辑账单只能选择对应 income/expense 类型下仍存在的分类，删除分类不改写历史账单
 - 支出分类可标记 `is_food`；创建或编辑账单时将标记快照存入 `bills.is_food`，保证分类后续改名或删除不改变历史恩格尔系数。恩格尔系数按本月食品支出 / 本月总支出计算
 - 订阅服务存于 `subscriptions`，包含服务名、每次金额、支出分类、周期（day/week/month/quarter/year）、到期时间和备注；订阅页按到期时间展示状态，一键支出时由用户选择账户并生成完全独立的普通 expense 账单，成功后以到期时间和当前时间中较晚者为基准自动顺延一个周期；订阅仍可手动删除，删除订阅不得影响此前生成的账单
+- `/investments` 是独立每日定投页。每个 `recurring_investments` 计划绑定一个非信用扣款账户和一个固定的 `investment` 基金账户，两端必须同币种；每个中国大陆交易日执行一次并生成普通 `transfers` 流水，影响两端余额但不计入收入/支出。`investment_executions` 以“计划 + 交易日”唯一索引保证幂等，定投转账在计划仍存在时禁止单独删除，删除计划不得删除历史转账。中国交易日按北京时间纯日期判断：周一至周五且不在 `market_closed_days`；内置上交所 2025/2026 休市日，允许用户补充后续特殊休市日。DEK 仅在已解锁会话存在，因此锁定/重启期间只累计待执行日期，解锁访问定投页后由联网 AJAX 补执行，余额不足时保留待执行并明确报错
 - 只有信用卡或信贷服务的 expense 账单可以创建分期。短期可选 3/6/9/12/24 期，24 期以上按 3/5/10/15/20/30 年选择但仍逐月生成月供；还款方式支持等额本息、等额本金、等本等息，年利率和总手续费由用户分别输入，总手续费均摊到各期。`installment_plans` 与原账单一对一，`installment_items` 固化每期本金、利息、手续费和合计；分期账单禁止直接编辑。每期还款必须选择一个与信用账户同币种的非信用账户，信用卡/信贷服务禁止作为还款渠道；还款操作在一个数据库事务中把本金自动转账至信用账户、把利息与手续费自动记为“分期费用”支出并保存两条流水 ID，然后才标记已还。自动流水禁止单独编辑或删除，只能从分期详情撤销；已有还款时禁止删除原分期账单
 - `/installments` 是独立分期看板并显示在顶部导航，详情页逐月展示还款日、本金、利息、手续费、月供和逾期/已还状态；计划列表和期次表均分页。原 expense 账单在创建时立即按全部消费本金影响信用账户余额，计划利息与手续费仅在实际还款时计入账户余额
 - `/dashboard` 对用户统一称为“仪表板”，集中账户概览、快速记账及收支图表，底部不再显示账单流水；普通收支、转账与借还必须合并在同一“快速记账”卡片内用页签切换，不能再拆成独立操作卡片。日报按今日 24 小时、周/月/年报分别按近 7/30/365 个自然日聚合，Chart.js 使用平滑面积折线图；普通收支汇总和图表仍不包含转账与借还。`/transfers`、`/debts` 的 GET 只重定向到仪表板。借贷对象由 `/debt-people` 独立管理并显示在顶部导航
@@ -63,5 +64,6 @@
 - `/accounts/{id}` 是独立账户详情页，显示可点击复制的完整账户名、卡号或用户名，以及账户原币口径的当前余额、本月收入/支出/结余、历史总收入/总支出和相关账单、转账、借还流水；收支汇总只包含普通账单，余额和流水包含全部资金记录，流水使用 50/100/200 条分页
 - 仪表板显示未来 7 日订阅到期和分期还款提醒，并保留已到期/逾期项目提醒
 - 所有 HTTP 4xx/5xx 响应由统一中间件处理：发送或接受 `application/json` 的请求以及 htmx 请求返回 `{ ok: false, status, error }` JSON，普通浏览器导航返回包含原始详情的错误页；前端必须展示明确的“操作失败”反馈，500 同时写入服务端日志，禁止空白页或吞掉错误
+- Service Worker 只允许缓存 CSS、固定版本 htmx 等非敏感静态资源，不得缓存包含解密数据的 HTML、JSON 或任何账务响应；AJAX 和所有非 GET 请求必须网络优先，离线失败时返回明确错误，禁止对账务 POST 做后台队列或恢复联网后的自动重放
 - 禁止使用 Tailwind Play CDN；样式改动后必须运行 `npm run css:build` 并提交 `static/app.css`
 - 路由路径参数用 axum 0.8 语法 `{id}`

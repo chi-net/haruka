@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}haruka{% endblock %}</title>
 <link rel="stylesheet" href="/static/app.css">
-<script src="https://unpkg.com/htmx.org@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js"></script>
 </head>
 <body class="bg-gray-50 text-gray-900 min-h-screen" hx-boost="true">
 <nav class="bg-white border-b border-gray-200">
@@ -14,6 +14,7 @@
     <a href="/dashboard" class="text-sm text-gray-600 hover:text-blue-600">仪表板</a>
     <a href="/bills" class="text-sm text-gray-600 hover:text-blue-600">账单</a>
     <a href="/subscriptions" class="text-sm text-gray-600 hover:text-blue-600">订阅</a>
+    <a href="/investments" class="text-sm text-gray-600 hover:text-blue-600">定投</a>
     <a href="/installments" class="text-sm text-gray-600 hover:text-blue-600">分期</a>
     <a href="/accounts" class="text-sm text-gray-600 hover:text-blue-600">账户</a>
     <a href="/statistics" class="text-sm text-gray-600 hover:text-blue-600">统计</a>
@@ -127,6 +128,9 @@ document.addEventListener('htmx:sendError', () => window.harukaShowError('无法
 document.addEventListener('htmx:timeout', () => window.harukaShowError('请求超时，请稍后重试。'));
 document.addEventListener('DOMContentLoaded', () => window.harukaInitLocalTimes(document));
 document.addEventListener('htmx:afterSwap', event => window.harukaInitLocalTimes(event.detail.target));
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/service-worker.js').catch(error => console.warn('Service Worker 注册失败', error)));
+}
 </script>
 </body>
 </html>

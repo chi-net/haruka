@@ -2,8 +2,8 @@ use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema, 
 
 use crate::entity::{
     account, account_detail, balance_adjustment, bill, category, debt_person, debt_record,
-    exchange_rate, installment_item, installment_plan, meta, passkey, preference, recovery,
-    subscription, transfer,
+    exchange_rate, installment_item, installment_plan, investment_execution, market_closed_day,
+    meta, passkey, preference, recovery, recurring_investment, subscription, transfer,
 };
 
 pub async fn init() -> DatabaseConnection {
@@ -103,6 +103,27 @@ pub async fn init() -> DatabaseConnection {
         .await
         .expect("建表失败");
     ensure_column(&db, "transfers", "to_amount", "TEXT NOT NULL DEFAULT ''").await;
+    let mut create_recurring_investments =
+        schema.create_table_from_entity(recurring_investment::Entity);
+    db.execute(builder.build(create_recurring_investments.if_not_exists()))
+        .await
+        .expect("建表失败");
+    let mut create_investment_executions =
+        schema.create_table_from_entity(investment_execution::Entity);
+    db.execute(builder.build(create_investment_executions.if_not_exists()))
+        .await
+        .expect("建表失败");
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_investment_execution_plan_date ON investment_executions (plan_id, trade_date)".to_string(),
+    ))
+    .await
+    .expect("创建定投执行唯一索引失败");
+    let mut create_market_closed_days = schema.create_table_from_entity(market_closed_day::Entity);
+    db.execute(builder.build(create_market_closed_days.if_not_exists()))
+        .await
+        .expect("建表失败");
+    seed_market_closed_days(&db).await;
     let mut create_debt_people = schema.create_table_from_entity(debt_person::Entity);
     db.execute(builder.build(create_debt_people.if_not_exists()))
         .await
@@ -136,6 +157,60 @@ pub async fn init() -> DatabaseConnection {
     .await;
 
     db
+}
+
+async fn seed_market_closed_days(db: &DatabaseConnection) {
+    // 上海证券交易所公布的 2025、2026 年休市安排。周末也列入部分公告范围，
+    // 但交易日判断本身会先排除周六和周日。
+    const CLOSED_DAYS: &[(&str, &str)] = &[
+        ("2025-01-01", "元旦"),
+        ("2025-01-28", "春节"),
+        ("2025-01-29", "春节"),
+        ("2025-01-30", "春节"),
+        ("2025-01-31", "春节"),
+        ("2025-02-03", "春节"),
+        ("2025-02-04", "春节"),
+        ("2025-04-04", "清明节"),
+        ("2025-05-01", "劳动节"),
+        ("2025-05-02", "劳动节"),
+        ("2025-05-05", "劳动节"),
+        ("2025-06-02", "端午节"),
+        ("2025-10-01", "国庆节、中秋节"),
+        ("2025-10-02", "国庆节、中秋节"),
+        ("2025-10-03", "国庆节、中秋节"),
+        ("2025-10-06", "国庆节、中秋节"),
+        ("2025-10-07", "国庆节、中秋节"),
+        ("2025-10-08", "国庆节、中秋节"),
+        ("2026-01-01", "元旦"),
+        ("2026-01-02", "元旦"),
+        ("2026-02-16", "春节"),
+        ("2026-02-17", "春节"),
+        ("2026-02-18", "春节"),
+        ("2026-02-19", "春节"),
+        ("2026-02-20", "春节"),
+        ("2026-02-23", "春节"),
+        ("2026-04-06", "清明节"),
+        ("2026-05-01", "劳动节"),
+        ("2026-05-04", "劳动节"),
+        ("2026-05-05", "劳动节"),
+        ("2026-06-19", "端午节"),
+        ("2026-09-25", "中秋节"),
+        ("2026-10-01", "国庆节"),
+        ("2026-10-02", "国庆节"),
+        ("2026-10-05", "国庆节"),
+        ("2026-10-06", "国庆节"),
+        ("2026-10-07", "国庆节"),
+    ];
+    for (date, name) in CLOSED_DAYS {
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            format!(
+                "INSERT OR IGNORE INTO market_closed_days (date, name, source, created_at) VALUES ('{date}', '{name}', 'builtin', CURRENT_TIMESTAMP)"
+            ),
+        ))
+        .await
+        .expect("初始化中国大陆市场休市日失败");
+    }
 }
 
 async fn ensure_column(

@@ -281,6 +281,32 @@ async fn main() {
             "/subscriptions/{id}/delete",
             post(handlers::subscriptions::delete),
         )
+        .route(
+            "/investments",
+            get(handlers::investments::list).post(handlers::investments::create),
+        )
+        .route("/investments/new", get(handlers::investments::new_form))
+        .route(
+            "/investments/{id}/edit",
+            get(handlers::investments::edit_form).post(handlers::investments::update),
+        )
+        .route(
+            "/investments/{id}/toggle",
+            post(handlers::investments::toggle),
+        )
+        .route(
+            "/investments/{id}/delete",
+            post(handlers::investments::delete),
+        )
+        .route("/investments/run-due", post(handlers::investments::run_due))
+        .route(
+            "/investments/calendar/closed-days",
+            post(handlers::investments::create_closed_day),
+        )
+        .route(
+            "/investments/calendar/closed-days/{date}/delete",
+            post(handlers::investments::delete_closed_day),
+        )
         .route("/installments", get(handlers::installments::list))
         .route(
             "/installments/search",
@@ -366,6 +392,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/static/app.css", get(handlers::stylesheet))
+        .route("/service-worker.js", get(handlers::service_worker))
         .route(
             "/setup",
             get(handlers::auth::setup_form).post(handlers::auth::setup),

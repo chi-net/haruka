@@ -12,7 +12,7 @@ use std::str::FromStr;
 
 use crate::{
     crypto, currency,
-    entity::{account, installment_item, transfer},
+    entity::{account, installment_item, investment_execution, transfer},
     AppState, SessionDek,
 };
 
@@ -196,6 +196,17 @@ pub async fn delete(
     {
         return Err(bad_request(
             "分期还款本金流水不能单独删除，请在分期详情中撤销对应还款",
+        ));
+    }
+    if investment_execution::Entity::find()
+        .filter(investment_execution::Column::TransferId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "定投生成的转账不能单独删除；删除定投计划不会影响已有流水",
         ));
     }
     let transfer = transfer::Entity::find_by_id(id)

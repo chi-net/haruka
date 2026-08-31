@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} - haruka{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between gap-3 mb-4">
+  <div><h1 class="text-xl font-bold">{{ heading }}</h1><p class="text-sm text-gray-500 mt-1">每个中国大陆交易日执行一次，资金以转账方式进入固定基金账户。</p></div>
+  <a href="/investments" class="text-sm text-gray-600 hover:text-blue-600">返回定投</a>
+</div>
+
+{% if fund_accounts.is_empty() %}
+<section class="max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+  <p class="font-medium">还没有可用的基金账户</p>
+  <p class="mt-1">请先新增一个“投资账户”，再回来创建定投计划。</p>
+  <a href="/accounts/new" class="inline-block mt-3 text-blue-700 hover:underline">新增投资账户</a>
+</section>
+{% else if source_accounts.is_empty() %}
+<section class="max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">没有可用于扣款的非信用账户，请先新增账户。</section>
+{% else %}
+<form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-xl" id="investment-form">
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">计划名</label>
+    <input name="name" value="{{ name }}" required autofocus placeholder="例如：沪深 300 每日定投" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">固定基金账户</label>
+      <select id="investment-fund-account" name="fund_account_id" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        {% for account in fund_accounts %}<option value="{{ account.id }}" data-currency="{{ account.currency }}" {% if account.id == fund_account_id %}selected{% endif %}>{{ account.name }} · {{ account.currency }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">扣款账户</label>
+      <select id="investment-source-account" name="from_account_id" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        {% for account in source_accounts %}<option value="{{ account.id }}" data-currency="{{ account.currency }}" {% if account.id == from_account_id %}selected{% endif %}>{{ account.name }} · {{ account.currency }}</option>{% endfor %}
+      </select>
+      <p id="investment-currency-help" class="text-xs text-gray-400 mt-1">只可选择与基金账户相同货币的非信用账户。</p>
+    </div>
+  </div>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">每个交易日定投金额</label>
+      <input name="amount" type="number" step="0.01" min="0.01" value="{{ amount }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">开始日期</label>
+      <input name="start_date" type="date" min="{{ min_start_date }}" value="{{ start_date }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <p class="text-xs text-gray-400 mt-1">遇周末或休市日将顺延到下一交易日。</p>
+    </div>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">备注</label>
+    <input name="note" value="{{ note }}" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" name="active" value="true" {% if active %}checked{% endif %}> 保存后启用计划</label>
+  <div class="flex gap-3">
+    <button type="submit" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">保存</button>
+    <a href="/investments" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300 hover:bg-gray-50">取消</a>
+  </div>
+</form>
+<script>
+(() => {
+  const form = document.getElementById('investment-form');
+  if (!form || form.dataset.currencyReady === 'true') return;
+  const fund = document.getElementById('investment-fund-account');
+  const source = document.getElementById('investment-source-account');
+  const sync = () => {
+    const currency = fund.selectedOptions[0]?.dataset.currency;
+    let selectedAvailable = false;
+    Array.from(source.options).forEach(option => {
+      const disabled = option.dataset.currency !== currency || option.value === fund.value;
+      option.disabled = disabled;
+      if (option.selected && !disabled) selectedAvailable = true;
+    });
+    if (!selectedAvailable) {
+      const first = Array.from(source.options).find(option => !option.disabled);
+      if (first) source.value = first.value;
+    }
+  };
+  fund.addEventListener('change', sync);
+  sync();
+  form.dataset.currencyReady = 'true';
+})();
+</script>
+{% endif %}
+{% endblock %}
