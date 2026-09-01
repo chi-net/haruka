@@ -312,7 +312,6 @@ pub async fn show(
     let installment_reminders = all_installment_reminders.into_iter().take(10).collect();
     let transfer_sources = accounts
         .iter()
-        .filter(|account| !matches!(account.kind.as_str(), "credit_card" | "credit_service"))
         .map(|account| AccountOption {
             id: account.id,
             name: account_names.get(&account.id).cloned().unwrap_or_default(),

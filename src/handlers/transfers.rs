@@ -1,7 +1,7 @@
 use axum::{
     extract::{Extension, Path, Query, State},
-    http::StatusCode,
-    response::Redirect,
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Redirect, Response},
     Form, Json,
 };
 use chrono::NaiveDateTime;
@@ -55,6 +55,13 @@ pub struct QuoteResponse {
     to_amount: String,
 }
 
+#[derive(Serialize)]
+pub struct TransferCreateResponse {
+    ok: bool,
+    message: String,
+    redirect: String,
+}
+
 #[derive(Deserialize)]
 pub struct DeleteFormData {
     #[serde(default)]
@@ -71,6 +78,13 @@ fn parse_amount(value: &str) -> HandlerResult<i64> {
     (decimal * Decimal::from(100))
         .to_i64()
         .ok_or_else(|| bad_request("金额超出范围"))
+}
+
+fn accepts_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"))
 }
 
 pub async fn quote(
@@ -112,8 +126,9 @@ pub async fn quote(
 pub async fn create(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    headers: HeaderMap,
     Form(form): Form<TransferFormData>,
-) -> HandlerResult<Redirect> {
+) -> HandlerResult<Response> {
     let _balance_guard = state.balance_writes.lock().await;
     if form.from_account_id == form.to_account_id {
         return Err(bad_request("转出和转入账户不能相同"));
@@ -123,9 +138,6 @@ pub async fn create(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("转出账户不存在"))?;
-    if matches!(from_account.kind.as_str(), "credit_card" | "credit_service") {
-        return Err(bad_request("信用卡和信贷服务不能作为转账的转出账户"));
-    }
     let to_account = account::Entity::find_by_id(form.to_account_id)
         .one(&state.db)
         .await
@@ -149,15 +161,26 @@ pub async fn create(
     } else {
         parse_amount(&form.to_amount)?
     };
-    super::accounts::ensure_balance_delta(
-        &state,
-        &dek,
-        form.from_account_id,
-        amount
-            .checked_neg()
-            .ok_or_else(|| bad_request("金额超出范围"))?,
-    )
-    .await?;
+    if matches!(from_account.kind.as_str(), "credit_card" | "credit_service") {
+        let balance = super::accounts::current_balance(&state, &dek, from_account.id).await?;
+        if balance <= 0 {
+            return Err(bad_request("信用账户只有在余额为正时才允许转出"));
+        }
+        if amount > balance {
+            return Err(bad_request("信用账户转出后余额不能低于 0"));
+        }
+    } else {
+        super::accounts::ensure_balance_delta(
+            &state,
+            &dek,
+            form.from_account_id,
+            amount
+                .checked_neg()
+                .ok_or_else(|| bad_request("金额超出范围"))?,
+        )
+        .await?;
+    }
+    super::accounts::ensure_balance_delta(&state, &dek, form.to_account_id, to_amount).await?;
     transfer::ActiveModel {
         from_account_id: Set(form.from_account_id),
         to_account_id: Set(form.to_account_id),
@@ -171,13 +194,21 @@ pub async fn create(
     .insert(&state.db)
     .await
     .map_err(err500)?;
-    Ok(Redirect::to(
-        if form.redirect_to.as_deref() == Some("/bills") {
-            "/bills"
-        } else {
-            "/dashboard"
-        },
-    ))
+    let redirect = if form.redirect_to.as_deref() == Some("/bills") {
+        "/bills"
+    } else {
+        "/dashboard"
+    };
+    if accepts_json(&headers) {
+        Ok(Json(TransferCreateResponse {
+            ok: true,
+            message: "转账已记录".into(),
+            redirect: redirect.into(),
+        })
+        .into_response())
+    } else {
+        Ok(Redirect::to(redirect).into_response())
+    }
 }
 
 pub async fn delete(
@@ -214,7 +245,10 @@ pub async fn delete(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "转账不存在".into()))?;
+    let from_amount = crypto::decrypt_cents(&dek, &transfer.amount);
     let amount = super::transfer_to_cents(&dek, &transfer);
+    super::accounts::ensure_balance_delta(&state, &dek, transfer.from_account_id, from_amount)
+        .await?;
     super::accounts::ensure_balance_delta(
         &state,
         &dek,

@@ -1,4 +1,4 @@
-const STATIC_CACHE = 'haruka-static-2026-08-31-v2';
+const STATIC_CACHE = 'haruka-static-2026-09-01-v3';
 const STATIC_PATHS = new Set(['/static/app.css']);
 const HTMX_URL = 'https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js';
 

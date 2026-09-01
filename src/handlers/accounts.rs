@@ -1,7 +1,7 @@
 use askama::Template;
 use axum::{
     extract::{Extension, Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{Html, IntoResponse, Redirect},
     Form, Json,
 };
@@ -52,6 +52,16 @@ struct AccountRow {
     credit_summary: String,
     note: String,
     balance: String,
+}
+
+#[derive(Serialize)]
+pub struct AccountBalanceResponse {
+    ok: bool,
+    account_id: i64,
+    balance: String,
+    currency: String,
+    kind: String,
+    can_transfer_out: bool,
 }
 
 struct AccountLedgerRow {
@@ -340,6 +350,9 @@ pub(crate) async fn ensure_allowed_balance(
     if balance < minimum {
         return Err(bad_request("操作后将超过该账户的可用授信额度"));
     }
+    if account.kind == "credit_service" && balance > 0 {
+        return Err(bad_request("信贷服务余额不能高于 0"));
+    }
     Ok(())
 }
 
@@ -354,6 +367,30 @@ pub(crate) async fn ensure_balance_delta(
         .checked_add(delta)
         .ok_or_else(|| bad_request("余额超出范围"))?;
     ensure_allowed_balance(state, dek, account_id, projected).await
+}
+
+pub async fn balance_summary(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+) -> HandlerResult<impl IntoResponse> {
+    let account = account::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    let balance = current_balance(&state, &dek, id).await?;
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(AccountBalanceResponse {
+            ok: true,
+            account_id: id,
+            balance: currency::format(balance, &account.currency),
+            currency: account.currency,
+            kind: account.kind,
+            can_transfer_out: balance > 0,
+        }),
+    ))
 }
 
 fn parse_balance(value: &str) -> HandlerResult<i64> {
@@ -1050,6 +1087,11 @@ pub async fn update(
             .ok_or_else(|| bad_request("授信额超出范围"))?;
         if balance < minimum {
             return Err(bad_request("当前透支金额超过新的授信额"));
+        }
+        if form.account_kind == "credit_service" && balance > 0 {
+            return Err(bad_request(
+                "信贷服务余额不能高于 0；请先把正余额转出后再修改账户",
+            ));
         }
     } else if balance < 0 {
         return Err(bad_request("当前余额为负，不能改为禁止透支的账户类型"));

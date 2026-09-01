@@ -239,6 +239,10 @@ async fn main() {
             "/accounts/{id}/card-number",
             post(handlers::accounts::card_number),
         )
+        .route(
+            "/accounts/{id}/balance-summary",
+            get(handlers::accounts::balance_summary),
+        )
         .route("/accounts/{id}", get(handlers::accounts::detail))
         .route(
             "/accounts/{id}/edit",
@@ -253,6 +257,7 @@ async fn main() {
             "/bills",
             get(handlers::bills::list).post(handlers::bills::create),
         )
+        .route("/bills/batch", post(handlers::bills::create_batch))
         .route("/bills/search", get(handlers::bills::advanced_search))
         .route("/bills/new", get(handlers::bills::new_form))
         .route(

@@ -46,6 +46,7 @@
       <input id="billing-day" name="billing_day" type="number" min="1" max="31" value="{{ billing_day }}" placeholder="例如：5" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
   </div>
+  <p id="credit-balance-help" class="text-xs text-gray-500">信用卡允许正余额；信贷服务余额最高为 0。信用账户只有现有余额为正时才能转出，且不得使用授信额度转账。</p>
   <div>
     <label class="block text-sm text-gray-600 mb-1">备注</label>
     <input name="note" value="{{ note }}" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -61,6 +62,7 @@
   const card = document.getElementById('card-number-field');
   const username = document.getElementById('account-username-field');
   const credit = document.getElementById('credit-settings-field');
+  const creditHelp = document.getElementById('credit-balance-help');
   const creditLimit = document.getElementById('credit-limit');
   const billingDay = document.getElementById('billing-day');
   const updateFields = () => {
@@ -68,6 +70,7 @@
     card.classList.toggle('hidden', select.value !== 'bank' && select.value !== 'stored_value' && select.value !== 'credit_card');
     username.classList.toggle('hidden', select.value !== 'payment' && select.value !== 'credit_service');
     credit.classList.toggle('hidden', !isCredit);
+    creditHelp.classList.toggle('hidden', !isCredit);
     creditLimit.required = isCredit;
     billingDay.required = isCredit;
   };

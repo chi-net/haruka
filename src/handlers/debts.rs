@@ -1,16 +1,16 @@
 use askama::Template;
 use axum::{
     extract::{Extension, Path, Query, State},
-    http::StatusCode,
-    response::{Html, Redirect},
-    Form,
+    http::{header, HeaderMap, StatusCode},
+    response::{Html, IntoResponse, Redirect, Response},
+    Form, Json,
 };
 use chrono::NaiveDateTime;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{
@@ -81,6 +81,13 @@ pub struct DebtRecordFormData {
     redirect_to: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct DebtCreateResponse {
+    ok: bool,
+    message: String,
+    redirect: String,
+}
+
 #[derive(Deserialize)]
 pub struct DeleteRecordFormData {
     #[serde(default)]
@@ -120,6 +127,13 @@ fn valid_kind(kind: &str) -> bool {
         kind,
         "lend" | "borrow" | "repayment_received" | "repayment_paid"
     )
+}
+
+fn accepts_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"))
 }
 
 fn account_delta(kind: &str, amount: i64) -> HandlerResult<i64> {
@@ -246,8 +260,9 @@ async fn person_outstanding(
 pub async fn create_record(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    headers: HeaderMap,
     Form(form): Form<DebtRecordFormData>,
-) -> HandlerResult<Redirect> {
+) -> HandlerResult<Response> {
     let _balance_guard = state.balance_writes.lock().await;
     if !valid_kind(&form.kind) {
         return Err(bad_request("借还类型无效"));
@@ -304,13 +319,21 @@ pub async fn create_record(
     .insert(&state.db)
     .await
     .map_err(err500)?;
-    Ok(Redirect::to(
-        if form.redirect_to.as_deref() == Some("/bills") {
-            "/bills"
-        } else {
-            "/dashboard"
-        },
-    ))
+    let redirect = if form.redirect_to.as_deref() == Some("/bills") {
+        "/bills"
+    } else {
+        "/dashboard"
+    };
+    if accepts_json(&headers) {
+        Ok(Json(DebtCreateResponse {
+            ok: true,
+            message: "借还记录已保存".into(),
+            redirect: redirect.into(),
+        })
+        .into_response())
+    } else {
+        Ok(Redirect::to(redirect).into_response())
+    }
 }
 
 pub async fn delete_record(

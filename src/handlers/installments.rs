@@ -881,6 +881,7 @@ pub async fn set_paid(
                 .ok_or_else(|| bad_request("还款金额超出范围"))?,
         )
         .await?;
+        super::accounts::ensure_balance_delta(&state, &dek, plan.account_id, principal).await?;
         if charges > 0 {
             ensure_fee_category(&state, &dek).await?;
         }

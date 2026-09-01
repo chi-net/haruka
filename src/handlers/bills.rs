@@ -1,9 +1,9 @@
 use askama::Template;
 use axum::{
     extract::{Extension, Path, Query, State},
-    http::StatusCode,
-    response::{Html, Redirect},
-    Form,
+    http::{header, HeaderMap, StatusCode},
+    response::{Html, IntoResponse, Redirect, Response},
+    Form, Json,
 };
 use chrono::NaiveDateTime;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
@@ -11,7 +11,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
     TransactionTrait,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{
@@ -150,6 +150,29 @@ pub struct BillFormData {
 }
 
 #[derive(Deserialize)]
+pub struct BatchBillEntryData {
+    account_id: String,
+    kind: String,
+    amount: String,
+    category: String,
+    note: String,
+    happened_at: String,
+}
+
+#[derive(Deserialize)]
+pub struct BatchBillFormData {
+    entries: Vec<BatchBillEntryData>,
+}
+
+#[derive(Serialize)]
+pub struct BillCreateResponse {
+    ok: bool,
+    message: String,
+    redirect: String,
+    count: usize,
+}
+
+#[derive(Deserialize)]
 pub struct DeleteFormData {
     #[serde(default)]
     redirect_to: Option<String>,
@@ -202,6 +225,13 @@ fn ledger_redirect(redirect_to: Option<&str>) -> &'static str {
     } else {
         "/bills"
     }
+}
+
+fn accepts_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"))
 }
 
 fn parse_search_date(value: &str, label: &str) -> HandlerResult<Option<chrono::NaiveDate>> {
@@ -902,11 +932,7 @@ pub async fn new_form(
     Extension(SessionDek(dek)): Extension<SessionDek>,
 ) -> HandlerResult<Html<String>> {
     let accounts = account_options(&state, &dek).await?;
-    let transfer_sources = accounts
-        .iter()
-        .filter(|account| !matches!(account.kind.as_str(), "credit_card" | "credit_service"))
-        .cloned()
-        .collect();
+    let transfer_sources = accounts.clone();
     let html = QuickEntryPageTemplate {
         accounts,
         transfer_sources,
@@ -927,8 +953,9 @@ pub async fn new_form(
 pub async fn create(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    headers: HeaderMap,
     Form(form): Form<BillFormData>,
-) -> HandlerResult<Redirect> {
+) -> HandlerResult<Response> {
     let _balance_guard = state.balance_writes.lock().await;
     let parsed = parse_form(form)?;
     let redirect_to = parsed.redirect_to.clone();
@@ -982,11 +1009,120 @@ pub async fn create(
         None
     };
     transaction.commit().await.map_err(err500)?;
-    Ok(Redirect::to(
-        &plan_id
-            .map(|id| format!("/installments/{id}"))
-            .unwrap_or(redirect_to),
-    ))
+    let redirect = plan_id
+        .map(|id| format!("/installments/{id}"))
+        .unwrap_or(redirect_to);
+    if accepts_json(&headers) {
+        Ok(Json(BillCreateResponse {
+            ok: true,
+            message: "收支已记录".into(),
+            redirect,
+            count: 1,
+        })
+        .into_response())
+    } else {
+        Ok(Redirect::to(&redirect).into_response())
+    }
+}
+
+pub async fn create_batch(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Json(form): Json<BatchBillFormData>,
+) -> HandlerResult<Json<BillCreateResponse>> {
+    let _balance_guard = state.balance_writes.lock().await;
+    if form.entries.is_empty() {
+        return Err(bad_request("请至少加入一条待提交记录"));
+    }
+    if form.entries.len() > 100 {
+        return Err(bad_request("单次最多批量记录 100 条收支"));
+    }
+
+    let accounts = account::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|account| (account.id, account))
+        .collect::<HashMap<_, _>>();
+    let categories = category::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|category| {
+            (
+                (category.kind, crypto::decrypt_string(&dek, &category.name)),
+                category.is_food,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut parsed_entries = Vec::with_capacity(form.entries.len());
+    let mut account_deltas = HashMap::<i64, i64>::new();
+    for entry in form.entries {
+        let parsed = parse_form(BillFormData {
+            account_id: entry.account_id,
+            kind: entry.kind,
+            amount: entry.amount,
+            category: entry.category,
+            note: entry.note,
+            happened_at: entry.happened_at,
+            use_installment: false,
+            installment_term: String::new(),
+            installment_method: String::new(),
+            installment_annual_rate: String::new(),
+            installment_fee: String::new(),
+            installment_first_due_date: String::new(),
+            redirect_to: None,
+        })?;
+        if !accounts.contains_key(&parsed.account_id) {
+            return Err(bad_request("批量记录中包含不存在的账户"));
+        }
+        let is_food = categories
+            .get(&(parsed.kind.clone(), parsed.category.clone()))
+            .copied()
+            .ok_or_else(|| bad_request("批量记录中包含无效的收支分类"))?;
+        let delta = signed_amount(&parsed.kind, parsed.amount)?;
+        let total_delta = account_deltas
+            .get(&parsed.account_id)
+            .copied()
+            .unwrap_or_default()
+            .checked_add(delta)
+            .ok_or_else(|| bad_request("批量记录金额超出范围"))?;
+        account_deltas.insert(parsed.account_id, total_delta);
+        parsed_entries.push((parsed, is_food));
+    }
+
+    for (account_id, delta) in account_deltas {
+        super::accounts::ensure_balance_delta(&state, &dek, account_id, delta).await?;
+    }
+
+    let count = parsed_entries.len();
+    let transaction = state.db.begin().await.map_err(err500)?;
+    for (parsed, is_food) in parsed_entries {
+        bill::ActiveModel {
+            account_id: Set(parsed.account_id),
+            kind: Set(parsed.kind),
+            amount: Set(crypto::encrypt_cents(&dek, parsed.amount)),
+            category: Set(crypto::encrypt(&dek, parsed.category.as_bytes())),
+            is_food: Set(is_food),
+            note: Set(crypto::encrypt(&dek, parsed.note.as_bytes())),
+            happened_at: Set(parsed.happened_at),
+            created_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        }
+        .insert(&transaction)
+        .await
+        .map_err(err500)?;
+    }
+    transaction.commit().await.map_err(err500)?;
+    Ok(Json(BillCreateResponse {
+        ok: true,
+        message: format!("已批量记录 {count} 条收支"),
+        redirect: "/bills".into(),
+        count,
+    }))
 }
 
 pub async fn edit_form(
