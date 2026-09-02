@@ -3,7 +3,16 @@
   "private": true,
   "scripts": {
     "css:build": "tailwindcss -i ./assets/tailwind.css -o ./static/app.css --minify",
-    "css:watch": "tailwindcss -i ./assets/tailwind.css -o ./static/app.css --watch"
+    "css:watch": "tailwindcss -i ./assets/tailwind.css -o ./static/app.css --watch",
+    "assets:copy": "node ./scripts/build-web-assets.mjs",
+    "web:build": "npm run css:build && npm run assets:copy"
+  },
+  "dependencies": {
+    "@tesseract.js-data/chi_sim": "1.0.0",
+    "@tesseract.js-data/eng": "1.0.0",
+    "chart.js": "4.5.1",
+    "htmx.org": "2.0.10",
+    "tesseract.js": "7.0.0"
   },
   "devDependencies": {
     "@tailwindcss/cli": "4.3.3",

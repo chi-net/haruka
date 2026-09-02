@@ -7,6 +7,30 @@
   </div>
 
   <div data-quick-entry-panel="bill">
+    <details id="receipt-scanner" class="mb-4 rounded-lg border border-violet-200 bg-violet-50">
+      <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-violet-900">扫描票据 · 本机 WASM OCR / 浏览器直连 AI</summary>
+      <div class="border-t border-violet-200 p-3 space-y-3">
+        <p class="text-xs text-violet-800">图片只在当前浏览器内处理，不会上传给 haruka。只有点击“使用 AI 整理”时，OCR 文字才会由浏览器直接发送到你配置的 URL。</p>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div class="space-y-3">
+            <div><label class="block text-xs text-violet-800 mb-1">票据图片</label><input id="receipt-image" type="file" accept="image/*" capture="environment" class="block w-full text-sm text-gray-700 file:mr-3 file:rounded file:border-0 file:bg-violet-100 file:px-3 file:py-1.5 file:text-violet-800"></div>
+            <img id="receipt-preview" alt="票据预览" class="hidden max-h-72 w-full rounded border border-violet-200 bg-white object-contain">
+            <div class="flex flex-wrap items-center gap-2"><button id="receipt-run-ocr" type="button" class="bg-violet-700 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50">本机识别</button><button id="receipt-clear" type="button" class="border border-violet-300 bg-white text-violet-800 text-sm px-3 py-1.5 rounded">清除</button><span id="receipt-ocr-status" class="text-xs text-violet-800" aria-live="polite"></span></div>
+            <div id="receipt-progress-wrap" class="hidden"><progress id="receipt-progress" max="1" value="0" class="w-full"></progress></div>
+          </div>
+          <div><label class="block text-xs text-violet-800 mb-1">OCR 文字（可修改）</label><textarea id="receipt-ocr-text" rows="10" class="w-full rounded border border-violet-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" placeholder="识别结果会显示在这里"></textarea></div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2"><button id="receipt-local-fill" type="button" class="border border-violet-300 bg-white text-violet-800 text-sm px-3 py-1.5 rounded">本地提取金额和时间</button><span id="receipt-draft-status" class="text-xs text-violet-800" aria-live="polite"></span></div>
+        <details class="rounded border border-violet-200 bg-white">
+          <summary class="cursor-pointer px-3 py-2 text-sm text-violet-900">可选：AI 整理设置（仅保存在这个浏览器）</summary>
+          <div class="border-t border-violet-100 p-3 space-y-3">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3"><div><label class="block text-xs text-gray-600 mb-1">Chat Completions 完整 URL</label><input id="receipt-ai-url" type="url" placeholder="http://localhost:11434/v1/chat/completions" class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"></div><div><label class="block text-xs text-gray-600 mb-1">模型</label><input id="receipt-ai-model" placeholder="例如：qwen3" class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"></div></div>
+            <div><label class="block text-xs text-gray-600 mb-1">API Key（可选）</label><input id="receipt-ai-key" type="password" autocomplete="off" placeholder="只保留到本页关闭或刷新" class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"><p class="text-xs text-gray-500 mt-1">URL 和模型保存到 localStorage；API Key 不保存。目标服务必须允许当前 haruka 来源进行 CORS 请求。</p></div>
+            <div class="flex flex-wrap items-center gap-2"><button id="receipt-ai-fill" type="button" class="bg-violet-700 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50">使用 AI 整理并填入</button><span id="receipt-ai-status" class="text-xs text-violet-800" aria-live="polite"></span></div>
+          </div>
+        </details>
+      </div>
+    </details>
     <form method="post" action="/bills" data-quick-form="bill" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
       <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
       <div><label class="block text-xs text-gray-500 mb-1">类型</label><select id="quick-bill-kind" name="kind" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="expense">支出</option><option value="income">收入</option></select></div>
@@ -305,6 +329,26 @@
   if (!billForm || !addButton || !panel || !list || !count || !clearButton || !submitButton || !batchStatus) return;
   const pending = [];
 
+  window.harukaApplyReceiptDraft = draft => {
+    const kind = billForm.querySelector('[name="kind"]');
+    const amount = billForm.querySelector('[name="amount"]');
+    const category = billForm.querySelector('[name="category"]');
+    const note = billForm.querySelector('[name="note"]');
+    const localTime = billForm.querySelector('[data-utc-picker]');
+    if (draft.kind === 'income' || draft.kind === 'expense') {
+      kind.value = draft.kind;
+      kind.dispatchEvent(new Event('change'));
+    }
+    if (draft.amount) amount.value = draft.amount;
+    if (draft.category && Array.from(category.options).some(option => !option.disabled && option.value === draft.category)) category.value = draft.category;
+    if (draft.note) note.value = draft.note;
+    if (draft.happened_at_local && localTime) {
+      localTime.value = draft.happened_at_local;
+      localTime.dispatchEvent(new Event('input'));
+    }
+    amount.focus();
+  };
+
   const renderBatch = () => {
     panel.classList.toggle('hidden', pending.length === 0);
     count.textContent = String(pending.length);
@@ -399,3 +443,5 @@
   });
 })();
 </script>
+<script src="/static/ocr/tesseract.min.js"></script>
+<script src="/static/receipt-scanner.js"></script>

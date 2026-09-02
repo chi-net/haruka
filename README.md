@@ -17,17 +17,23 @@ sudo apt-get update
 sudo apt-get install build-essential pkg-config libssl-dev
 ```
 
-首次运行先安装前端构建依赖并生成本地 CSS：
+首次运行先安装前端构建依赖并生成本地浏览器资源：
 
 ```sh
 npm ci
-npm run css:build
+npm run web:build
 cargo run
 ```
 
-Tailwind 样式由 `assets/tailwind.css` 扫描模板和 Rust 源码后编译到 `static/app.css`，运行时不依赖 Tailwind CDN。开发样式时可使用 `npm run css:watch`。
+Tailwind 样式由 `assets/tailwind.css` 扫描模板和 Rust 源码后编译到 `static/app.css`，开发样式时可使用 `npm run css:watch`。`web:build` 还会复制锁定版本的 htmx、Chart.js、Tesseract.js Web Worker/WASM 和简体中文、英文 OCR 模型；生成文件提交在 `static/` 并嵌入二进制，运行时不依赖第三方 CDN。
 
-浏览器会注册一个轻量 Service Worker，仅缓存编译后的 CSS 和固定版本 htmx。包含账户、账单等解密内容的 HTML/JSON 不会进入离线缓存，任何 AJAX 或账务写入也不会离线排队；断网操作会明确失败，恢复网络后不会自动重放。
+浏览器会注册一个轻量 Service Worker，仅缓存编译后的 CSS 和锁定版本的非敏感前端运行文件。包含账户、账单等解密内容的 HTML/JSON 不会进入离线缓存，任何 AJAX 或账务写入也不会离线排队；断网操作会明确失败，恢复网络后不会自动重放。
+
+## 浏览器票据识别
+
+快速记账的“扫描票据”在浏览器 Web Worker 中运行 Tesseract.js WASM，图片不会上传至 haruka 后端。首次识别需要从 haruka 自身加载约 18 MB 的本地 OCR 运行文件和中英文模型，之后语言数据由 Tesseract.js 缓存在浏览器 IndexedDB 中。
+
+识别后的文字可以用本地规则提取金额和时间，也可以由浏览器直接调用用户填写的 OpenAI Chat Completions 兼容完整 URL。URL 与模型只保存在当前浏览器 localStorage，API Key 不持久保存、刷新页面即清除；后端不会代理或看到 URL、密钥、图片及 OCR 文字。自定义 AI 服务必须允许 haruka 当前来源进行 CORS 请求，否则浏览器会明确报告跨域失败。所有识别结果都只填入可编辑快速记账草稿，仍需用户确认后才会写入账单。
 
 ## 每日定投
 
@@ -48,12 +54,12 @@ haruka 按北京时间判断交易日：周六、周日不执行，并排除上�
 
 二进制工作流会执行以下检查：
 
-1. 使用 `npm ci` 安装锁定的前端依赖并重新生成 Tailwind CSS；
-2. 检查生成的 `static/app.css` 是否已经提交；
+1. 使用 `npm ci` 安装锁定的前端依赖并重新生成浏览器资源；
+2. 检查生成的 `static/` 产物是否已经提交；
 3. 执行 `cargo fmt --check` 和 `cargo build --locked --release`；
 4. 上传保留 14 天的 `haruka-linux-x86_64` 构建产物。
 
-从 GitHub Actions 页面下载并解压 `haruka-linux-x86_64.tar.gz` 后即可取得在 Ubuntu 24.04 x86_64 上构建的可执行文件。Tailwind CSS 已嵌入二进制，部署机器不需要安装 Node.js，也不需要额外复制 `templates/` 或 `static/`。其他操作系统或较旧的 Linux 发行版建议按照“本地运行”一节从源码构建。
+从 GitHub Actions 页面下载并解压 `haruka-linux-x86_64.tar.gz` 后即可取得在 Ubuntu 24.04 x86_64 上构建的可执行文件。CSS、前端运行库和 OCR 模型均已嵌入二进制，部署机器不需要安装 Node.js，也不需要额外复制 `templates/` 或 `static/`。其他操作系统或较旧的 Linux 发行版建议按照“本地运行”一节从源码构建。
 
 容器工作流使用仓库自带的 `GITHUB_TOKEN` 发布 `ghcr.io/<仓库所有者>/haruka`，不需要额外配置镜像仓库密码。`main` 对应 `latest` 和 `main` 标签，版本标签（例如 `v0.2.0`）会发布 `0.2.0`、`0.2` 等标签，同时每次构建还会生成提交 SHA 标签。首次发布后可在 GitHub Packages 设置中将镜像改为 Public；如果保持 Private，部署机器需要先使用具有 `read:packages` 权限的令牌执行 `docker login ghcr.io`。
 

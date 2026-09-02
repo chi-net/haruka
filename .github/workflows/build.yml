@@ -33,11 +33,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build Tailwind CSS
-        run: npm run css:build
+      - name: Build browser assets
+        run: npm run web:build
 
-      - name: Check generated CSS is committed
-        run: git diff --exit-code -- static/app.css
+      - name: Check generated browser assets are committed
+        run: git diff --exit-code -- static
 
       - name: Install Linux build dependencies
         run: |

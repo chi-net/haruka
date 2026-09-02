@@ -8,13 +8,13 @@
 ## 技术栈
 
 - 后端：Rust + axum 0.8 + sea-orm 1（SQLite，sqlx 运行时）
-- 前端：服务端渲染，askama 模板（`templates/`）+ htmx（`hx-boost`）+ Tailwind CSS v4 CLI 本地编译（源文件 `assets/tailwind.css`，提交产物 `static/app.css`）
+- 前端：服务端渲染，askama 模板（`templates/`）+ htmx（`hx-boost`）+ Tailwind CSS v4 CLI 本地编译（源文件 `assets/tailwind.css`，提交产物 `static/app.css`）；htmx、Chart.js、Tesseract.js/WASM 和中英文 OCR 模型均由 npm 锁定后复制到 `static/` 并嵌入二进制，禁止运行时依赖第三方 CDN
 - 无测试框架、无 lint 配置，验证方式：`cargo build` + 手动跑服务器用 curl 验证
 
 ## 命令
 
 - 运行：`cargo run`，默认监听 `127.0.0.1:3000`；命令行支持 `--listen <地址:端口>` 或 `--port <端口>`，环境变量支持 `LISTEN_ADDR` 或 `PORT`，优先级为命令行 > `LISTEN_ADDR` > `PORT` > 默认值；`--port`/`PORT` 监听 `0.0.0.0`
-- 前端依赖：`npm install`；构建样式：`npm run css:build`；开发监听：`npm run css:watch`
+- 前端依赖：`npm install`；完整构建：`npm run web:build`（Tailwind + 锁定的浏览器静态资源）；仅构建样式：`npm run css:build`；开发监听：`npm run css:watch`
 - 数据库：默认 `sqlite://haruka.db?mode=rwc`（可用 `DATABASE_URL` 覆盖），启动时用 sea-orm `Schema` 自动 `CREATE TABLE IF NOT EXISTS`，并由 `db::ensure_column` 用轻量 `ALTER TABLE` 补齐构建阶段新增字段；新增字段时必须同步登记，不能再要求用户手动删除数据库
 
 ## 加密（envelope）
@@ -57,6 +57,7 @@
 - `/installments` 是独立分期看板并显示在顶部导航，详情页逐月展示还款日、本金、利息、手续费、月供和逾期/已还状态；计划列表和期次表均分页。原 expense 账单在创建时立即按全部消费本金影响信用账户余额，计划利息与手续费仅在实际还款时计入账户余额
 - `/dashboard` 对用户统一称为“仪表板”，集中账户概览、快速记账及收支图表，底部不再显示账单流水；普通收支、转账与借还必须合并在同一“快速记账”卡片内用页签切换，不能再拆成独立操作卡片。日报按今日 24 小时、周/月/年报分别按近 7/30/365 个自然日聚合，Chart.js 使用平滑面积折线图；普通收支汇总和图表仍不包含转账与借还。`/transfers`、`/debts` 的 GET 只重定向到仪表板。借贷对象由 `/debt-people` 独立管理并显示在顶部导航
 - 仪表板与独立 `/bills/new` 页面必须共用 `templates/quick_entry.html` 的快速记账组件；账单列表页只保留“记一笔”入口，不能把整套快速记账组件嵌入列表。快速记账以 AJAX 原地提交并刷新所选账户余额，不因普通收支、转账或借还成功而跳离当前页面；JavaScript 不可用时才按 `redirect_to` 回退导航。普通收支支持最多 100 条的原子批量写入，整批任一记录校验失败时不得写入任何记录
+- 票据 OCR 完全在浏览器中用本地打包的 Tesseract.js Web Worker + WASM 执行，默认加载 `chi_sim` 和 `eng` 的 LSTM 模型；图片不得上传至 haruka 或任何 OCR 服务。可选 LLM 也只能由浏览器直连用户填写的 OpenAI Chat Completions 兼容完整 URL，后端不得代理、保存或记录 URL、模型、API Key、OCR 文字或图片；URL 与模型仅存浏览器 localStorage，API Key 只留在当前页面内存且刷新即失效。目标服务必须自行允许 CORS。OCR/AI 结果只能填入可编辑草稿，用户确认后才可调用现有记账接口
 - `/bills` 的基础搜索只显示日期区间和关键词并按 AND 筛选；独立 `/bills/search` 高级搜索页增加收支类型、精确分类、收入金额区间、支出金额区间及 AND/OR 组合模式。两组金额同时启用时按各自类型匹配其中一个区间，再与其他条件组合；关键词覆盖流水类型、账户、分类/对象和备注。筛选与筛选后汇总必须在 Rust 中解密后完成
 - `/bills` 与 `/bills/search` 均在完成解密筛选和全部结果汇总后分页，默认每页 50 条，可选 50/100/200 条；翻页必须保留全部搜索条件和每页条数
 - `/statistics` 是独立收支统计页，提供近 7/14/30/90/365 天快捷区间，也允许用户选择开始和结束日期（均包含）；至少展示收入、支出、结余、各自笔数与均值、收入/支出的分类和账户排行及占比饼图，统计仍须在 Rust 中解密后完成
@@ -65,5 +66,5 @@
 - 仪表板显示未来 7 日订阅到期和分期还款提醒，并保留已到期/逾期项目提醒
 - 所有 HTTP 4xx/5xx 响应由统一中间件处理：发送或接受 `application/json` 的请求以及 htmx 请求返回 `{ ok: false, status, error }` JSON，普通浏览器导航返回包含原始详情的错误页；前端必须展示明确的“操作失败”反馈，500 同时写入服务端日志，禁止空白页或吞掉错误
 - Service Worker 只允许缓存 CSS、固定版本 htmx 等非敏感静态资源，不得缓存包含解密数据的 HTML、JSON 或任何账务响应；AJAX 和所有非 GET 请求必须网络优先，离线失败时返回明确错误，禁止对账务 POST 做后台队列或恢复联网后的自动重放
-- 禁止使用 Tailwind Play CDN；样式改动后必须运行 `npm run css:build` 并提交 `static/app.css`
+- 禁止使用 Tailwind Play CDN 或运行时第三方 JavaScript CDN；完整前端资源改动后运行 `npm run web:build` 并提交 `static/` 产物，仅修改样式时至少运行 `npm run css:build`
 - 路由路径参数用 axum 0.8 语法 `{id}`

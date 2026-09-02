@@ -1,6 +1,12 @@
-const STATIC_CACHE = 'haruka-static-2026-09-01-v3';
-const STATIC_PATHS = new Set(['/static/app.css']);
-const HTMX_URL = 'https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js';
+const STATIC_CACHE = 'haruka-static-2026-09-01-v4';
+const STATIC_PATHS = new Set([
+  '/static/app.css',
+  '/static/vendor/htmx.min.js',
+  '/static/vendor/chart.umd.min.js',
+  '/static/receipt-scanner.js',
+  '/static/ocr/tesseract.min.js',
+  '/static/ocr/worker.min.js'
+]);
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(STATIC_CACHE).then(cache => cache.addAll([...STATIC_PATHS])));
@@ -43,13 +49,4 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  // htmx 使用锁定版本；首次联网加载后缓存，后续页面可复用。
-  if (request.url === HTMX_URL) {
-    event.respondWith(
-      caches.match(request).then(cached => cached || fetch(request).then(response => {
-        if (response.ok) caches.open(STATIC_CACHE).then(cache => cache.put(request, response.clone()));
-        return response;
-      }))
-    );
-  }
 });

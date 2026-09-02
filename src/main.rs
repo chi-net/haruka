@@ -397,6 +397,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/static/app.css", get(handlers::stylesheet))
+        .route("/static/{*path}", get(handlers::browser_asset))
         .route("/service-worker.js", get(handlers::service_worker))
         .route(
             "/setup",

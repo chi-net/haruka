@@ -14,8 +14,8 @@ pub mod transfers;
 
 use askama::Template;
 use axum::{
-    body::to_bytes,
-    extract::Request,
+    body::{to_bytes, Body},
+    extract::{Path, Request},
     http::{header, HeaderValue, StatusCode},
     middleware::Next,
     response::{Html, IntoResponse, Response},
@@ -143,6 +143,60 @@ pub async fn stylesheet() -> impl IntoResponse {
         ],
         include_str!("../../static/app.css"),
     )
+}
+
+pub async fn browser_asset(Path(path): Path<String>) -> Response {
+    let (content_type, body): (&str, &'static [u8]) = match path.as_str() {
+        "receipt-scanner.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../static/receipt-scanner.js"),
+        ),
+        "vendor/htmx.min.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../static/vendor/htmx.min.js"),
+        ),
+        "vendor/chart.umd.min.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../static/vendor/chart.umd.min.js"),
+        ),
+        "ocr/tesseract.min.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../static/ocr/tesseract.min.js"),
+        ),
+        "ocr/worker.min.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../static/ocr/worker.min.js"),
+        ),
+        "ocr/tesseract-core-lstm.wasm.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../static/ocr/tesseract-core-lstm.wasm.js"),
+        ),
+        "ocr/tesseract-core-simd-lstm.wasm.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../static/ocr/tesseract-core-simd-lstm.wasm.js"),
+        ),
+        "ocr/tesseract-core-relaxedsimd-lstm.wasm.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("../../static/ocr/tesseract-core-relaxedsimd-lstm.wasm.js"),
+        ),
+        "ocr/chi_sim.traineddata.gz" => (
+            "application/gzip",
+            include_bytes!("../../static/ocr/chi_sim.traineddata.gz"),
+        ),
+        "ocr/eng.traineddata.gz" => (
+            "application/gzip",
+            include_bytes!("../../static/ocr/eng.traineddata.gz"),
+        ),
+        _ => return (StatusCode::NOT_FOUND, "静态资源不存在").into_response(),
+    };
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "public, max-age=3600"),
+        ],
+        Body::from(body),
+    )
+        .into_response()
 }
 
 pub async fn service_worker() -> impl IntoResponse {
