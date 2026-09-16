@@ -8,6 +8,7 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium">预算设置</h2>
+  <p class="text-sm text-gray-500 mt-1 mb-4">金额使用默认货币 {{ default_currency }}；留空即可停用对应周期。</p>
   <form method="post" action="/budgets" class="grid grid-cols-1 md:grid-cols-3 gap-4">
     <label class="block"><span class="block text-sm text-gray-600 mb-1">日预算</span><input name="daily_amount" value="{{ daily_amount }}" inputmode="decimal" placeholder="例如 100.00" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"><span class="block text-xs text-gray-400 mt-1">每天零点进入新周期</span></label>
     <label class="block"><span class="block text-sm text-gray-600 mb-1">周预算</span><input name="weekly_amount" value="{{ weekly_amount }}" inputmode="decimal" placeholder="例如 700.00" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"><span class="block text-xs text-gray-400 mt-1">周一至周日</span></label>
