@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}分享账单 - Haruka{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+  <div><h1 class="text-xl font-bold">分享账单</h1></div>
+  <a href="/bills" class="text-sm text-blue-600 hover:underline">返回账单</a>
+</div>
+
+{% if !created_path.is_empty() %}
+<section class="bg-green-50 rounded-lg border border-green-200 p-4 mb-4">
+  <h2 class="font-medium text-green-800">分享链接已创建</h2>
+  <p class="text-xs text-green-700 mt-1">复制后交给对方，如果这个分享链接设置了密码，别忘了找一个渠道发送密码。</p>
+  <div class="flex flex-wrap gap-2 mt-3"><input readonly data-share-url data-share-path="{{ created_path }}" class="flex-1 min-w-48 border border-green-200 rounded px-3 py-1.5 text-sm font-mono"><button type="button" data-copy-share data-share-path="{{ created_path }}" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">复制链接</button><a href="{{ created_path }}" target="_blank" rel="noreferrer" class="border border-green-200 text-green-700 text-sm px-3 py-1.5 rounded">打开</a></div>
+</section>
+{% endif %}
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
+  <section class="bg-white rounded-lg border border-gray-200 p-4">
+    <h2 class="font-medium mb-3">要分享的内容</h2>
+    <dl class="space-y-3 text-sm">
+      <div><dt class="text-xs text-gray-500">类型与金额</dt><dd class="mt-1"><span class="mr-2">{{ bill.kind }}</span><span class="font-mono">{{ bill.amount }}</span></dd></div>
+      <div><dt class="text-xs text-gray-500">账户</dt><dd class="mt-1">{{ bill.account }}</dd></div>
+      <div><dt class="text-xs text-gray-500">分类</dt><dd class="mt-1">{{ bill.category }}</dd></div>
+      <div><dt class="text-xs text-gray-500">时间</dt><dd class="mt-1"><time data-utc-time="{{ bill.happened_at }}">{{ bill.happened_at }}</time></dd></div>
+      {% if !bill.note.is_empty() %}<div><dt class="text-xs text-gray-500">备注</dt><dd class="mt-1 whitespace-pre-wrap break-words">{{ bill.note }}</dd></div>{% endif %}
+    </dl>
+    <p class="text-xs text-amber-700 mt-4">需要注意的是：分享创建后将会固定不变，编辑或删除原账单不会修改这份快照。</p>
+  </section>
+  <section class="bg-white rounded-lg border border-gray-200 p-4">
+    <h2 class="font-medium">创建分享链接</h2>
+    <form method="post" action="/bills/{{ bill_id }}/share" class="space-y-4">
+      <div data-utc-field><label class="block text-sm text-gray-600 mb-1">有效期结束</label><input data-utc-picker data-utc-value="{{ default_expires_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"><input data-utc-target type="hidden" name="expires_at" value="{{ default_expires_at }}"></div>
+      <div><label class="block text-sm text-gray-600 mb-1">访问密码（可选）</label><input name="password" type="password" maxlength="256" autocomplete="new-password" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"><p class="text-xs text-gray-400 mt-1">密码不会保存；它只参与分享密钥派生。</p></div>
+      <div><label class="block text-sm text-gray-600 mb-1">确认访问密码</label><input name="confirm" type="password" maxlength="256" autocomplete="new-password" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>
+      <button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">创建分享</button>
+    </form>
+  </section>
+</div>
+
+<section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+  <div class="px-4 py-3 border-b border-gray-100"><h2 class="font-medium">这笔账单的分享记录</h2></div>
+  {% if shares.is_empty() %}<p class="text-sm text-gray-500 p-4">还没有创建分享。</p>{% else %}
+  <div class="divide-y divide-gray-100">
+    {% for share in shares %}<div class="p-4 flex flex-wrap items-center gap-3"><div class="flex-1 min-w-48"><div class="text-sm">{% if share.has_password %}密码保护{% else %}无需密码{% endif %}{% if share.expired %}<span class="ml-2 text-xs text-red-600">已过期</span>{% else %}<span class="ml-2 text-xs text-green-700">有效</span>{% endif %}</div><div class="text-xs text-gray-500 mt-1">截止 <time data-utc-time="{{ share.expires_at }}">{{ share.expires_at }}</time> · 创建于 <time data-utc-time="{{ share.created_at }}">{{ share.created_at }}</time></div></div><button type="button" data-copy-share data-share-path="{{ share.path }}" class="text-sm text-blue-600">复制链接</button><a href="{{ share.path }}" target="_blank" rel="noreferrer" class="text-sm text-blue-600">打开</a><form method="post" action="/shares/{{ share.id }}/delete" hx-confirm="确认撤销这个分享？链接将立即失效。"><input type="hidden" name="return_to" value="bill"><button class="text-sm text-red-600">撤销</button></form></div>{% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% include "share_copy_script.html" %}
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}新建借还请求 - haruka{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between gap-3 mb-4"><div><h1 class="text-xl font-bold">新建借还请求</h1><p class="text-sm text-gray-500 mt-1">生成加密链接，让打款人查看收款信息并提交自己的打款资料。</p></div><a href="/debt-requests" class="text-sm text-blue-600 hover:underline">返回请求管理</a></div>
+{% if accounts.is_empty() %}
+<section class="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">还没有带卡号或账户用户名的可分享账户。请先在<a href="/accounts" class="underline">账户管理</a>中补充收款信息。</section>
+{% else %}
+<form method="post" action="/debt-requests" class="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div><label class="block text-sm text-gray-600 mb-1">请求类型</label><select id="request-kind" name="kind" class="w-full border border-gray-300 rounded px-3 py-2 bg-white"><option value="borrow">我向对方借款</option><option value="repayment_received">请对方归还欠款</option></select></div>
+    <div><label class="block text-sm text-gray-600 mb-1">关联借贷对象</label><select id="request-person" name="person_id" class="w-full border border-gray-300 rounded px-3 py-2 bg-white"><option value="0">由打款人填写，确认时新建</option>{% for person in people %}<option value="{{ person.id }}">{{ person.name }}</option>{% endfor %}</select><p id="request-person-help" class="text-xs text-gray-400 mt-1">借款时可选；还款请求必须选择已有对象。</p></div>
+    <div><label class="block text-sm text-gray-600 mb-1">收款账户</label><select name="account_id" required class="w-full border border-gray-300 rounded px-3 py-2 bg-white">{% for account in accounts %}<option value="{{ account.id }}">{{ account.name }}</option>{% endfor %}</select></div>
+    <div><label class="block text-sm text-gray-600 mb-1">期望金额</label><input name="amount" type="number" min="0.01" step="0.01" required class="w-full border border-gray-300 rounded px-3 py-2 font-mono"></div>
+    <div><label class="block text-sm text-gray-600 mb-1">收款人姓名或户名</label><input name="recipient_name" maxlength="100" required autocomplete="name" placeholder="打款时需要核对的户名" class="w-full border border-gray-300 rounded px-3 py-2"></div>
+    <div data-utc-field><label class="block text-sm text-gray-600 mb-1">链接有效期</label><input type="datetime-local" required data-utc-picker data-utc-value="{{ default_expires_at }}" class="w-full border border-gray-300 rounded px-3 py-2"><input type="hidden" name="expires_at" value="{{ default_expires_at }}" data-utc-target></div>
+    <div><label class="block text-sm text-gray-600 mb-1">给打款人的说明</label><input name="note" maxlength="1000" placeholder="用途、还款说明等" class="w-full border border-gray-300 rounded px-3 py-2"></div>
+  </div>
+  <div class="rounded border border-blue-100 bg-blue-50 p-3 text-xs text-blue-800">注意：收款账户、金额和说明会变成不可重放的令牌以便核对，链接中的 256 位随机令牌就是访问凭据，请只发送给对应打款人。</div>
+  <div class="flex gap-3"><button class="bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700">生成请求链接</button><a href="/debt-requests" class="text-sm text-gray-600 px-4 py-2 border border-gray-300 rounded">取消</a></div>
+</form>
+<script>
+(() => {
+  const kind = document.getElementById('request-kind');
+  const person = document.getElementById('request-person');
+  if (!kind || !person) return;
+  const update = () => {
+    const repayment = kind.value === 'repayment_received';
+    person.required = repayment;
+    if (repayment && person.value === '0' && person.options.length > 1) person.selectedIndex = 1;
+  };
+  kind.addEventListener('change', update);
+  update();
+})();
+</script>
+{% endif %}
+{% endblock %}

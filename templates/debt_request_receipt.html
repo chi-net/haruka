@@ -1,0 +1,9 @@
+{% extends "public_share_base.html" %}
+{% block title %}打款信息已提交 - Haruka{% endblock %}
+{% block content %}
+<section class="bg-white rounded-lg border border-gray-200 p-5">
+  <div class="text-center"><div class="mx-auto w-10 h-10 rounded-full {% if confirmed %}bg-green-100 text-green-700{% else %}bg-blue-100 text-blue-700{% endif %} flex items-center justify-center text-xl">✓</div><h1 class="text-lg font-semibold mt-3">{% if confirmed %}收款人已确认到账{% else %}打款信息已提交{% endif %}</h1><p class="text-sm text-gray-500 mt-1">{% if confirmed %}这笔资金已经写入收款人的借还流水。{% else %}请等待收款人核实到账；提交本身不会直接改变账本余额。{% endif %}</p></div>
+  <dl class="mt-5 border-t border-gray-100 pt-4 space-y-2 text-sm"><div class="flex justify-between gap-4"><dt class="text-gray-500">请求</dt><dd>{{ request.kind_label }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">收款人</dt><dd>{{ request.recipient_name }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">打款人</dt><dd>{{ submission.payer_name }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">实际金额</dt><dd class="font-mono">{{ paid_amount }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">打款时间</dt><dd><time data-utc-time="{{ submission.paid_at }}">{{ submission.paid_at }}</time></dd></div></dl>
+  <div class="mt-5 rounded bg-gray-50 p-3"><p class="text-xs text-gray-500">验证指纹</p><code class="block mt-1 text-xs break-all select-all">{{ verification_code }}</code><p class="text-xs text-gray-400 mt-2">请与对方进行核对避免诈骗！</p></div>
+</section>
+{% endblock %}

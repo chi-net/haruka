@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}借还请求 - haruka{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3 mb-4"><div><h1 class="text-xl font-bold">借还请求</h1><p class="text-sm text-gray-500 mt-1">分享收款信息，核对打款人提交，并在确认到账后生成借还流水。</p></div><a href="/debt-requests/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新建请求</a></div>
+{% if requests.is_empty() %}<p class="text-sm text-gray-500">还没有借款或还款请求。</p>{% else %}
+<div class="space-y-4">
+{% for request in requests %}
+<article class="bg-white rounded-lg border border-gray-200 p-5">
+  <div class="flex flex-wrap items-start justify-between gap-3"><div><h2 class="font-medium">{{ request.label }}</h2><p class="text-xs text-gray-500 mt-1">{{ request.account_name }} · {{ request.identifier_label }} {{ request.identifier_masked }}</p></div><span class="text-xs rounded-full px-2 py-1 {% if request.status == "confirmed" %}bg-green-100 text-green-800{% else if request.status == "submitted" %}bg-blue-100 text-blue-800{% else if request.status == "revoked" || request.expired %}bg-gray-100 text-gray-600{% else %}bg-amber-100 text-amber-800{% endif %}">{{ request.status_label }}</span></div>
+  {% if !request.note.is_empty() %}<p class="text-sm text-gray-600 mt-3 whitespace-pre-wrap">{{ request.note }}</p>{% endif %}
+  <p class="text-xs text-gray-400 mt-3">创建于 <time data-utc-time="{{ request.created_at }}">{{ request.created_at }}</time> · 截止 <time data-utc-time="{{ request.expires_at }}">{{ request.expires_at }}</time></p>
+  {% if request.has_submission %}
+  <div class="mt-4 rounded border border-blue-100 bg-blue-50 p-4"><h3 class="text-sm font-medium text-blue-900">打款人提交</h3><dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-2 mt-2 text-sm"><div><dt class="text-xs text-blue-700">姓名</dt><dd>{{ request.payer_name }}</dd></div><div><dt class="text-xs text-blue-700">实际金额</dt><dd class="font-mono">{{ request.paid_amount }}</dd></div>{% if !request.payer_contact.is_empty() %}<div><dt class="text-xs text-blue-700">联系方式</dt><dd class="break-words">{{ request.payer_contact }}</dd></div>{% endif %}{% if !request.payer_account.is_empty() %}<div><dt class="text-xs text-blue-700">打款账户</dt><dd class="break-words">{{ request.payer_account }}</dd></div>{% endif %}<div><dt class="text-xs text-blue-700">打款时间</dt><dd><time data-utc-time="{{ request.paid_at }}">{{ request.paid_at }}</time></dd></div>{% if !request.payer_note.is_empty() %}<div><dt class="text-xs text-blue-700">说明</dt><dd class="whitespace-pre-wrap">{{ request.payer_note }}</dd></div>{% endif %}</dl></div>
+  {% endif %}
+  <div class="mt-4 rounded bg-gray-50 p-3"><p class="text-xs {% if request.verification_ok %}text-green-700{% else %}text-red-700{% endif %}">{% if request.verification_ok %}验证链完整{% else %}验证链异常，请勿确认{% endif %}</p><code class="block mt-1 text-xs break-all select-all">{{ request.verification_code }}</code></div>
+  <div class="flex flex-wrap items-center gap-3 mt-4"><button type="button" data-copy-share data-share-path="{{ request.path }}" class="text-sm text-blue-600">复制链接</button><a href="{{ request.path }}" target="_blank" rel="noreferrer" class="text-sm text-blue-600">打开</a>{% if request.can_confirm %}<form method="post" action="/debt-requests/{{ request.id }}/confirm" hx-confirm="请先在收款账户中核实确已到账。确认后将生成借还流水，继续？"><button class="text-sm bg-green-600 text-white px-3 py-1.5 rounded">确认到账并记账</button></form>{% endif %}{% if request.can_revoke %}<form method="post" action="/debt-requests/{{ request.id }}/revoke" hx-confirm="确认撤销？公开链接将立即失效。"><button class="text-sm text-amber-700">撤销</button></form>{% endif %}<form method="post" action="/debt-requests/{{ request.id }}/delete" hx-confirm="确认永久删除这个请求及打款人提交的信息？"><button class="text-sm text-red-600">删除</button></form>{% if request.confirmed_debt_record_id != 0 %}<span class="text-xs text-gray-400">已生成流水 #{{ request.confirmed_debt_record_id }}</span>{% endif %}</div>
+</article>
+{% endfor %}
+</div>
+{% endif %}
+{% include "share_copy_script.html" %}
+{% endblock %}

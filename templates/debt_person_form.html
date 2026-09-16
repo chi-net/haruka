@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} - haruka{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-4">{{ heading }}</h1>
+<form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-md">
+  <div><label class="block text-sm text-gray-600 mb-1">姓名或称呼</label><input name="name" value="{{ name }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>
+  <div><label class="block text-sm text-gray-600 mb-1">备注</label><input name="note" value="{{ note }}" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>
+  <div class="flex gap-3"><button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">保存</button><a href="/debt-people" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300">取消</a></div>
+</form>
+{% endblock %}

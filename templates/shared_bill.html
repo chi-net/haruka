@@ -1,0 +1,18 @@
+{% extends "public_share_base.html" %}
+{% block title %}{{ bill.kind }}账单 - Haruka{% endblock %}
+{% block content %}
+<article class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+  <header class="px-5 py-4 border-b border-gray-100">
+    <div class="flex items-center justify-between gap-3">
+      <div><p class="text-xs text-gray-500">分享的账单</p><h1 class="text-lg font-semibold mt-1">{{ bill.kind }}</h1></div>
+      <div class="font-mono text-xl {% if bill.kind == "收入" %}text-green-600{% else %}text-red-600{% endif %}">{{ bill.amount }}</div>
+    </div>
+  </header>
+  <dl class="divide-y divide-gray-100">
+    <div class="px-5 py-3"><dt class="text-xs text-gray-500">账户</dt><dd class="text-sm mt-1">{{ bill.account }}</dd></div>
+    <div class="px-5 py-3"><dt class="text-xs text-gray-500">分类</dt><dd class="text-sm mt-1">{{ bill.category }}</dd></div>
+    <div class="px-5 py-3"><dt class="text-xs text-gray-500">发生时间</dt><dd class="text-sm mt-1"><time data-utc-time="{{ bill.happened_at }}">{{ bill.happened_at }}</time></dd></div>
+    {% if !bill.note.is_empty() %}<div class="px-5 py-3"><dt class="text-xs text-gray-500">备注</dt><dd class="text-sm mt-1 whitespace-pre-wrap break-words">{{ bill.note }}</dd></div>{% endif %}
+  </dl>
+</article>
+{% endblock %}

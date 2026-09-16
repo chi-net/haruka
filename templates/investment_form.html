@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} - haruka{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between gap-3 mb-4">
+  <div><h1 class="text-xl font-bold">{{ heading }}</h1></div>
+  <a href="/investments" class="text-sm text-gray-600 hover:text-blue-600">返回定投</a>
+</div>
+
+{% if fund_accounts.is_empty() %}
+<section class="max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+  <p class="font-medium">还没有可用的基金账户</p>
+  <p class="mt-1">请先新增一个“投资账户”，再回来创建定投计划。</p>
+  <a href="/accounts/new" class="inline-block mt-3 text-blue-700 hover:underline">新增投资账户</a>
+</section>
+{% else if source_accounts.is_empty() %}
+<section class="max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">没有可用于扣款的非信用账户，请先新增账户。</section>
+{% else %}
+<form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-xl" id="investment-form">
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">计划名</label>
+    <input name="name" value="{{ name }}" required autofocus placeholder="例如：沪深 300 每日定投" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">固定基金账户</label>
+      <select id="investment-fund-account" name="fund_account_id" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        {% for account in fund_accounts %}<option value="{{ account.id }}" data-currency="{{ account.currency }}" {% if account.id == fund_account_id %}selected{% endif %}>{{ account.name }} · {{ account.currency }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">扣款账户</label>
+      <select id="investment-source-account" name="from_account_id" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        {% for account in source_accounts %}<option value="{{ account.id }}" data-currency="{{ account.currency }}" {% if account.id == from_account_id %}selected{% endif %}>{{ account.name }} · {{ account.currency }}</option>{% endfor %}
+      </select>
+      <p id="investment-currency-help" class="text-xs text-gray-400 mt-1">只可选择与基金账户相同货币的非信用账户。</p>
+    </div>
+  </div>
+  <section class="rounded-lg border border-gray-200 p-4 space-y-4">
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">扣款策略</label>
+      <select id="investment-strategy" name="strategy" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="fixed" {% if strategy == "fixed" %}selected{% endif %}>固定金额</option>
+        <option value="smart" {% if strategy == "smart" %}selected{% endif %}>聪明定投（均线偏离）</option>
+        <option value="manual" {% if strategy == "manual" %}selected{% endif %}>每日手动填写金额</option>
+        <option value="sms" {% if strategy == "sms" %}selected{% endif %}>短信实扣金额（目前需要配合 iCloud Shortcuts + 招商银行短信通知 使用）</option>
+      </select>
+    </div>
+    <div id="investment-smart-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-4 {% if strategy != "smart" %}hidden{% endif %}">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">跟踪指数</label>
+        <select id="investment-index-code" name="index_code" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          {% for index in index_options %}<option value="{{ index.code }}" {% if index.code == index_code %}selected{% endif %}>{{ index.name }}（{{ index.code }}）</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">均线周期</label>
+        <select id="investment-average-days" name="moving_average_days" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          {% for option in moving_average_options %}<option value="{{ option.days }}" {% if option.selected %}selected{% endif %}>{{ option.days }} 日均线</option>{% endfor %}
+        </select>
+      </div>
+      <div class="sm:col-span-2 rounded bg-blue-50 border border-blue-100 p-3 text-xs text-blue-800">
+        <p>偏离均线不超过 2% 时按 100%；超过 2/3/4/5/6% 后，高位依次按 90/80/70/60/50%，低位依次按 110/120/130/140/150%。</p>
+        <p class="mt-2">指数行情只用于计算本期扣款比例；Haruka 只生成内部记账流水，不会向银行或基金平台发起真实扣款、申购。</p>
+        <div class="flex flex-wrap items-center gap-3 mt-3"><button id="investment-smart-preview" type="button" class="rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700">查看当前档位</button><span id="investment-smart-status" role="status" aria-live="polite">预览使用所选开始日期之前最近一个指数交易日的数据。</span></div>
+      </div>
+    </div>
+    <div id="investment-manual-help" class="rounded bg-amber-50 border border-amber-100 p-3 text-xs text-amber-800 {% if strategy != "manual" %}hidden{% endif %}">每个到期交易日会显示一个金额输入框，由你核对银行或基金平台后确认记账；同一计划同一天只能执行一次。</div>
+    <div id="investment-sms-fields" class="rounded bg-emerald-50 border border-emerald-100 p-3 space-y-3 {% if strategy != "sms" %}hidden{% endif %}">
+      <div><label class="block text-sm text-emerald-900 mb-1">招商银行通知短信中的基金名称</label><input id="investment-sms-fund-name" name="sms_fund_name" value="{{ sms_fund_name }}" placeholder="例如：富国中证沪港深500ETF联接基金A" class="w-full border border-emerald-200 rounded px-3 py-1.5 text-sm"><p class="text-xs text-emerald-800 mt-1">用于和短信中的「基金名称」或“涉及基金”匹配；扣款账户必须已经填写银行卡号，短信账户尾号也必须一致。</p></div>
+      <p class="text-xs text-emerald-800">成功短信按实扣金额在扣款账户与投资账户之间生成转账；失败短信只显示失败记录。短信金额已经是银行实际扣款，本模式不会再另记手续费。</p>
+    </div>
+  </section>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div id="investment-amount-field">
+      <label id="investment-amount-label" class="block text-sm text-gray-600 mb-1">每个交易日基准金额</label>
+      <input id="investment-amount" name="amount" type="number" step="0.01" min="0.01" value="{{ amount }}" {% if strategy != "manual" && strategy != "sms" %}required{% endif %} class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <p id="investment-amount-help" class="text-xs text-gray-400 mt-1"></p>
+    </div>
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">手续费率（%）</label>
+      <input id="investment-fee-rate" name="fee_rate" type="number" step="0.01" min="0" max="100" value="{{ fee_rate }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+    <div>
+      <label class="block text-sm text-gray-600 mb-1">开始日期</label>
+      <input name="start_date" type="date" min="{{ min_start_date }}" value="{{ start_date }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <p class="text-xs text-gray-400 mt-1">遇周末或休市日将顺延到下一交易日。</p>
+    </div>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">备注</label>
+    <input name="note" value="{{ note }}" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <label class="inline-flex items-center gap-2 text-sm"><input type="checkbox" name="active" value="true" {% if active %}checked{% endif %}> 保存后启用计划</label>
+  <div class="flex gap-3">
+    <button type="submit" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">保存</button>
+    <a href="/investments" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300 hover:bg-gray-50">取消</a>
+  </div>
+</form>
+<script>
+(() => {
+  const form = document.getElementById('investment-form');
+  if (!form || form.dataset.currencyReady === 'true') return;
+  const fund = document.getElementById('investment-fund-account');
+  const source = document.getElementById('investment-source-account');
+  const strategy = document.getElementById('investment-strategy');
+  const smartFields = document.getElementById('investment-smart-fields');
+  const manualHelp = document.getElementById('investment-manual-help');
+  const smsFields = document.getElementById('investment-sms-fields');
+  const smsFundName = document.getElementById('investment-sms-fund-name');
+  const amount = document.getElementById('investment-amount');
+  const amountField = document.getElementById('investment-amount-field');
+  const amountLabel = document.getElementById('investment-amount-label');
+  const amountHelp = document.getElementById('investment-amount-help');
+  const feeRate = document.getElementById('investment-fee-rate');
+  const indexCode = document.getElementById('investment-index-code');
+  const averageDays = document.getElementById('investment-average-days');
+  const startDate = form.querySelector('[name="start_date"]');
+  const preview = document.getElementById('investment-smart-preview');
+  const previewStatus = document.getElementById('investment-smart-status');
+  const sync = () => {
+    const currency = fund.selectedOptions[0]?.dataset.currency;
+    let selectedAvailable = false;
+    Array.from(source.options).forEach(option => {
+      const disabled = option.dataset.currency !== currency || option.value === fund.value;
+      option.disabled = disabled;
+      if (option.selected && !disabled) selectedAvailable = true;
+    });
+    if (!selectedAvailable) {
+      const first = Array.from(source.options).find(option => !option.disabled);
+      if (first) source.value = first.value;
+    }
+  };
+  fund.addEventListener('change', sync);
+  const syncStrategy = () => {
+    const manual = strategy.value === 'manual';
+    const sms = strategy.value === 'sms';
+    smartFields.classList.toggle('hidden', strategy.value !== 'smart');
+    manualHelp.classList.toggle('hidden', !manual);
+    smsFields.classList.toggle('hidden', !sms);
+    smsFundName.required = sms;
+    amount.required = !manual && !sms;
+    amount.readOnly = sms;
+    amountField.classList.toggle('hidden', sms);
+    feeRate.disabled = sms;
+    amountLabel.textContent = manual ? '默认填写金额（可留空）' : sms ? '每次金额' : '每个交易日基准金额';
+    amountHelp.textContent = manual ? '到期时仍可覆盖为当天实际金额。' : sms ? '由招商银行成功短信中的扣款金额自动填写。' : '';
+  };
+  strategy.addEventListener('change', syncStrategy);
+  preview.addEventListener('click', async () => {
+    preview.disabled = true;
+    previewStatus.textContent = '正在更新指数行情并计算…';
+    try {
+      const query = new URLSearchParams({ index_code: indexCode.value, moving_average_days: averageDays.value, trade_date: startDate.value });
+      const response = await fetch(`/investments/smart-preview?${query}`, { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(await window.harukaReadErrorResponse(response));
+      const result = await response.json();
+      const warning = result.warning ? ` 注意：${result.warning}` : '';
+      previewStatus.textContent = `${result.quote_date} ${result.index_name}收盘 ${result.close}，${result.moving_average_days}日均线 ${result.moving_average}，偏离 ${result.deviation}，本期按 ${result.multiplier} 扣款。数据：${result.source}${warning}`;
+    } catch (error) {
+      previewStatus.textContent = `预览失败：${error.message || error}`;
+    } finally {
+      preview.disabled = false;
+    }
+  });
+  sync();
+  syncStrategy();
+  form.dataset.currencyReady = 'true';
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} - Haruka{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-4">{{ heading }}</h1>
+<form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-md">
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">服务名</label>
+    <input name="name" value="{{ name }}" required autofocus placeholder="例如：视频网站会员" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">每次支出金额</label>
+    <input name="amount" type="number" step="0.01" min="0.01" value="{{ amount }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">订阅货币</label>
+    <select id="subscription-currency" name="currency" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      {% for c in currencies %}<option value="{{ c.code }}" {% if c.code == currency %}selected{% endif %}>{{ c.code }} · {{ c.name }}</option>{% endfor %}
+    </select>
+    <p class="text-xs text-gray-400 mt-1">生成支出时会按当日汇率换算为付款账户的货币。</p>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">支出分类</label>
+    <select name="category" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      {% for c in categories %}<option value="{{ c.name }}" {% if c.name == category %}selected{% endif %}>{{ c.name }}</option>{% endfor %}
+    </select>
+    <p class="text-xs text-gray-400 mt-1">分类可在设置页管理。</p>
+  </div>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">订阅周期</label>
+    <select name="period" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <option value="day" {% if period == "day" %}selected{% endif %}>日</option>
+      <option value="week" {% if period == "week" %}selected{% endif %}>周</option>
+      <option value="month" {% if period == "month" %}selected{% endif %}>月</option>
+      <option value="quarter" {% if period == "quarter" %}selected{% endif %}>季</option>
+      <option value="year" {% if period == "year" %}selected{% endif %}>年</option>
+    </select>
+  </div>
+  <div data-utc-field>
+    <label class="block text-sm text-gray-600 mb-1">下次到期时间（当地时间）</label>
+    <input data-utc-picker data-utc-value="{{ expires_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    <input data-utc-target type="hidden" name="expires_at" value="{{ expires_at }}">
+  </div>
+  <section class="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
+    <label class="flex items-start gap-2"><input id="auto-debit-toggle" type="checkbox" name="auto_debit" value="true" {% if auto_debit %}checked{% endif %} class="mt-1"><span><span class="block text-sm font-medium text-blue-900">启用账本内自动扣款</span><span class="block text-xs text-blue-700 mt-0.5">到期后在下次解锁访问仪表板时自动生成支出并顺延订阅，不会连接银行或支付平台真实扣款。</span></span></label>
+    <div id="auto-debit-settings" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div><label class="block text-sm text-blue-800 mb-1">自动扣款账户</label><select id="auto-debit-account" name="auto_debit_account_id" class="w-full border border-blue-200 rounded px-3 py-2 text-sm bg-white"><option value="0">请选择同币种账户</option>{% for account in accounts %}<option value="{{ account.id }}" data-currency="{{ account.currency }}" {% if account.id == auto_debit_account_id %}selected{% endif %}>{{ account.name }}</option>{% endfor %}</select><p id="auto-account-empty" class="hidden text-xs text-red-600 mt-1">没有与订阅同币种的账户。</p></div>
+      <div><label class="block text-sm text-blue-800 mb-1">提前检查余额</label><div class="flex items-center gap-2"><input name="balance_check_days" type="number" min="0" max="30" value="{{ balance_check_days }}" class="w-24 border border-blue-200 rounded px-3 py-2 text-sm"><span class="text-sm text-blue-800">天</span></div><p class="text-xs text-blue-700 mt-1">进入检查期后，余额或可用额度不足会在仪表板醒目提醒。</p></div>
+    </div>
+  </section>
+  <div>
+    <label class="block text-sm text-gray-600 mb-1">备注</label>
+    <input name="note" value="{{ note }}" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+  </div>
+  <div class="flex gap-3">
+    <button type="submit" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">保存</button>
+    <a href="/subscriptions" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300 hover:bg-gray-50">取消</a>
+  </div>
+</form>
+<script>
+(() => {
+  const toggle = document.getElementById('auto-debit-toggle');
+  const settings = document.getElementById('auto-debit-settings');
+  const currency = document.getElementById('subscription-currency');
+  const account = document.getElementById('auto-debit-account');
+  const empty = document.getElementById('auto-account-empty');
+  if (!toggle || !settings || !currency || !account) return;
+  const update = () => {
+    settings.classList.toggle('hidden', !toggle.checked);
+    let matches = 0;
+    Array.from(account.options).forEach((option, index) => {
+      if (index === 0) return;
+      const matched = option.dataset.currency === currency.value;
+      option.disabled = !matched;
+      option.hidden = !matched;
+      if (matched) matches += 1;
+    });
+    const selected = account.selectedOptions[0];
+    if (selected && selected.value !== '0' && selected.disabled) account.value = '0';
+    account.required = toggle.checked;
+    empty.classList.toggle('hidden', !toggle.checked || matches > 0);
+  };
+  toggle.addEventListener('change', update);
+  currency.addEventListener('change', update);
+  update();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}分期详情 - Haruka{% endblock %}
+{% block content %}
+<div class="flex items-start justify-between gap-3 mb-4">
+  <div><h1 class="text-xl font-bold">{{ title }}</h1><p class="text-sm text-gray-500 mt-1">{{ account_name }}</p></div>
+  <a href="/installments" class="text-sm text-blue-600 hover:underline">返回分期</a>
+</div>
+
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">分期本金</div><div class="font-mono mt-1">{{ principal }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">期限 / 方式</div><div class="mt-1">{{ term }} · {{ method }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">年利率</div><div class="font-mono mt-1">{{ annual_rate }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">首期还款日</div><div class="font-mono mt-1">{{ first_due_date }}</div></div>
+  <div class="bg-amber-50 rounded-lg border border-amber-200 p-3"><div class="text-xs text-amber-700">总利息</div><div class="font-mono text-amber-700 mt-1">{{ total_interest }}</div></div>
+  <div class="bg-amber-50 rounded-lg border border-amber-200 p-3"><div class="text-xs text-amber-700">总手续费</div><div class="font-mono text-amber-700 mt-1">{{ total_fee }}</div></div>
+  <div class="bg-blue-50 rounded-lg border border-blue-200 p-3"><div class="text-xs text-blue-700">计划总还款</div><div class="font-mono text-blue-700 mt-1">{{ total_repayment }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">计价货币</div><div class="font-mono mt-1">{{ currency }}</div></div>
+</div>
+
+{% if repayment_accounts.is_empty() %}<p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3 mb-4">当前没有与 {{ currency }} 同币种的普通账户，暂时无法还款。请先创建或准备一个非信用账户。</p>{% endif %}
+
+<form method="get" action="/installments/{{ plan_id }}" class="flex items-center justify-end gap-2 mb-3"><span class="text-xs text-gray-500">共 {{ total_records }} 期</span><select name="per_page" aria-label="每页条数" onchange="this.form.requestSubmit()" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="50" {% if per_page == 50 %}selected{% endif %}>50 条/页</option><option value="100" {% if per_page == 100 %}selected{% endif %}>100 条/页</option><option value="200" {% if per_page == 200 %}selected{% endif %}>200 条/页</option></select></form>
+
+<div class="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-gray-500"><tr><th class="text-left px-4 py-2 font-medium">期次</th><th class="text-left px-4 py-2 font-medium">还款日</th><th class="text-right px-4 py-2 font-medium">本金</th><th class="text-right px-4 py-2 font-medium">利息</th><th class="text-right px-4 py-2 font-medium">手续费</th><th class="text-right px-4 py-2 font-medium">月供合计</th><th class="text-right px-4 py-2 font-medium">状态</th></tr></thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for item in schedule %}
+      <tr class="{% if item.overdue %}bg-red-50{% endif %}">
+        <td class="px-4 py-2">第 {{ item.sequence }} 期</td>
+        <td class="px-4 py-2 font-mono">{{ item.due_date }}</td>
+        <td class="px-4 py-2 text-right font-mono">{{ item.principal }}</td>
+        <td class="px-4 py-2 text-right font-mono">{{ item.interest }}</td>
+        <td class="px-4 py-2 text-right font-mono">{{ item.fee }}</td>
+        <td class="px-4 py-2 text-right font-mono font-medium">{{ item.total }}</td>
+        <td class="px-4 py-2 text-right whitespace-nowrap">
+          {% if item.paid %}
+          <div class="text-xs text-gray-500 mb-1">{% if !item.repayment_account_name.is_empty() %}{{ item.repayment_account_name }}{% else %}历史手动标记{% endif %}</div>
+          <form method="post" action="/installments/items/{{ item.id }}/paid" class="inline"><input type="hidden" name="paid" value="false"><button class="text-green-700 hover:underline" hx-confirm="撤销这期还款并删除自动生成的本金转账及费用支出？">已还 · 撤销</button></form>
+          {% else if !repayment_accounts.is_empty() %}
+          <form method="post" action="/installments/items/{{ item.id }}/paid" class="flex items-center justify-end gap-2"><input type="hidden" name="paid" value="true"><select name="repayment_account_id" required aria-label="还款渠道" class="max-w-48 border border-gray-300 rounded px-2 py-1 text-xs bg-white">{% for a in repayment_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select><button class="{% if item.overdue %}text-red-700{% else %}text-blue-600{% endif %} hover:underline" hx-confirm="从所选账户扣除本期月供，并自动生成本金转账和费用支出？">{% if item.overdue %}已逾期 · 立即还款{% else %}立即还款{% endif %}</button></form>
+          {% else %}<span class="text-xs text-gray-400">无可用还款渠道</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "pagination.html" %}
+{% endblock %}

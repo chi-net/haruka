@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ page_heading }} - haruka{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <div><h1 class="text-xl font-bold">{{ page_heading }}</h1><a href="/dashboard" class="text-sm text-blue-600 hover:underline">返回仪表板</a></div>
+  {% if advanced_search %}<a href="/debt-people" class="text-sm text-blue-600 hover:underline">返回借贷对象</a>{% else %}<div class="flex items-center gap-3"><a href="/debt-requests" class="text-sm text-blue-600 hover:underline">借还请求</a><a href="/debt-people/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新增对象</a></div>{% endif %}
+</div>
+<form method="get" action="{{ search_action }}" class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+  <div class="flex flex-wrap items-end gap-3">
+    <div class="flex-1 min-w-48"><label class="block text-xs text-gray-500 mb-1">关键词</label><input name="keyword" value="{{ keyword }}" placeholder="姓名或备注" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    {% if advanced_search %}
+    <div><label class="block text-xs text-gray-500 mb-1">关系</label><select name="relationship" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option><option value="receivable" {% if relationship == "receivable" %}selected{% endif %}>对方欠我</option><option value="payable" {% if relationship == "payable" %}selected{% endif %}>我欠对方</option><option value="both" {% if relationship == "both" %}selected{% endif %}>双方都有欠款</option><option value="settled" {% if relationship == "settled" %}selected{% endif %}>已结清</option></select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">最低应收（{{ default_currency }}）</label><input type="number" min="0" step="0.01" name="min_receivable" value="{{ min_receivable }}" class="w-40 border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">最高应收</label><input type="number" min="0" step="0.01" name="max_receivable" value="{{ max_receivable }}" class="w-40 border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">最低应付（{{ default_currency }}）</label><input type="number" min="0" step="0.01" name="min_payable" value="{{ min_payable }}" class="w-40 border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">最高应付</label><input type="number" min="0" step="0.01" name="max_payable" value="{{ max_payable }}" class="w-40 border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+    <div><label class="block text-xs text-gray-500 mb-1">组合</label><select name="mode" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="and" {% if mode == "and" %}selected{% endif %}>全部满足</option><option value="or" {% if mode == "or" %}selected{% endif %}>任一满足</option></select></div>
+    {% endif %}
+    <select name="per_page" aria-label="每页条数" onchange="this.form.requestSubmit()" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="50" {% if per_page == 50 %}selected{% endif %}>50 条/页</option><option value="100" {% if per_page == 100 %}selected{% endif %}>100 条/页</option><option value="200" {% if per_page == 200 %}selected{% endif %}>200 条/页</option></select>
+    <button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">搜索</button><a href="{{ search_action }}" class="text-sm text-gray-600 hover:underline">清除</a>
+    {% if !advanced_search %}<a href="/debt-people/search" class="text-sm text-blue-600 hover:underline">高级搜索</a>{% endif %}
+  </div>
+</form>
+{% if people.is_empty() %}
+<p class="text-sm text-gray-500">{% if has_filters %}没有符合条件的借贷对象。{% else %}还没有借款人或出借人。{% endif %}</p>
+{% else %}
+<div class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 text-gray-500"><tr><th class="text-left px-4 py-2">姓名</th><th class="text-left px-4 py-2">备注</th><th class="text-right px-4 py-2">对方欠我</th><th class="text-right px-4 py-2">我欠对方</th><th></th></tr></thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for p in people %}
+      <tr>
+        <td class="px-4 py-2">{{ p.name }}</td>
+        <td class="px-4 py-2 text-gray-500">{{ p.note }}</td>
+        <td class="px-4 py-2 text-right font-mono text-green-600">{{ p.receivable }}</td>
+        <td class="px-4 py-2 text-right font-mono text-red-600">{{ p.payable }}</td>
+        <td class="px-4 py-2 text-right whitespace-nowrap"><a href="/debt-people/{{ p.id }}/edit" class="text-blue-600 hover:underline mr-3">编辑</a><form method="post" action="/debt-people/{{ p.id }}/delete" class="inline" hx-confirm="删除对象会同时删除全部相关借还记录，确认？"><button class="text-red-600 hover:underline">删除</button></form></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "pagination.html" %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}定投 - haruka{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3 mb-5">
+  <div><h1 class="text-xl font-bold">每日定投</h1><p class="text-sm text-gray-500 mt-1">支持固定金额、指数聪明定投、每日手动金额和招商银行短信实扣。</p></div>
+  <a href="/investments/new" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">新增定投</a>
+</div>
+
+<section id="investment-runner" data-auto-run="{% if calendar_warning %}false{% else if automatic_due_count > 0 %}true{% else %}false{% endif %}" data-pending-sms="{{ pending_sms_count }}" class="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-5">
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div><p class="text-sm font-medium text-blue-900">解锁后自动补执行</p><p class="text-xs text-blue-700 mt-1">今天（北京时间 {{ today }}）有 {{ automatic_due_count }} 个固定或聪明定投待自动执行。手动计划在下方确认，短信计划等待银行短信；所有模式都按计划和日期幂等去重。</p></div>
+    <button id="investment-run-button" type="button" class="shrink-0 rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">检查并执行</button>
+  </div>
+  <div id="investment-run-status" class="hidden mt-3 rounded border px-3 py-2 text-sm" role="status" aria-live="polite"></div>
+</section>
+
+{% if calendar_warning %}
+<div class="rounded-lg border border-amber-200 bg-amber-50 p-4 mb-5 text-sm text-amber-800">当前年份的官方休市安排尚未内置。程序仍会排除周末，请在页面下方补充交易所公告的工作日休市日期后再启用自动定投。</div>
+{% endif %}
+
+<div class="grid grid-cols-2 gap-3 mb-5">
+  <div class="bg-white rounded-lg border border-gray-200 p-4"><div class="text-xs text-gray-500">筛选结果中的启用计划</div><div class="text-2xl font-mono mt-1">{{ active_count }}</div></div>
+  <div class="bg-white rounded-lg border border-gray-200 p-4"><div class="text-xs text-gray-500">当前待执行计划</div><div class="text-2xl font-mono mt-1 {% if due_count > 0 %}text-amber-700{% endif %}">{{ due_count }}</div></div>
+</div>
+
+{% if !manual_due.is_empty() %}
+<section class="rounded-lg border-2 border-amber-300 bg-amber-50 p-4 mb-5">
+  <div><h2 class="font-medium text-amber-900">填写今天的实际定投金额</h2><p class="text-xs text-amber-800 mt-1">这些计划不会自动扣款；确认后才会生成账户转账。同一计划同一天只能执行一次。</p></div>
+  <div class="mt-4 space-y-3">{% for item in manual_due %}<form method="post" action="/investments/{{ item.id }}/execute-manual" class="rounded-lg border border-amber-200 bg-white p-3 flex flex-wrap items-end gap-3"><div class="min-w-56 flex-1"><div class="font-medium">{{ item.name }}</div><div class="text-xs text-gray-500 mt-1">{{ item.trade_date }} · {{ item.from_account }} → {{ item.fund_account }} · 手续费 {{ item.fee_rate }}</div></div><input type="hidden" name="trade_date" value="{{ item.trade_date }}"><div><label class="block text-xs text-gray-500 mb-1">实际本金（{{ item.currency }}）</label><input name="amount" type="number" step="0.01" min="0.01" value="{{ item.default_amount }}" required class="w-36 border border-amber-300 rounded px-3 py-1.5 text-sm font-mono"></div><button class="rounded bg-amber-700 px-3 py-1.5 text-sm text-white">确认记账</button></form>{% endfor %}</div>
+</section>
+{% endif %}
+
+<form method="get" action="/investments" class="bg-white rounded-lg border border-gray-200 p-4 mb-5 flex flex-wrap items-end gap-3">
+  <div class="min-w-52 flex-1"><label class="block text-xs text-gray-500 mb-1">关键词</label><input name="keyword" value="{{ keyword }}" placeholder="计划、账户、备注或货币" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>
+  <div><label class="block text-xs text-gray-500 mb-1">状态</label><select name="status" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="">全部</option><option value="active" {% if status == "active" %}selected{% endif %}>已启用</option><option value="paused" {% if status == "paused" %}selected{% endif %}>已暂停</option><option value="due" {% if status == "due" %}selected{% endif %}>待执行</option></select></div>
+  <div><label class="block text-xs text-gray-500 mb-1">每页</label><select name="per_page" onchange="this.form.page.value='1';this.form.requestSubmit()" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="50" {% if per_page == 50 %}selected{% endif %}>50</option><option value="100" {% if per_page == 100 %}selected{% endif %}>100</option><option value="200" {% if per_page == 200 %}selected{% endif %}>200</option></select></div>
+  <input type="hidden" name="page" value="1"><button class="bg-gray-900 text-white text-sm px-4 py-1.5 rounded hover:bg-gray-700">搜索</button>{% if !keyword.is_empty() || !status.is_empty() %}<a href="/investments" class="text-sm text-gray-500 px-2 py-1.5">清除</a>{% endif %}
+</form>
+
+{% if plans.is_empty() %}
+<section class="bg-white rounded-lg border border-gray-200 p-8 text-center text-sm text-gray-500">空空如也呢。{% if keyword.is_empty() && status.is_empty() %}先创建一个每日定投计划吧。{% else %}没有符合筛选条件的定投计划。{% endif %}</section>
+{% else %}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+  {% for plan in plans %}
+  <section class="bg-white rounded-lg border {% if plan.due %}border-amber-300{% else %}border-gray-200{% endif %} p-4">
+    <div class="flex items-start justify-between gap-3">
+      <div><h2 class="font-medium">{{ plan.name }}</h2><p class="text-xs text-gray-500 mt-1">{{ plan.from_account }} → {{ plan.fund_account }}</p><p class="text-xs {% if plan.smart %}text-blue-700{% else %}text-gray-400{% endif %} mt-1">{{ plan.strategy_label }}</p></div>
+      <span class="text-xs rounded-full px-2 py-0.5 {% if !plan.active %}bg-gray-100 text-gray-600{% else if plan.due %}bg-amber-100 text-amber-700{% else %}bg-green-100 text-green-700{% endif %}">{% if !plan.active %}已暂停{% else if plan.due %}待执行{% else %}运行中{% endif %}</span>
+    </div>
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 text-sm"><div><div class="text-xs text-gray-500">{% if plan.smart %}基准本金{% else if plan.sms %}本次本金{% else %}每日本金{% endif %}</div><div class="font-mono mt-1">{{ plan.amount }}</div></div><div><div class="text-xs text-gray-500">手续费率</div><div class="font-mono mt-1">{% if plan.sms %}以短信实扣为准{% else %}{{ plan.fee_rate }}{% endif %}</div></div><div><div class="text-xs text-gray-500">开始日期</div><div class="font-mono mt-1">{{ plan.start_date }}</div></div><div><div class="text-xs text-gray-500">{% if plan.sms %}处理状态{% else %}下一交易日{% endif %}</div><div class="font-mono mt-1">{{ plan.next_trade_date }}</div></div></div>
+    {% if !plan.note.is_empty() %}<p class="text-sm text-gray-500 mt-3">{{ plan.note }}</p>{% endif %}
+    <div class="flex items-center gap-3 mt-4 pt-3 border-t border-gray-100 text-sm"><a href="/investments/{{ plan.id }}/edit" class="text-blue-600 hover:underline">编辑</a><form method="post" action="/investments/{{ plan.id }}/toggle"><button class="text-gray-600 hover:underline">{% if plan.active %}暂停{% else %}启用{% endif %}</button></form><form method="post" action="/investments/{{ plan.id }}/delete" hx-confirm="确认删除该定投计划？已生成的转账流水和账户余额不会受到影响。"><button class="text-red-600 hover:underline">删除</button></form></div>
+  </section>
+  {% endfor %}
+</div>
+{% include "pagination.html" %}
+{% endif %}
+
+<section class="bg-white rounded-lg border border-gray-200 mt-6 overflow-hidden">
+  <div class="px-4 py-3 border-b border-gray-100"><h2 class="font-medium">最近定投流水</h2><p class="text-xs text-gray-500 mt-1">本金以普通转账进入投资账户，手续费单独记入支出；这里保留最近 50 笔索引。</p></div>
+  {% if executions.is_empty() %}<p class="p-4 text-sm text-gray-500">尚无定投执行记录。</p>{% else %}<div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-gray-50 text-gray-500"><tr><th class="text-left px-4 py-2">交易日</th><th class="text-left px-4 py-2">计划</th><th class="text-left px-4 py-2">策略与依据</th><th class="text-left px-4 py-2">资金流向</th><th class="text-right px-4 py-2">本金</th><th class="text-right px-4 py-2">手续费</th></tr></thead><tbody class="divide-y divide-gray-100">{% for item in executions %}<tr><td class="px-4 py-2 font-mono whitespace-nowrap">{{ item.trade_date }}</td><td class="px-4 py-2">{{ item.plan_name }}</td><td class="px-4 py-2"><div>{{ item.strategy }}</div>{% if !item.decision.is_empty() %}<div class="text-xs text-gray-500 mt-1 min-w-72">{{ item.decision }}</div>{% endif %}</td><td class="px-4 py-2 text-gray-500">{{ item.from_account }} → {{ item.fund_account }}</td><td class="px-4 py-2 text-right font-mono">{{ item.amount }}</td><td class="px-4 py-2 text-right font-mono text-red-600">{{ item.fee }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 mt-6 overflow-hidden">
+  <div class="px-4 py-3 border-b border-gray-100"><h2 class="font-medium">招商银行短信功能</h2>此功能需要配合 招商银行短信通知 和 Shortcuts 进行使用，添加快捷指令：https://www.icloud.com/shortcuts/a61e4d6c37be467f8d1354a625fde6b5</div>
+  {% if sms_events.is_empty() %}<p class="p-4 text-sm text-gray-500">尚无短信处理记录。</p>{% else %}<div class="divide-y divide-gray-100">{% for event in sms_events %}<article class="p-4 {% if event.danger %}bg-red-50{% endif %}"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="font-medium {% if event.danger %}text-red-800{% endif %}">{{ event.plan_name }}</div><p class="text-sm mt-1 {% if event.danger %}text-red-700{% else %}text-gray-600{% endif %}">{{ event.detail }}</p></div><time data-utc-time="{{ event.occurred_at }}" class="text-xs text-gray-500">{{ event.occurred_at }}</time></div>{% if event.pending %}<form method="post" action="/investments/sms-events/{{ event.id }}/confirm" class="mt-3 flex flex-wrap items-end gap-2 rounded border border-blue-200 bg-blue-50 p-3"><div class="min-w-48 flex-1"><label class="block text-xs text-blue-800 mb-1">{% if event.repayment %}还款进入的信用账户{% else %}本人名下的转入账户{% endif %}</label><select name="to_account_id" required class="w-full border border-blue-200 rounded bg-white px-3 py-1.5 text-sm">{% if event.repayment %}{% for account in repayment_targets %}<option value="{{ account.id }}">{{ account.name }} · {{ account.currency }}</option>{% endfor %}{% else %}{% for account in transfer_targets %}<option value="{{ account.id }}">{{ account.name }} · {{ account.currency }}</option>{% endfor %}{% endif %}</select></div><button class="rounded bg-blue-600 px-3 py-1.5 text-sm text-white">确认生成转账</button></form>{% endif %}<details class="mt-2 text-xs text-gray-500"><summary class="cursor-pointer">查看原始短信</summary><p class="mt-2 break-words">{{ event.raw }}</p></details></article>{% endfor %}</div>{% endif %}
+</section>
+
+<details class="bg-white rounded-lg border border-gray-200 mt-6">
+  <summary class="cursor-pointer px-4 py-3 font-medium">交易日历校准</summary>
+  <div class="px-4 pb-4 border-t border-gray-100 pt-4">
+    <p class="text-sm text-gray-600">周六、周日永不执行。程序已内置上海证券交易所公布的 2025、2026 年工作日休市安排；其他年份可在交易所公布年度安排后补充特殊休市日。</p>
+    <form method="post" action="/investments/calendar/closed-days" class="flex flex-wrap items-end gap-3 mt-4"><div><label class="block text-xs text-gray-500 mb-1">休市日期</label><input name="date" type="date" required class="border border-gray-300 rounded px-3 py-1.5 text-sm"></div><div class="min-w-48 flex-1"><label class="block text-xs text-gray-500 mb-1">原因</label><input name="name" required placeholder="例如：春节休市" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div><button class="bg-gray-900 text-white text-sm px-4 py-1.5 rounded hover:bg-gray-700">添加休市日</button></form>
+    {% if !custom_closed_days.is_empty() %}<div class="flex flex-wrap gap-2 mt-4">{% for day in custom_closed_days %}<span class="inline-flex items-center gap-2 rounded-full bg-gray-100 px-3 py-1 text-xs"><span class="font-mono">{{ day.date }}</span><span>{{ day.name }}</span><form method="post" action="/investments/calendar/closed-days/{{ day.date }}/delete" hx-confirm="删除这条自定义休市日？"><button class="text-red-600" aria-label="删除 {{ day.date }}">×</button></form></span>{% endfor %}</div>{% endif %}
+  </div>
+</details>
+
+<script>
+(() => {
+  const runner = document.getElementById('investment-runner');
+  if (!runner) return;
+  fetch('/investments/process-sms', { method: 'POST', headers: { Accept: 'application/json' }, cache: 'no-store' })
+    .then(async response => {
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || payload.message || `HTTP ${response.status}`);
+      if (payload.processed > 0 && (!payload.failures || payload.failures.length === 0)) window.location.reload();
+      if (payload.failures && payload.failures.length) window.harukaShowError(`短信需要处理：${payload.failures.join('；')}`);
+    })
+    .catch(error => window.harukaShowError(`短信处理失败：${error.message || error}`));
+})();
+
+(() => {
+  const runner = document.getElementById('investment-runner');
+  const button = document.getElementById('investment-run-button');
+  const status = document.getElementById('investment-run-status');
+  if (!runner || !button || runner.dataset.ready === 'true') return;
+  const run = async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = '正在执行…';
+    status.className = 'mt-3 rounded border border-blue-200 bg-white px-3 py-2 text-sm text-blue-800';
+    status.textContent = '正在检查中国大陆交易日和账户余额…';
+    try {
+      const response = await fetch('/investments/run-due', { method: 'POST', headers: { Accept: 'application/json' } });
+      const raw = await response.text();
+      let payload;
+      try { payload = JSON.parse(raw); } catch (_) { payload = { ok: false, error: raw || `HTTP ${response.status}` }; }
+      if (!response.ok) throw new Error(payload.error || payload.message || `HTTP ${response.status}`);
+      const failures = Array.isArray(payload.failures) && payload.failures.length ? `\n${payload.failures.join('\n')}` : '';
+      const warnings = Array.isArray(payload.warnings) && payload.warnings.length ? `\n${payload.warnings.join('\n')}` : '';
+      status.textContent = `${payload.message || '检查完成'}${warnings}${failures}`;
+      status.className = `mt-3 whitespace-pre-wrap rounded border px-3 py-2 text-sm ${payload.ok ? 'border-green-200 bg-green-50 text-green-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`;
+      if (payload.executed > 0) window.setTimeout(() => window.location.reload(), 900);
+    } catch (error) {
+      status.textContent = `定投执行失败：${error.message || error}`;
+      status.className = 'mt-3 whitespace-pre-wrap rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700';
+    } finally {
+      button.disabled = false;
+      button.textContent = '检查并执行';
+    }
+  };
+  button.addEventListener('click', run);
+  runner.dataset.ready = 'true';
+  if (runner.dataset.autoRun === 'true') run();
+})();
+</script>
+{% endblock %}

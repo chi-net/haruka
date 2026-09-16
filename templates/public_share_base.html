@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f9fafb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b1120" media="(prefers-color-scheme: dark)">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>{% block title %}账单分享 - Haruka{% endblock %}</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+<main class="max-w-xl mx-auto px-4 py-10 sm:py-16">
+  <div class="text-center mb-5"><div class="font-bold">Haruka</div></div>
+  {% block content %}{% endblock %}
+</main>
+<script>
+document.querySelectorAll('[data-utc-time]').forEach(element => {
+  const value = element.dataset.utcTime;
+  const date = new Date(/(?:Z|[+-]\d\d:\d\d)$/.test(value) ? value : `${value}:00Z`);
+  if (Number.isNaN(date.getTime())) return;
+  const pad = number => String(number).padStart(2, '0');
+  element.textContent = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  element.dateTime = date.toISOString();
+});
+</script>
+</body>
+</html>

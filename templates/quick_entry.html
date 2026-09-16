@@ -1,0 +1,447 @@
+<section id="quick-entry" class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <div class="mb-4"><h2 class="font-medium">{{ quick_entry_heading }}</h2></div>
+  <div class="flex rounded border border-gray-200 overflow-hidden w-fit mb-4">
+    <button type="button" data-panel="bill" class="quick-entry-tab bg-blue-600 text-white text-sm px-4 py-1.5">收支</button>
+    <button type="button" data-panel="transfer" class="quick-entry-tab text-gray-600 text-sm px-4 py-1.5">转账</button>
+    <button type="button" data-panel="debt" class="quick-entry-tab text-gray-600 text-sm px-4 py-1.5">借还</button>
+  </div>
+
+  <div data-quick-entry-panel="bill">
+    <details id="receipt-scanner" class="mb-4 rounded-lg border border-violet-200 bg-violet-50">
+      <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-violet-900">扫描票据</summary>
+      <div class="border-t border-violet-200 p-3 space-y-3">
+        <p class="text-xs text-violet-800">图片只在当前浏览器内处理，不会上传给 haruka。只有点击“使用 AI 整理”时，OCR 文字才会由浏览器直接发送到你配置的 URL。</p>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div class="space-y-3">
+            <div><label class="block text-xs text-violet-800 mb-1">票据图片</label><input id="receipt-image" type="file" accept="image/*" capture="environment" class="block w-full text-sm text-gray-700 file:mr-3 file:rounded file:border-0 file:bg-violet-100 file:px-3 file:py-1.5 file:text-violet-800"></div>
+            <img id="receipt-preview" alt="票据预览" class="hidden max-h-72 w-full rounded border border-violet-200 bg-white object-contain">
+            <div class="flex flex-wrap items-center gap-2"><button id="receipt-run-ocr" type="button" class="bg-violet-700 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50">本机识别</button><button id="receipt-clear" type="button" class="border border-violet-300 bg-white text-violet-800 text-sm px-3 py-1.5 rounded">清除</button><span id="receipt-ocr-status" class="text-xs text-violet-800" aria-live="polite"></span></div>
+            <div id="receipt-progress-wrap" class="hidden"><progress id="receipt-progress" max="1" value="0" class="w-full"></progress></div>
+          </div>
+          <div><label class="block text-xs text-violet-800 mb-1">OCR 文字（可修改）</label><textarea id="receipt-ocr-text" rows="10" class="w-full rounded border border-violet-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" placeholder="识别结果会显示在这里"></textarea></div>
+        </div>
+        <div class="flex flex-wrap items-center gap-2"><button id="receipt-local-fill" type="button" class="border border-violet-300 bg-white text-violet-800 text-sm px-3 py-1.5 rounded">本地提取金额和时间</button><span id="receipt-draft-status" class="text-xs text-violet-800" aria-live="polite"></span></div>
+        <details class="rounded border border-violet-200 bg-white">
+          <summary class="cursor-pointer px-3 py-2 text-sm text-violet-900">可选：AI 整理设置（仅保存在这个浏览器）</summary>
+          <div class="border-t border-violet-100 p-3 space-y-3">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3"><div><label class="block text-xs text-gray-600 mb-1">Chat Completions 完整 URL</label><input id="receipt-ai-url" type="url" placeholder="http://localhost:11434/v1/chat/completions" class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"></div><div><label class="block text-xs text-gray-600 mb-1">模型</label><input id="receipt-ai-model" placeholder="例如：qwen3" class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"></div></div>
+            <div><label class="block text-xs text-gray-600 mb-1">API Key</label><input id="receipt-ai-key" type="password" autocomplete="off" placeholder="只保留到本页关闭或刷新" class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"><p class="text-xs text-gray-500 mt-1">URL 和模型保存到 localStorage；API Key 不保存。目标服务必须允许当前 haruka 来源进行 CORS 请求。</p></div>
+            <div class="flex flex-wrap items-center gap-2"><button id="receipt-ai-fill" type="button" class="bg-violet-700 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50">使用 AI 整理并填入</button><span id="receipt-ai-status" class="text-xs text-violet-800" aria-live="polite"></span></div>
+          </div>
+        </details>
+      </div>
+    </details>
+    <form method="post" action="/bills" data-quick-form="bill" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+      <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
+      <div><label class="block text-xs text-gray-500 mb-1">类型</label><select id="quick-bill-kind" name="kind" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="expense">支出</option><option value="income">收入</option></select></div>
+      <div><label class="block text-xs text-gray-500 mb-1">金额</label><input name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">账户</label><select id="quick-bill-account" name="account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-bill-account" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p></div>
+      <div><label class="block text-xs text-gray-500 mb-1">分类</label><select id="quick-bill-category" name="category" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for c in categories %}<option value="{{ c.name }}" data-kind="{{ c.kind }}">{{ c.name }}</option>{% endfor %}</select></div>
+      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间</label><input data-utc-picker data-utc-value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input data-utc-target type="hidden" name="happened_at" value="{{ happened_at }}"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+      <div id="quick-installment-toggle-field" class="hidden lg:col-span-6 border-t border-gray-100 pt-3">
+        <label class="inline-flex items-center gap-2 text-sm"><input id="quick-use-installment" type="checkbox" name="use_installment" value="true"> 将这笔支出设置为分期</label>
+      </div>
+      <div id="quick-installment-settings" class="hidden lg:col-span-6 bg-blue-50 border border-blue-200 rounded-lg p-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div><label class="block text-xs text-blue-800 mb-1">期限</label><select id="quick-installment-term" name="installment_term" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm bg-white"><option value="3">3 期</option><option value="6">6 期</option><option value="9">9 期</option><option value="12" selected>12 期</option><option value="24">24 期</option><option value="36">3 年（36 期月供）</option><option value="60">5 年（60 期月供）</option><option value="120">10 年（120 期月供）</option><option value="180">15 年（180 期月供）</option><option value="240">20 年（240 期月供）</option><option value="360">30 年（360 期月供）</option></select></div>
+          <div><label class="block text-xs text-blue-800 mb-1">还款方式</label><select name="installment_method" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm bg-white"><option value="equal_payment">等额本息（月供基本固定）</option><option value="equal_principal">等额本金（月供逐月减少）</option><option value="flat">等本等息（固定本金和利息）</option></select></div>
+          <div><label class="block text-xs text-blue-800 mb-1">年利率（%）</label><input id="quick-installment-rate" name="installment_annual_rate" type="number" min="0" max="100" step="0.01" value="13.03" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm font-mono"></div>
+          <div><label class="block text-xs text-blue-800 mb-1">总手续费</label><input name="installment_fee" type="number" min="0" step="0.01" value="0.00" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm font-mono"><p class="text-xs text-blue-600 mt-1">按期均摊</p></div>
+          <div><label class="block text-xs text-blue-800 mb-1">首期还款日</label><input id="quick-installment-first-due" name="installment_first_due_date" type="date" value="{{ first_due_date }}" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm"></div>
+        </div>
+        <p class="text-xs text-blue-700 mt-3">参考：信用卡 12 期近似年化常见约 13%；截至 2026-08-20，LPR 为 1 年期 3.0%、5 年期以上 3.5%。请优先填写合同显示的年化利率和实际总手续费。</p>
+      </div>
+      <div class="lg:col-span-6 flex flex-wrap items-center gap-3"><button data-quick-submit class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">保存收支</button><button id="quick-batch-add" type="button" class="border border-blue-300 text-blue-700 text-sm px-4 py-1.5 rounded hover:bg-blue-50">加入批量列表</button><span data-quick-status class="text-sm text-gray-500" aria-live="polite"></span></div>
+    </form>
+    <div id="quick-batch-panel" class="hidden mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3">
+      <div class="flex flex-wrap items-center justify-between gap-3"><div><h3 class="text-sm font-medium text-blue-900">待批量提交 <span id="quick-batch-count">0</span> 条</h3><p class="text-xs text-blue-700 mt-1">最多 100 条；整批校验通过后一次写入，失败时不会写入其中任何一条。</p></div><div class="flex gap-2"><button id="quick-batch-clear" type="button" class="border border-blue-300 bg-white text-blue-700 text-sm px-3 py-1.5 rounded">清空</button><button id="quick-batch-submit" type="button" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50">提交全部</button></div></div>
+      <div id="quick-batch-list" class="mt-3 space-y-2"></div>
+      <p id="quick-batch-status" class="text-sm text-blue-800 mt-3" aria-live="polite"></p>
+    </div>
+  </div>
+
+  <div data-quick-entry-panel="transfer" class="hidden">
+    {% if accounts.len() < 2 || transfer_sources.is_empty() %}
+    <p class="text-sm text-amber-700">至少需要两个账户和一个可用的转出账户。</p>
+    {% else %}
+    <form method="post" action="/transfers" data-quick-form="transfer" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+      <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
+      <div><label class="block text-xs text-gray-500 mb-1">转出账户</label><select id="quick-transfer-from" name="from_account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in transfer_sources %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-from" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p><p class="text-xs text-gray-400 mt-1">信用账户仅能转出正余额，且转出后不得低于 0。</p></div>
+      <div><label class="block text-xs text-gray-500 mb-1">转入账户</label><select id="quick-transfer-to" name="to_account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-to" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p></div>
+      <div><label id="quick-transfer-amount-label" class="block text-xs text-gray-500 mb-1">转出金额</label><input id="quick-transfer-amount" name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
+      <div id="quick-transfer-to-amount-field" class="hidden"><label id="quick-transfer-to-amount-label" class="block text-xs text-gray-500 mb-1">实际转入金额</label><input id="quick-transfer-to-amount" name="to_amount" type="number" step="0.01" min="0.01" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"><p id="quick-transfer-quote-status" class="text-xs text-gray-400 mt-1">按当前可用汇率自动填写，可手动修改。</p></div>
+      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间（当地时间）</label><input id="quick-transfer-time" data-utc-picker data-utc-value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input id="quick-transfer-time-utc" data-utc-target type="hidden" name="happened_at" value="{{ happened_at }}"></div>
+      <div class="sm:col-span-2 lg:col-span-5"><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+      <div class="sm:col-span-2 lg:col-span-5 flex items-center gap-3"><button data-quick-submit class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">确认转账</button><span data-quick-status class="text-sm text-gray-500" aria-live="polite"></span></div>
+    </form>
+    {% endif %}
+  </div>
+
+  <div data-quick-entry-panel="debt" class="hidden">
+    <div class="flex justify-end mb-3"><a href="/debt-people" class="text-sm text-blue-600 hover:underline">管理借贷对象</a></div>
+    {% if people.is_empty() %}
+    <p class="text-sm text-amber-700">空空如也呢，如果要开始使用，请先添加借款人或出借人。</p>
+    {% else %}
+    <form method="post" action="/debts" data-quick-form="debt" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+      <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
+      <div><label class="block text-xs text-gray-500 mb-1">操作</label><select name="kind" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="lend">我借给对方</option><option value="borrow">我向对方借入</option><option value="repayment_received">对方还给我</option><option value="repayment_paid">我还给对方</option></select></div>
+      <div><label class="block text-xs text-gray-500 mb-1">借贷对象</label><select name="person_id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for p in people %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div>
+      <div><label class="block text-xs text-gray-500 mb-1">资金账户</label><select id="quick-debt-account" name="account_id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-debt-account" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p></div>
+      <div><label class="block text-xs text-gray-500 mb-1">金额</label><input name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
+      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间（当地时间）</label><input data-utc-picker data-utc-value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input data-utc-target type="hidden" name="happened_at" value="{{ happened_at }}"></div>
+      <div><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
+      <div class="lg:col-span-6 flex items-center gap-3"><button data-quick-submit class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">保存借还记录</button><span data-quick-status class="text-sm text-gray-500" aria-live="polite"></span></div>
+    </form>
+    {% endif %}
+  </div>
+</section>
+
+<script>
+(() => {
+  const tabs = document.querySelectorAll('.quick-entry-tab');
+  const panels = document.querySelectorAll('[data-quick-entry-panel]');
+  tabs.forEach(tab => tab.addEventListener('click', () => {
+    const activePanel = tab.dataset.panel;
+    tabs.forEach(button => {
+      const active = button.dataset.panel === activePanel;
+      button.classList.toggle('bg-blue-600', active);
+      button.classList.toggle('text-white', active);
+      button.classList.toggle('text-gray-600', !active);
+    });
+    panels.forEach(panel => panel.classList.toggle('hidden', panel.dataset.quickEntryPanel !== activePanel));
+  }));
+})();
+(() => {
+  const kind = document.getElementById('quick-bill-kind');
+  const category = document.getElementById('quick-bill-category');
+  if (!kind || !category) return;
+  const update = () => {
+    let first;
+    let selectedVisible = false;
+    for (const option of category.options) {
+      const visible = option.dataset.kind === kind.value;
+      option.hidden = !visible;
+      option.disabled = !visible;
+      if (visible && !first) first = option;
+      if (visible && option.selected) selectedVisible = true;
+    }
+    if (!selectedVisible && first) first.selected = true;
+  };
+  kind.addEventListener('change', update);
+  update();
+})();
+(() => {
+  const kind = document.getElementById('quick-bill-kind');
+  const account = document.getElementById('quick-bill-account');
+  const toggleField = document.getElementById('quick-installment-toggle-field');
+  const checkbox = document.getElementById('quick-use-installment');
+  const settings = document.getElementById('quick-installment-settings');
+  const term = document.getElementById('quick-installment-term');
+  const rate = document.getElementById('quick-installment-rate');
+  const firstDue = document.getElementById('quick-installment-first-due');
+  if (!kind || !account || !toggleField || !checkbox || !settings || !term || !rate || !firstDue) return;
+  const selectedAccount = () => account.selectedOptions[0];
+  const update = () => {
+    const option = selectedAccount();
+    const eligible = kind.value === 'expense' && (option?.dataset.kind === 'credit_card' || option?.dataset.kind === 'credit_service');
+    toggleField.classList.toggle('hidden', !eligible);
+    if (!eligible) checkbox.checked = false;
+    settings.classList.toggle('hidden', !eligible || !checkbox.checked);
+    settings.querySelectorAll('input, select').forEach(field => field.required = eligible && checkbox.checked);
+  };
+  account.addEventListener('change', update);
+  kind.addEventListener('change', update);
+  checkbox.addEventListener('change', update);
+  rate.addEventListener('input', () => rate.dataset.touched = 'true');
+  term.addEventListener('change', () => {
+    if (!rate.dataset.touched) rate.value = Number(term.value) > 24 ? '3.50' : '13.03';
+  });
+  update();
+})();
+(() => {
+  const from = document.getElementById('quick-transfer-from');
+  const to = document.getElementById('quick-transfer-to');
+  const amount = document.getElementById('quick-transfer-amount');
+  const time = document.getElementById('quick-transfer-time');
+  const timeUtc = document.getElementById('quick-transfer-time-utc');
+  const amountLabel = document.getElementById('quick-transfer-amount-label');
+  const toAmountField = document.getElementById('quick-transfer-to-amount-field');
+  const toAmount = document.getElementById('quick-transfer-to-amount');
+  const toAmountLabel = document.getElementById('quick-transfer-to-amount-label');
+  const status = document.getElementById('quick-transfer-quote-status');
+  if (!from || !to || !amount || !time || !timeUtc || !toAmountField || !toAmount || !status) return;
+  let requestNumber = 0;
+  let timer;
+  const selectedCurrency = select => select.selectedOptions[0]?.dataset.currency || '';
+  const updateQuote = () => {
+    clearTimeout(timer);
+    const currentRequest = ++requestNumber;
+    const fromCurrency = selectedCurrency(from);
+    const toCurrency = selectedCurrency(to);
+    amountLabel.textContent = `转出金额（${fromCurrency}）`;
+    toAmountLabel.textContent = `实际转入金额（${toCurrency}）`;
+    const crossCurrency = fromCurrency && toCurrency && fromCurrency !== toCurrency;
+    toAmountField.classList.toggle('hidden', !crossCurrency);
+    toAmount.required = crossCurrency;
+    if (!crossCurrency) {
+      toAmount.value = '';
+      return;
+    }
+    if (!amount.value || !time.value || from.value === to.value) {
+      toAmount.value = '';
+      status.textContent = from.value === to.value ? '转出和转入账户不能相同。' : '输入转出金额后自动换算，可手动修改。';
+      return;
+    }
+    status.textContent = '正在取得当前可用汇率…';
+    timer = setTimeout(async () => {
+      const params = new URLSearchParams({
+        from_account_id: from.value,
+        to_account_id: to.value,
+        amount: amount.value,
+        happened_at: timeUtc.value
+      });
+      try {
+        const response = await fetch(`/transfers/quote?${params}`, { headers: { Accept: 'application/json' } });
+        if (!response.ok) {
+          const message = window.harukaReadErrorResponse
+            ? await window.harukaReadErrorResponse(response)
+            : `请求失败（HTTP ${response.status}）`;
+          throw new Error(message);
+        }
+        const quote = await response.json();
+        if (currentRequest !== requestNumber) return;
+        toAmount.value = quote.to_amount;
+        status.textContent = `已按当前可用汇率换算，可按实际到账金额修改。`;
+      } catch (error) {
+        if (currentRequest !== requestNumber) return;
+        toAmount.value = '';
+        status.textContent = `自动换算失败：${error.message}`;
+      }
+    }, 250);
+  };
+  [from, to, amount, time].forEach(element => element.addEventListener(element === amount ? 'input' : 'change', updateQuote));
+  updateQuote();
+})();
+(() => {
+  const root = document.getElementById('quick-entry');
+  if (!root || root.dataset.ajaxReady === 'true') return;
+  root.dataset.ajaxReady = 'true';
+
+  const readPayload = async response => {
+    if (response.redirected && /\/(?:unlock|setup)(?:\?|$)/.test(new URL(response.url).pathname)) {
+      window.location.assign(response.url);
+      throw new Error('会话已失效，正在前往解锁页面。');
+    }
+    const raw = await response.text();
+    let payload;
+    try { payload = raw ? JSON.parse(raw) : {}; } catch (_) { payload = { error: raw }; }
+    if (!response.ok) throw new Error(payload.error || payload.message || `请求失败（HTTP ${response.status}）`);
+    if (!payload.ok) throw new Error(payload.error || payload.message || '操作没有成功。');
+    return payload;
+  };
+
+  const balanceTargets = Array.from(root.querySelectorAll('[data-account-balance-for]'));
+  const refreshBalance = async target => {
+    const select = document.getElementById(target.dataset.accountBalanceFor);
+    if (!select || !select.value) return;
+    const requestedId = select.value;
+    target.dataset.loadingAccountId = requestedId;
+    target.className = 'text-xs text-gray-400 mt-1';
+    target.textContent = '正在读取余额…';
+    try {
+      const response = await fetch(`/accounts/${encodeURIComponent(requestedId)}/balance-summary`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        credentials: 'same-origin'
+      });
+      const payload = await readPayload(response);
+      if (select.value !== requestedId || target.dataset.loadingAccountId !== requestedId) return;
+      const isTransferSource = select.id === 'quick-transfer-from';
+      const isCredit = payload.kind === 'credit_card' || payload.kind === 'credit_service';
+      target.className = `text-xs mt-1 ${isTransferSource && isCredit && !payload.can_transfer_out ? 'text-amber-600' : 'text-gray-500'}`;
+      target.textContent = `余额：${payload.balance}${isTransferSource && isCredit && !payload.can_transfer_out ? ' · 当前不可转出' : ''}`;
+    } catch (error) {
+      if (select.value !== requestedId) return;
+      target.className = 'text-xs text-red-600 mt-1';
+      target.textContent = `余额读取失败：${error.message}`;
+    }
+  };
+  const refreshAllBalances = () => balanceTargets.forEach(refreshBalance);
+  for (const target of balanceTargets) {
+    const select = document.getElementById(target.dataset.accountBalanceFor);
+    if (select) select.addEventListener('change', () => refreshBalance(target));
+  }
+  refreshAllBalances();
+
+  const resetForNext = form => {
+    const amount = form.querySelector('input[name="amount"]');
+    const note = form.querySelector('input[name="note"]');
+    if (amount) amount.value = '';
+    if (note) note.value = '';
+    const installment = form.querySelector('#quick-use-installment');
+    if (installment) {
+      installment.checked = false;
+      installment.dispatchEvent(new Event('change'));
+    }
+    if (amount) amount.focus();
+  };
+
+  for (const form of root.querySelectorAll('[data-quick-form]')) {
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      const button = form.querySelector('[data-quick-submit]');
+      const status = form.querySelector('[data-quick-status]');
+      button.disabled = true;
+      status.className = 'text-sm text-blue-600';
+      status.textContent = '正在保存…';
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          headers: { Accept: 'application/json' },
+          body: new URLSearchParams(new FormData(form)),
+          credentials: 'same-origin'
+        });
+        const payload = await readPayload(response);
+        status.className = 'text-sm text-green-700';
+        status.textContent = `${payload.message || '保存成功'}，可以继续记录。`;
+        resetForNext(form);
+        refreshAllBalances();
+      } catch (error) {
+        status.className = 'text-sm text-red-600';
+        status.textContent = error.message;
+        if (window.harukaShowError) window.harukaShowError(error.message);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+
+  const billForm = root.querySelector('[data-quick-form="bill"]');
+  const addButton = document.getElementById('quick-batch-add');
+  const panel = document.getElementById('quick-batch-panel');
+  const list = document.getElementById('quick-batch-list');
+  const count = document.getElementById('quick-batch-count');
+  const clearButton = document.getElementById('quick-batch-clear');
+  const submitButton = document.getElementById('quick-batch-submit');
+  const batchStatus = document.getElementById('quick-batch-status');
+  if (!billForm || !addButton || !panel || !list || !count || !clearButton || !submitButton || !batchStatus) return;
+  const pending = [];
+
+  window.harukaApplyReceiptDraft = draft => {
+    const kind = billForm.querySelector('[name="kind"]');
+    const amount = billForm.querySelector('[name="amount"]');
+    const category = billForm.querySelector('[name="category"]');
+    const note = billForm.querySelector('[name="note"]');
+    const localTime = billForm.querySelector('[data-utc-picker]');
+    if (draft.kind === 'income' || draft.kind === 'expense') {
+      kind.value = draft.kind;
+      kind.dispatchEvent(new Event('change'));
+    }
+    if (draft.amount) amount.value = draft.amount;
+    if (draft.category && Array.from(category.options).some(option => !option.disabled && option.value === draft.category)) category.value = draft.category;
+    if (draft.note) note.value = draft.note;
+    if (draft.happened_at_local && localTime) {
+      localTime.value = draft.happened_at_local;
+      localTime.dispatchEvent(new Event('input'));
+    }
+    amount.focus();
+  };
+
+  const renderBatch = () => {
+    panel.classList.toggle('hidden', pending.length === 0);
+    count.textContent = String(pending.length);
+    list.replaceChildren();
+    pending.forEach((entry, index) => {
+      const row = document.createElement('div');
+      row.className = 'flex items-center justify-between gap-3 rounded border border-blue-100 bg-white px-3 py-2 text-sm';
+      const text = document.createElement('span');
+      text.className = 'min-w-0 break-words';
+      text.textContent = `${entry.kind_label} · ${entry.account_label} · ${entry.category} · ${entry.amount}`;
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'shrink-0 text-red-600 hover:underline';
+      remove.textContent = '移除';
+      remove.addEventListener('click', () => {
+        pending.splice(index, 1);
+        renderBatch();
+      });
+      row.append(text, remove);
+      list.append(row);
+    });
+  };
+
+  addButton.addEventListener('click', () => {
+    if (!billForm.reportValidity()) return;
+    if (document.getElementById('quick-use-installment')?.checked) {
+      batchStatus.className = 'text-sm text-red-600 mt-3';
+      batchStatus.textContent = '分期计划需要单独创建，不能加入普通收支批量列表。';
+      panel.classList.remove('hidden');
+      return;
+    }
+    if (pending.length >= 100) {
+      batchStatus.className = 'text-sm text-red-600 mt-3';
+      batchStatus.textContent = '单次最多加入 100 条。';
+      panel.classList.remove('hidden');
+      return;
+    }
+    const data = new FormData(billForm);
+    const account = billForm.querySelector('[name="account_id"]');
+    const kind = String(data.get('kind') || '');
+    pending.push({
+      account_id: String(data.get('account_id') || ''),
+      kind,
+      amount: String(data.get('amount') || ''),
+      category: String(data.get('category') || ''),
+      note: String(data.get('note') || ''),
+      happened_at: String(data.get('happened_at') || ''),
+      account_label: account.selectedOptions[0]?.textContent?.trim() || '未知账户',
+      kind_label: kind === 'income' ? '收入' : '支出'
+    });
+    batchStatus.className = 'text-sm text-blue-800 mt-3';
+    batchStatus.textContent = '已加入列表，可以继续填写下一条。';
+    renderBatch();
+    resetForNext(billForm);
+  });
+
+  clearButton.addEventListener('click', () => {
+    pending.length = 0;
+    batchStatus.textContent = '';
+    renderBatch();
+  });
+
+  submitButton.addEventListener('click', async () => {
+    if (!pending.length) return;
+    submitButton.disabled = true;
+    clearButton.disabled = true;
+    batchStatus.className = 'text-sm text-blue-700 mt-3';
+    batchStatus.textContent = `正在提交 ${pending.length} 条记录…`;
+    try {
+      const entries = pending.map(({ account_label, kind_label, ...entry }) => entry);
+      const response = await fetch('/bills/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ entries })
+      });
+      const payload = await readPayload(response);
+      pending.length = 0;
+      renderBatch();
+      const formStatus = billForm.querySelector('[data-quick-status]');
+      formStatus.className = 'text-sm text-green-700';
+      formStatus.textContent = `${payload.message || '批量保存成功'}，可以继续记录。`;
+      refreshAllBalances();
+    } catch (error) {
+      batchStatus.className = 'text-sm text-red-600 mt-3';
+      batchStatus.textContent = error.message;
+      if (window.harukaShowError) window.harukaShowError(error.message);
+    } finally {
+      submitButton.disabled = false;
+      clearButton.disabled = false;
+    }
+  });
+})();
+</script>
+<script src="/static/ocr/tesseract.min.js"></script>
+<script src="/static/receipt-scanner.js"></script>

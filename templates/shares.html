@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}分享 - haruka{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3 mb-4"><div><h1 class="text-xl font-bold">分享管理</h1></div><a href="/bills" class="text-sm text-blue-600 hover:underline">前往账单创建分享</a></div>
+{% if shares.is_empty() %}<p class="text-sm text-gray-500">还没有账单分享。请在账单列表中点击“分享”。</p>{% else %}
+<div class="bg-white rounded-lg border border-gray-200 divide-y divide-gray-100">
+  {% for share in shares %}<article class="p-4 flex flex-wrap items-center gap-3"><div class="flex-1 min-w-56"><h2 class="text-sm font-medium">{{ share.label }}</h2><p class="text-xs text-gray-500 mt-1">{% if share.has_password %}密码保护{% else %}无需密码{% endif %} · 截止 <time data-utc-time="{{ share.expires_at }}">{{ share.expires_at }}</time>{% if share.expired %}<span class="ml-2 text-red-600">已过期</span>{% else %}<span class="ml-2 text-green-700">有效</span>{% endif %}{% if !share.source_exists %}<span class="ml-2 text-gray-400">原账单已删除</span>{% endif %}</p></div>{% if share.source_exists %}<a href="/bills/{{ share.source_bill_id }}/share" class="text-sm text-blue-600">来源</a>{% endif %}<button type="button" data-copy-share data-share-path="{{ share.path }}" class="text-sm text-blue-600">复制链接</button><a href="{{ share.path }}" target="_blank" rel="noreferrer" class="text-sm text-blue-600">打开</a><form method="post" action="/shares/{{ share.id }}/delete" hx-confirm="确认撤销这个分享？链接将立即失效。"><button class="text-sm text-red-600">撤销</button></form></article>{% endfor %}
+</div>
+{% endif %}
+{% include "share_copy_script.html" %}
+{% endblock %}

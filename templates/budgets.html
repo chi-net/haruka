@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}预算 - Haruka{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3 mb-5">
+  <div><h1 class="text-xl font-bold">预算</h1></div>
+  <a href="/statistics" class="text-sm text-blue-600 hover:underline">查看支出统计</a>
+</div>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium">预算设置</h2>
+  <form method="post" action="/budgets" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <label class="block"><span class="block text-sm text-gray-600 mb-1">日预算</span><input name="daily_amount" value="{{ daily_amount }}" inputmode="decimal" placeholder="例如 100.00" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"><span class="block text-xs text-gray-400 mt-1">每天零点进入新周期</span></label>
+    <label class="block"><span class="block text-sm text-gray-600 mb-1">周预算</span><input name="weekly_amount" value="{{ weekly_amount }}" inputmode="decimal" placeholder="例如 700.00" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"><span class="block text-xs text-gray-400 mt-1">周一至周日</span></label>
+    <label class="block"><span class="block text-sm text-gray-600 mb-1">月预算</span><input name="monthly_amount" value="{{ monthly_amount }}" inputmode="decimal" placeholder="例如 3000.00" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"><span class="block text-xs text-gray-400 mt-1">每个自然月</span></label>
+    <div class="md:col-span-3 flex justify-end"><button class="bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700">保存预算</button></div>
+  </form>
+</section>
+
+{% if statuses.is_empty() %}
+<section class="rounded-lg border border-dashed border-gray-300 bg-white p-8 text-center"><h2 class="font-medium">尚未启用预算</h2><p class="text-sm text-gray-500 mt-1">填写上方任意预算金额后，这里和仪表板会显示实时使用进度。</p></section>
+{% else %}
+<section>
+  <div class="flex items-center justify-between mb-3"><h2 class="font-medium">当前预算进度</h2><span class="text-xs text-gray-500">已用达到 80% 后会重点提醒</span></div>
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    {% for status in statuses %}
+    <article class="rounded-xl border-2 p-4 {% if status.over_budget %}border-red-400 bg-red-50{% else if status.near_limit %}border-amber-300 bg-amber-50{% else %}border-blue-100 bg-white{% endif %}">
+      <div class="flex items-start justify-between gap-3"><div><h3 class="font-semibold">{{ status.label }}</h3><p class="text-xs text-gray-500 mt-1">{{ status.period_label }}</p></div><span class="rounded-full px-2 py-1 text-xs font-bold {% if status.over_budget %}bg-red-600 text-white{% else if status.near_limit %}bg-amber-200 text-amber-900{% else %}bg-blue-50 text-blue-700{% endif %}">{% if status.over_budget %}已超支{% else %}{{ status.percent }}%{% endif %}</span></div>
+      <div class="mt-4"><div class="flex items-baseline justify-between gap-2"><span class="text-sm text-gray-500">已使用</span><span class="font-mono text-xl {% if status.over_budget %}text-red-700{% endif %}">{{ status.used }}</span></div><div class="flex items-center justify-between gap-2 text-xs text-gray-500 mt-1"><span>预算 {{ status.budget }}</span><span>{% if status.over_budget %}超出 {{ status.remaining }}{% else %}剩余 {{ status.remaining }}{% endif %}</span></div></div>
+      <div class="mt-4 h-3 overflow-hidden rounded-full bg-gray-200"><div class="h-full rounded-full {% if status.over_budget %}bg-red-500{% else if status.near_limit %}bg-amber-500{% else %}bg-blue-500{% endif %}" style="width: {{ status.bar_percent }}%"></div></div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

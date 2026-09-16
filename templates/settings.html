@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}设置 - haruka{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-4">设置</h1>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium">默认货币</h2>
+  <form method="post" action="/settings/currency" class="flex flex-wrap gap-2">
+    <select name="default_currency" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">
+      {% for c in currencies %}<option value="{{ c.code }}" {% if c.code == default_currency %}selected{% endif %}>{{ c.code }} · {{ c.name }}</option>{% endfor %}
+    </select>
+    <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">保存默认货币</button>
+  </form>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium">短信接口 Token</h2>
+  <p class="text-sm text-gray-500 mt-1">用于保护 <code>POST /api/sms</code>。{% if sms_token_custom %}当前已启用自定义 Token。{% else %}当前未设置页面专属 Token，将使用启动环境变量 <code>SMS_API_TOKEN</code>；环境变量也未设置时使用 <code>AppleToken</code>。{% endif %}</p>
+  <form method="post" action="/settings/sms-token" class="flex flex-wrap gap-2">
+    <input id="sms-api-token" name="token" type="password" minlength="8" maxlength="256" autocomplete="new-password" placeholder="输入自定义 Token，或点击随机生成" class="flex-1 min-w-64 border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <button id="generate-sms-token" type="button" class="border border-gray-300 text-gray-700 text-sm px-3 py-1.5 rounded hover:bg-gray-50">随机生成</button>
+    <button name="action" value="save" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">保存 Token</button>
+    {% if sms_token_custom %}<button name="action" value="reset" formnovalidate hx-confirm="确认停用页面自定义 Token？之后将恢复使用 SMS_API_TOKEN 环境变量或 AppleToken。" class="border border-red-200 text-red-600 text-sm px-3 py-1.5 rounded hover:bg-red-50">恢复启动默认值</button>{% endif %}
+  </form>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium">本人姓名</h2>
+  <p class="text-sm text-gray-500 mt-1 mb-3">仅用于判断招商银行短信中的收款人或信用卡还款人是否是你本人，以推测可能的转账或支出。</p>
+  <form method="post" action="/settings/owner-name" class="flex flex-wrap gap-2">
+    <input name="owner_name" value="{{ owner_name }}" maxlength="80" placeholder="例如：张三" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">保存本人姓名</button>
+  </form>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium mb-3">收支分类</h2>
+  <form method="post" action="/settings/categories" class="flex flex-wrap gap-2 mb-4">
+    <select name="kind" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="expense">支出</option><option value="income">收入</option></select>
+    <input name="name" required placeholder="分类名称" class="flex-1 min-w-40 border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <label class="flex items-center gap-1.5 text-sm text-gray-600"><input type="checkbox" name="is_food" value="true"> 食品类</label>
+    <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新增分类</button>
+  </form>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+    <div>
+      <h3 class="text-sm font-medium text-gray-600 mb-2">支出分类</h3>
+      <ul class="divide-y divide-gray-100 border border-gray-100 rounded">
+        {% for c in expense_categories %}<li class="flex items-center px-3 py-2 text-sm"><span class="flex-1">{{ c.name }} {% if c.is_food %}<span class="text-xs text-amber-700 bg-amber-50 rounded px-1.5 py-0.5">食品类</span>{% endif %}</span><a href="/settings/categories/{{ c.id }}/edit" class="text-blue-600 mr-3">编辑</a><form method="post" action="/settings/categories/{{ c.id }}/delete" hx-confirm="确认删除该分类？已有账单不会受影响。"><button class="text-red-600">删除</button></form></li>{% endfor %}
+        {% if expense_categories.is_empty() %}<li class="px-3 py-2 text-sm text-gray-400">暂无</li>{% endif %}
+      </ul>
+    </div>
+    <div>
+      <h3 class="text-sm font-medium text-gray-600 mb-2">收入分类</h3>
+      <ul class="divide-y divide-gray-100 border border-gray-100 rounded">
+        {% for c in income_categories %}<li class="flex items-center px-3 py-2 text-sm"><span class="flex-1">{{ c.name }}</span><a href="/settings/categories/{{ c.id }}/edit" class="text-blue-600 mr-3">编辑</a><form method="post" action="/settings/categories/{{ c.id }}/delete" hx-confirm="确认删除该分类？已有账单不会受影响。"><button class="text-red-600">删除</button></form></li>{% endfor %}
+        {% if income_categories.is_empty() %}<li class="px-3 py-2 text-sm text-gray-400">暂无</li>{% endif %}
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium">Passkey 登录</h2>
+  <p class="text-sm text-gray-500 mt-1 mb-3">Passkey 基于 WebAuthn，可以让你轻松使用设备解锁、Touch ID、Windows Hello 或安全密钥直接解锁账本，但需要浏览器与认证器支持 WebAuthn PRF。</p>
+  <form id="passkey-enroll-form" class="flex flex-wrap gap-2 mb-4">
+    <input id="passkey-name" required maxlength="80" autocomplete="off" placeholder="例如：MacBook Touch ID" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <select id="passkey-authenticator" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">
+      <option value="platform">Passkey 添加渠道1</option>
+      <option value="external">Passkey 添加渠道2</option>
+    </select>
+    <button id="passkey-enroll-button" type="submit" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">添加 Passkey</button>
+  </form>
+  <p id="passkey-status" class="hidden text-sm mb-3" role="status"></p>
+  <ul class="divide-y divide-gray-100 border border-gray-100 rounded">
+    {% for key in passkeys %}
+    <li class="flex items-center gap-3 px-3 py-2 text-sm">
+      <span class="flex-1"><span class="font-medium">{{ key.name }}</span><span class="block text-xs text-gray-400">添加于 <time data-utc-time="{{ key.created_at }}">{{ key.created_at }}</time></span></span>
+      <form method="post" action="/settings/passkeys/{{ key.id }}/delete" hx-confirm="确认删除这个 Passkey？删除后无法再用它解锁。"><button class="text-red-600">删除</button></form>
+    </li>
+    {% endfor %}
+    {% if passkeys.is_empty() %}<li class="px-3 py-2 text-sm text-gray-400">尚未添加 Passkey</li>{% endif %}
+  </ul>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4">
+  <h2 class="font-medium">恢复助记词</h2>
+  <p class="text-sm text-gray-500 mt-1 mb-3">{% if recovery_configured %}已设置。重新生成后旧助记词立即失效。{% else %}尚未设置。{% endif %} 此操作必须重新验证密码。</p>
+  <form method="post" action="/settings/recovery" hx-confirm="确认生成新的恢复助记词？旧助记词将立即失效。" class="flex flex-wrap gap-2">
+    <input name="password" type="password" required autocomplete="current-password" placeholder="输入主密码" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">重置助记词</button>
+  </form>
+</section>
+{% include "passkey_script.html" %}
+<script>
+document.getElementById('generate-sms-token')?.addEventListener('click', () => {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const token = btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+  const input = document.getElementById('sms-api-token');
+  input.type = 'text';
+  input.value = token;
+  input.focus();
+  input.select();
+});
+
+document.getElementById('passkey-enroll-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = document.getElementById('passkey-enroll-button');
+  const status = document.getElementById('passkey-status');
+  button.disabled = true;
+  status.className = 'text-sm text-blue-600 mb-3';
+  status.textContent = '请按浏览器提示创建并再次确认 Passkey…';
+  try {
+    await harukaEnrollPasskey(
+      document.getElementById('passkey-name').value,
+      document.getElementById('passkey-authenticator').value
+    );
+    status.className = 'text-sm text-green-700 mb-3';
+    status.textContent = 'Passkey 添加成功，正在刷新…';
+    window.location.assign('/settings');
+  } catch (error) {
+    status.className = 'text-sm text-red-600 mb-3';
+    status.textContent = harukaPasskeyError(error);
+    button.disabled = false;
+  }
+});
+</script>
+{% endblock %}

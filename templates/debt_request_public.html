@@ -1,0 +1,55 @@
+{% extends "public_share_base.html" %}
+{% block title %}{{ request.kind_label }} - haruka{% endblock %}
+{% block content %}
+<section class="bg-white rounded-lg border border-gray-200 p-5">
+  <div class="text-center"><p class="text-sm text-gray-500">{{ request.kind_label }}</p><h1 class="text-3xl font-bold font-mono mt-2">{{ requested_amount }}</h1>{% if !request.note.is_empty() %}<p class="text-sm text-gray-600 mt-3 whitespace-pre-wrap">{{ request.note }}</p>{% endif %}</div>
+  <div class="border-t border-gray-100 mt-5 pt-4"><h2 class="text-sm font-medium">收款信息</h2><dl class="mt-3 space-y-2 text-sm"><div class="flex justify-between gap-4"><dt class="text-gray-500">收款人</dt><dd class="text-right">{{ request.recipient_name }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">账户</dt><dd class="text-right">{{ request.account_name }} · {{ request.account_kind }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">{{ request.identifier_label }}</dt><dd class="text-right"><span>{{ request.identifier_masked }}</span><button id="copy-account" type="button" class="ml-2 text-blue-600">复制完整信息</button></dd></div></dl></div>
+  <form id="payer-form" method="post" action="/r/{{ token }}" class="border-t border-gray-100 mt-5 pt-4 space-y-3">
+    <div><h2 class="text-sm font-medium">填写打款信息</h2><p class="text-xs text-gray-500 mt-1">提交后仍需对方核实到账，才会正式记入对方的账本。</p></div>
+    <div><label class="block text-sm text-gray-600 mb-1">你的姓名</label><input name="payer_name" maxlength="100" autocomplete="name" required class="w-full border border-gray-300 rounded px-3 py-2"></div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3"><div><label class="block text-sm text-gray-600 mb-1">联系方式</label><input name="payer_contact" maxlength="200" autocomplete="email" placeholder="手机、邮箱或其他联系方式" class="w-full border border-gray-300 rounded px-3 py-2"></div><div><label class="block text-sm text-gray-600 mb-1">打款账户</label><input name="payer_account" maxlength="200" autocomplete="off" placeholder="账户名或卡号后四位" class="w-full border border-gray-300 rounded px-3 py-2"></div></div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3"><div><label class="block text-sm text-gray-600 mb-1">实际打款金额（{{ request.currency }}）</label><input name="amount" type="number" min="0.01" step="0.01" required value="{{ amount_input }}" class="w-full border border-gray-300 rounded px-3 py-2 font-mono"></div><div><label class="block text-sm text-gray-600 mb-1">打款时间</label><input id="paid-at-local" type="datetime-local" required class="w-full border border-gray-300 rounded px-3 py-2"><input id="paid-at-utc" type="hidden" name="paid_at"></div></div>
+    <div><label class="block text-sm text-gray-600 mb-1">说明</label><textarea name="note" maxlength="1000" rows="3" class="w-full border border-gray-300 rounded px-3 py-2"></textarea></div>
+    <button class="w-full bg-blue-600 text-white px-4 py-2.5 rounded hover:bg-blue-700">提交</button>
+  </form>
+</section>
+<script>
+(() => {
+  const pad = value => String(value).padStart(2, '0');
+  const local = document.getElementById('paid-at-local');
+  const utc = document.getElementById('paid-at-utc');
+  const sync = () => {
+    const date = new Date(local.value);
+    utc.value = Number.isNaN(date.getTime()) ? '' : `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`;
+  };
+  local.value = `${new Date().getFullYear()}-${pad(new Date().getMonth() + 1)}-${pad(new Date().getDate())}T${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`;
+  sync();
+  local.addEventListener('input', sync);
+  document.getElementById('payer-form').addEventListener('submit', sync);
+  document.getElementById('copy-account').addEventListener('click', async event => {
+    const original = event.currentTarget.textContent;
+    try {
+      const response = await fetch('/r/{{ token }}/account', { method: 'POST', headers: { Accept: 'application/json' }, cache: 'no-store', credentials: 'omit' });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.error || '读取失败');
+      if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(payload.value);
+      else {
+        const input = document.createElement('textarea');
+        input.value = payload.value;
+        input.style.position = 'fixed';
+        input.style.opacity = '0';
+        document.body.appendChild(input);
+        input.select();
+        if (!document.execCommand('copy')) throw new Error('浏览器拒绝了复制操作');
+        input.remove();
+      }
+      event.currentTarget.textContent = '已复制';
+    } catch (error) {
+      event.currentTarget.textContent = `复制失败：${error.message}`;
+    } finally {
+      window.setTimeout(() => { event.currentTarget.textContent = original; }, 1800);
+    }
+  });
+})();
+</script>
+{% endblock %}
