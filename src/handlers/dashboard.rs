@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::{Html, Redirect},
 };
-use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, Timelike};
+use chrono::{Datelike, Duration, Months, NaiveDate, NaiveDateTime, Timelike};
 use rust_decimal::Decimal;
 use sea_orm::{EntityTrait, QueryOrder};
 use serde::Serialize;
@@ -39,12 +39,16 @@ struct AccountSummary {
     balance: String,
 }
 
-struct CreditServiceSummary {
+struct CreditAccountSummary {
     name: String,
+    kind: String,
     balance: String,
     used: String,
     available: String,
     limit: String,
+    repayment_date: String,
+    repayment_amount: String,
+    follows_billing_day: bool,
     usage_percent: i64,
     danger: bool,
 }
@@ -104,7 +108,7 @@ struct DashboardTemplate {
     accounts: Vec<AccountOption>,
     transfer_sources: Vec<AccountOption>,
     account_summaries: Vec<AccountSummary>,
-    credit_services: Vec<CreditServiceSummary>,
+    credit_accounts: Vec<CreditAccountSummary>,
     auto_debit_warnings: Vec<AutoDebitWarning>,
     people: Vec<PersonOption>,
     categories: Vec<CategoryOption>,
@@ -137,6 +141,23 @@ fn account_kind_label(kind: &str) -> &'static str {
         "credit_service" => "信贷服务",
         "investment" => "投资",
         _ => "其他",
+    }
+}
+
+fn date_with_clamped_day(year: i32, month: u32, day: u32) -> NaiveDate {
+    let first = NaiveDate::from_ymd_opt(year, month, 1).expect("有效年月");
+    let next_month = first.checked_add_months(Months::new(1)).expect("有效年月");
+    let last_day = (next_month - Duration::days(1)).day();
+    NaiveDate::from_ymd_opt(year, month, day.min(last_day)).expect("有效日期")
+}
+
+fn next_repayment_date(today: NaiveDate, repayment_day: i32) -> NaiveDate {
+    let current = date_with_clamped_day(today.year(), today.month(), repayment_day as u32);
+    if current >= today {
+        current
+    } else {
+        let next_month = today.checked_add_months(Months::new(1)).expect("有效年月");
+        date_with_clamped_day(next_month.year(), next_month.month(), repayment_day as u32)
     }
 }
 
@@ -250,16 +271,16 @@ pub async fn show(
     let mut account_balances = HashMap::new();
     let mut net_assets = 0i64;
     let mut account_summaries = Vec::with_capacity(accounts.len());
-    let mut credit_services = Vec::new();
+    let mut credit_accounts = Vec::new();
     for account in &accounts {
         let balance = super::accounts::current_balance(&state, &dek, account.id).await?;
         account_balances.insert(account.id, balance);
         net_assets = net_assets
             .checked_add(rates.convert(balance, &account.currency).map_err(err500)?)
             .ok_or_else(|| err500("资产金额超出范围"))?;
-        if account.kind == "credit_service" {
-            let limit = details
-                .get(&account.id)
+        if matches!(account.kind.as_str(), "credit_card" | "credit_service") {
+            let detail = details.get(&account.id);
+            let limit = detail
                 .map(|detail| crypto::decrypt_cents(&dek, &detail.credit_limit))
                 .unwrap_or_default();
             let used = balance.checked_neg().unwrap_or(i64::MAX).max(0);
@@ -271,12 +292,25 @@ pub async fn show(
             } else {
                 0
             };
-            credit_services.push(CreditServiceSummary {
+            let billing_day = detail.map(|detail| detail.billing_day).unwrap_or(1).max(1);
+            let configured_repayment_day = detail.map(|detail| detail.repayment_day).unwrap_or(0);
+            let repayment_day = if configured_repayment_day > 0 {
+                configured_repayment_day
+            } else {
+                billing_day
+            };
+            credit_accounts.push(CreditAccountSummary {
                 name: account_names.get(&account.id).cloned().unwrap_or_default(),
+                kind: account_kind_label(&account.kind).into(),
                 balance: currency::format(balance, &account.currency),
                 used: currency::format(used, &account.currency),
                 available: currency::format(available, &account.currency),
                 limit: currency::format(limit, &account.currency),
+                repayment_date: next_repayment_date(today, repayment_day)
+                    .format("%m月%d日")
+                    .to_string(),
+                repayment_amount: currency::format(used, &account.currency),
+                follows_billing_day: configured_repayment_day == 0,
                 usage_percent,
                 danger: available == 0 || (limit > 0 && available <= limit / 5),
             });
@@ -563,7 +597,7 @@ pub async fn show(
         accounts: account_options,
         transfer_sources,
         account_summaries,
-        credit_services,
+        credit_accounts,
         auto_debit_warnings,
         people: people_options,
         categories,
@@ -595,4 +629,28 @@ pub async fn show(
 
 pub async fn redirect() -> Redirect {
     Redirect::to("/dashboard")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repayment_date_keeps_today_and_rolls_after_due_day() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 10).unwrap();
+        assert_eq!(next_repayment_date(today, 10), today);
+        assert_eq!(
+            next_repayment_date(today, 9),
+            NaiveDate::from_ymd_opt(2026, 11, 9).unwrap()
+        );
+    }
+
+    #[test]
+    fn repayment_date_clamps_to_month_end() {
+        let today = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
+        assert_eq!(
+            next_repayment_date(today, 31),
+            NaiveDate::from_ymd_opt(2026, 2, 28).unwrap()
+        );
+    }
 }

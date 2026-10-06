@@ -452,6 +452,10 @@ async fn main() {
             post(handlers::debt_requests::confirm),
         )
         .route(
+            "/debt-requests/{id}/repayment",
+            post(handlers::debt_requests::submit_repayment),
+        )
+        .route(
             "/debt-requests/{id}/revoke",
             post(handlers::debt_requests::revoke),
         )
@@ -554,6 +558,7 @@ async fn main() {
             "/r/{token}/account",
             post(handlers::debt_requests::account_identifier),
         )
+        .route("/r/{token}/verify", post(handlers::debt_requests::verify))
         .route("/api/sms", post(handlers::investments::receive_sms))
         .merge(protected)
         .with_state(state)

@@ -11,6 +11,8 @@ pub struct Model {
     pub credit_limit: String,
     /// 账单日 1..=31，非信用类账户为 0
     pub billing_day: i32,
+    /// 还款日 1..=31；0 表示跟随账单日，非信用类账户也为 0
+    pub repayment_day: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

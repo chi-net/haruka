@@ -3,7 +3,7 @@
 {% block content %}
 <div class="flex items-center justify-between mb-4">
   <div><h1 class="text-xl font-bold">{{ page_heading }}</h1><a href="/dashboard" class="text-sm text-blue-600 hover:underline">返回仪表板</a></div>
-  {% if advanced_search %}<a href="/debt-people" class="text-sm text-blue-600 hover:underline">返回借贷对象</a>{% else %}<div class="flex items-center gap-3"><a href="/debt-requests" class="text-sm text-blue-600 hover:underline">借还请求</a><a href="/debt-people/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新增对象</a></div>{% endif %}
+  {% if advanced_search %}<a href="/debt-people" class="text-sm text-blue-600 hover:underline">返回借贷对象</a>{% else %}<div class="flex items-center gap-3"><a href="/debt-requests" class="text-sm text-blue-600 hover:underline">借还请求与证明</a><a href="/debt-people/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新增对象</a></div>{% endif %}
 </div>
 <form method="get" action="{{ search_action }}" class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
   <div class="flex flex-wrap items-end gap-3">

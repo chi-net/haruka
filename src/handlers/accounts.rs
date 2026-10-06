@@ -118,6 +118,7 @@ struct AccountFormTemplate {
     account_username: String,
     credit_limit: String,
     billing_day: String,
+    repayment_day: String,
     note: String,
 }
 
@@ -142,6 +143,8 @@ pub struct AccountFormData {
     account_username: String,
     credit_limit: String,
     billing_day: String,
+    #[serde(default)]
+    repayment_day: String,
     note: String,
 }
 
@@ -200,13 +203,26 @@ async fn save_account_detail(
     account_username: &str,
     credit_limit: i64,
     billing_day: i32,
+    repayment_day: i32,
 ) -> HandlerResult<()> {
-    let (card_number, account_username, credit_limit, billing_day) = match kind {
-        "payment" => ("", account_username.trim(), 0, 0),
-        "bank" | "stored_value" => (card_number.trim(), "", 0, 0),
-        "credit_card" => (card_number.trim(), "", credit_limit, billing_day),
-        "credit_service" => ("", account_username.trim(), credit_limit, billing_day),
-        _ => ("", "", 0, 0),
+    let (card_number, account_username, credit_limit, billing_day, repayment_day) = match kind {
+        "payment" => ("", account_username.trim(), 0, 0, 0),
+        "bank" | "stored_value" => (card_number.trim(), "", 0, 0, 0),
+        "credit_card" => (
+            card_number.trim(),
+            "",
+            credit_limit,
+            billing_day,
+            repayment_day,
+        ),
+        "credit_service" => (
+            "",
+            account_username.trim(),
+            credit_limit,
+            billing_day,
+            repayment_day,
+        ),
+        _ => ("", "", 0, 0, 0),
     };
     if !matches!(kind, "credit_card" | "credit_service")
         && card_number.is_empty()
@@ -226,6 +242,7 @@ async fn save_account_detail(
         account_username: Set(crypto::encrypt(dek, account_username.as_bytes())),
         credit_limit: Set(crypto::encrypt_cents(dek, credit_limit)),
         billing_day: Set(billing_day),
+        repayment_day: Set(repayment_day),
     })
     .on_conflict(
         OnConflict::column(account_detail::Column::AccountId)
@@ -234,6 +251,7 @@ async fn save_account_detail(
                 account_detail::Column::AccountUsername,
                 account_detail::Column::CreditLimit,
                 account_detail::Column::BillingDay,
+                account_detail::Column::RepaymentDay,
             ])
             .to_owned(),
     )
@@ -403,9 +421,14 @@ fn parse_balance(value: &str) -> HandlerResult<i64> {
         .ok_or_else(|| bad_request("余额超出范围"))
 }
 
-fn parse_credit_settings(kind: &str, limit: &str, day: &str) -> HandlerResult<(i64, i32)> {
+fn parse_credit_settings(
+    kind: &str,
+    limit: &str,
+    billing_day: &str,
+    repayment_day: &str,
+) -> HandlerResult<(i64, i32, i32)> {
     if kind != "credit_card" && kind != "credit_service" {
-        return Ok((0, 0));
+        return Ok((0, 0, 0));
     }
     let decimal = Decimal::from_str(limit.trim())
         .map_err(|_| bad_request("授信额格式不正确"))?
@@ -416,14 +439,26 @@ fn parse_credit_settings(kind: &str, limit: &str, day: &str) -> HandlerResult<(i
     let credit_limit = (decimal * Decimal::from(100))
         .to_i64()
         .ok_or_else(|| bad_request("授信额超出范围"))?;
-    let billing_day: i32 = day
+    let billing_day: i32 = billing_day
         .trim()
         .parse()
         .map_err(|_| bad_request("账单日必须是 1 到 31"))?;
     if !(1..=31).contains(&billing_day) {
         return Err(bad_request("账单日必须是 1 到 31"));
     }
-    Ok((credit_limit, billing_day))
+    let repayment_day = if repayment_day.trim().is_empty() {
+        0
+    } else {
+        let parsed: i32 = repayment_day
+            .trim()
+            .parse()
+            .map_err(|_| bad_request("还款日必须是 1 到 31，或留空跟随账单日"))?;
+        if !(1..=31).contains(&parsed) {
+            return Err(bad_request("还款日必须是 1 到 31，或留空跟随账单日"));
+        }
+        parsed
+    };
+    Ok((credit_limit, billing_day, repayment_day))
 }
 
 pub async fn list(
@@ -445,7 +480,7 @@ pub async fn list(
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let details: HashMap<i64, (String, String, i64, i32)> = account_detail::Entity::find()
+    let details: HashMap<i64, (String, String, i64, i32, i32)> = account_detail::Entity::find()
         .all(&state.db)
         .await
         .map_err(err500)?
@@ -461,6 +496,7 @@ pub async fn list(
                     super::mask_account_username(&account_username),
                     credit_limit,
                     detail.billing_day,
+                    detail.repayment_day,
                 ),
             )
         })
@@ -528,13 +564,23 @@ pub async fn list(
     let rows = accounts
         .into_iter()
         .map(|account| {
-            let (card_number, account_username, credit_limit, billing_day) =
+            let (card_number, account_username, credit_limit, billing_day, repayment_day) =
                 details.get(&account.id).cloned().unwrap_or_default();
             let credit_summary = if billing_day > 0 {
                 format!(
-                    "授信额 {} · 每月 {} 日",
+                    "授信额 {} · 账单日 {} 日 · 还款日 {} 日{}",
                     currency::format(credit_limit, &account.currency),
-                    billing_day
+                    billing_day,
+                    if repayment_day > 0 {
+                        repayment_day
+                    } else {
+                        billing_day
+                    },
+                    if repayment_day == 0 {
+                        "（随账单日）"
+                    } else {
+                        ""
+                    }
                 )
             } else {
                 String::new()
@@ -840,13 +886,24 @@ pub async fn detail(
         .as_ref()
         .filter(|item| item.billing_day > 0)
         .map(|item| {
+            let repayment_day = if item.repayment_day > 0 {
+                item.repayment_day
+            } else {
+                item.billing_day
+            };
             format!(
-                "授信额 {} · 每月 {} 日出账",
+                "授信额 {} · 账单日 {} 日 · 还款日 {} 日{}",
                 currency::format(
                     crypto::decrypt_cents(&dek, &item.credit_limit),
                     &account.currency
                 ),
-                item.billing_day
+                item.billing_day,
+                repayment_day,
+                if item.repayment_day == 0 {
+                    "（随账单日）"
+                } else {
+                    ""
+                }
             )
         })
         .unwrap_or_default();
@@ -924,6 +981,7 @@ pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<Strin
         account_username: String::new(),
         credit_limit: String::new(),
         billing_day: String::new(),
+        repayment_day: String::new(),
         note: String::new(),
     }
     .render()
@@ -945,8 +1003,12 @@ pub async fn create(
     if !currency::valid(&form.currency) {
         return Err(bad_request("账户货币无效"));
     }
-    let (credit_limit, billing_day) =
-        parse_credit_settings(&form.account_kind, &form.credit_limit, &form.billing_day)?;
+    let (credit_limit, billing_day, repayment_day) = parse_credit_settings(
+        &form.account_kind,
+        &form.credit_limit,
+        &form.billing_day,
+        &form.repayment_day,
+    )?;
     let account = account::ActiveModel {
         name: Set(crypto::encrypt(&dek, form.name.trim().as_bytes())),
         kind: Set(form.account_kind.clone()),
@@ -968,6 +1030,7 @@ pub async fn create(
         &form.account_username,
         credit_limit,
         billing_day,
+        repayment_day,
     )
     .await?;
     Ok(Redirect::to("/accounts"))
@@ -1004,6 +1067,11 @@ pub async fn edit_form(
         .filter(|detail| detail.billing_day > 0)
         .map(|detail| detail.billing_day.to_string())
         .unwrap_or_default();
+    let repayment_day = detail
+        .as_ref()
+        .filter(|detail| detail.repayment_day > 0)
+        .map(|detail| detail.repayment_day.to_string())
+        .unwrap_or_default();
     let html = AccountFormTemplate {
         heading: "编辑账户".into(),
         action: format!("/accounts/{id}/edit"),
@@ -1015,6 +1083,7 @@ pub async fn edit_form(
         account_username,
         credit_limit,
         billing_day,
+        repayment_day,
         note: crypto::decrypt_string(&dek, &account.note),
     }
     .render()
@@ -1038,8 +1107,12 @@ pub async fn update(
     if !currency::valid(&form.currency) {
         return Err(bad_request("账户货币无效"));
     }
-    let (credit_limit, billing_day) =
-        parse_credit_settings(&form.account_kind, &form.credit_limit, &form.billing_day)?;
+    let (credit_limit, billing_day, repayment_day) = parse_credit_settings(
+        &form.account_kind,
+        &form.credit_limit,
+        &form.billing_day,
+        &form.repayment_day,
+    )?;
     let account = account::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -1112,6 +1185,7 @@ pub async fn update(
         &form.account_username,
         credit_limit,
         billing_day,
+        repayment_day,
     )
     .await?;
     Ok(Redirect::to("/accounts"))

@@ -75,6 +75,12 @@ struct PersonOption {
     name: String,
 }
 
+struct RepaymentAccountOption {
+    id: i64,
+    name: String,
+    currency: String,
+}
+
 #[derive(Template)]
 #[template(path = "debt_request_form.html")]
 struct DebtRequestFormTemplate {
@@ -104,7 +110,14 @@ struct RequestView {
     paid_at: String,
     has_submission: bool,
     can_confirm: bool,
+    can_submit_repayment: bool,
     can_revoke: bool,
+    repayment_pending: bool,
+    repaid: bool,
+    settled: bool,
+    repayment_at: String,
+    repayment_note: String,
+    repayment_account_name: String,
     confirmed_debt_record_id: i64,
     verification_ok: bool,
     verification_code: String,
@@ -114,6 +127,8 @@ struct RequestView {
 #[template(path = "debt_requests.html")]
 struct DebtRequestsTemplate {
     requests: Vec<RequestView>,
+    repayment_accounts: Vec<RepaymentAccountOption>,
+    default_repayment_at: String,
 }
 
 #[derive(Template)]
@@ -129,11 +144,17 @@ struct DebtRequestPublicTemplate {
 #[derive(Template)]
 #[template(path = "debt_request_receipt.html")]
 struct DebtRequestReceiptTemplate {
+    token: String,
     request: RequestSnapshot,
     submission: PayerSubmission,
     paid_amount: String,
     expires_at: String,
     confirmed: bool,
+    is_borrow: bool,
+    repayment_pending: bool,
+    repaid: bool,
+    repayment_at: String,
+    repayment_note: String,
     verification_code: String,
 }
 
@@ -165,6 +186,22 @@ pub struct SubmitRequestForm {
     #[serde(default)]
     note: String,
     paid_at: String,
+}
+
+#[derive(Deserialize)]
+pub struct SubmitRepaymentForm {
+    account_id: i64,
+    repaid_at: String,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct RepaymentSubmission {
+    version: u8,
+    amount_cents: i64,
+    repaid_at: String,
+    note: String,
 }
 
 #[derive(Serialize)]
@@ -291,6 +328,31 @@ fn confirmed_digest(
     ])
 }
 
+fn repayment_digest(
+    previous: &[u8],
+    repayment: &str,
+    repayment_account_id: i64,
+    repayment_record_id: i64,
+    submitted_at: chrono::DateTime<Utc>,
+) -> Vec<u8> {
+    digest(&[
+        b"repayment-submitted",
+        previous,
+        repayment.as_bytes(),
+        &repayment_account_id.to_be_bytes(),
+        &repayment_record_id.to_be_bytes(),
+        submitted_at.to_rfc3339().as_bytes(),
+    ])
+}
+
+fn verified_digest(previous: &[u8], verified_at: chrono::DateTime<Utc>) -> Vec<u8> {
+    digest(&[
+        b"repayment-received",
+        previous,
+        verified_at.to_rfc3339().as_bytes(),
+    ])
+}
+
 fn digest_code(value: &[u8]) -> String {
     value
         .iter()
@@ -326,7 +388,10 @@ fn verify_chain(request: &debt_request::Model) -> bool {
             return false;
         }
     }
-    if request.status == "confirmed" {
+    if matches!(
+        request.status.as_str(),
+        "confirmed" | "repayment_submitted" | "repaid"
+    ) {
         let (Some(record_id), Some(confirmed_at)) =
             (request.confirmed_debt_record_id, request.confirmed_at)
         else {
@@ -338,11 +403,42 @@ fn verify_chain(request: &debt_request::Model) -> bool {
             return false;
         }
     }
+    if matches!(request.status.as_str(), "repayment_submitted" | "repaid") {
+        let (Some(submitted_at), Some(account_id), Some(record_id)) = (
+            request.repayment_submitted_at,
+            request.repayment_account_id,
+            request.repayment_debt_record_id,
+        ) else {
+            return false;
+        };
+        if request.repayment_submission.is_empty()
+            || request.repayment_digest
+                != repayment_digest(
+                    &request.confirmation_digest,
+                    &request.repayment_submission,
+                    account_id,
+                    record_id,
+                    submitted_at,
+                )
+        {
+            return false;
+        }
+    }
+    if request.status == "repaid" {
+        let Some(verified_at) = request.verified_at else {
+            return false;
+        };
+        if request.verification_digest != verified_digest(&request.repayment_digest, verified_at) {
+            return false;
+        }
+    }
     true
 }
 
 fn chain_head(request: &debt_request::Model) -> &[u8] {
-    if !request.confirmation_digest.is_empty() {
+    if !request.verification_digest.is_empty() {
+        &request.verification_digest
+    } else if !request.confirmation_digest.is_empty() {
         &request.confirmation_digest
     } else if !request.submission_digest.is_empty() {
         &request.submission_digest
@@ -423,6 +519,16 @@ fn decrypt_submission(request: &debt_request::Model, token: &[u8]) -> Option<Pay
     (submission.version == 1).then_some(submission)
 }
 
+fn decrypt_repayment(request: &debt_request::Model, token: &[u8]) -> Option<RepaymentSubmission> {
+    if request.repayment_submission.is_empty() {
+        return None;
+    }
+    let key = request_key(token, &request.salt);
+    let plaintext = crypto::decrypt(&key, &request.repayment_submission)?;
+    let repayment = serde_json::from_slice::<RepaymentSubmission>(&plaintext).ok()?;
+    (repayment.version == 1).then_some(repayment)
+}
+
 async fn find_public_request(
     state: &AppState,
     token: &str,
@@ -436,7 +542,14 @@ async fn find_public_request(
         .await
         .map_err(err500)?;
     Ok(request
-        .filter(|item| item.status != "revoked" && item.expires_at > Utc::now().naive_utc())
+        .filter(|item| {
+            item.status != "revoked"
+                && (item.expires_at > Utc::now().naive_utc()
+                    || matches!(
+                        item.status.as_str(),
+                        "confirmed" | "repayment_submitted" | "repaid"
+                    ))
+        })
         .map(|item| (item, bytes)))
 }
 
@@ -580,11 +693,18 @@ pub async fn create(
         request_digest: Set(request_digest),
         submission_digest: Set(Vec::new()),
         confirmation_digest: Set(Vec::new()),
+        repayment_digest: Set(Vec::new()),
+        verification_digest: Set(Vec::new()),
         status: Set("open".into()),
         expires_at: Set(expires_at),
         submitted_at: Set(None),
         confirmed_at: Set(None),
+        repayment_submitted_at: Set(None),
+        verified_at: Set(None),
         confirmed_debt_record_id: Set(None),
+        repayment_debt_record_id: Set(None),
+        repayment_account_id: Set(None),
+        repayment_submission: Set(String::new()),
         created_at: Set(created_at),
         ..Default::default()
     }
@@ -602,6 +722,34 @@ pub async fn list(
     Extension(SessionDek(dek)): Extension<SessionDek>,
 ) -> HandlerResult<Html<String>> {
     let now = Utc::now().naive_utc();
+    let account_details: HashMap<i64, account_detail::Model> = account_detail::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|detail| (detail.account_id, detail))
+        .collect();
+    let repayment_accounts = account::Entity::find()
+        .order_by_asc(account::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .filter(|account| account.kind != "investment")
+        .map(|account| RepaymentAccountOption {
+            id: account.id,
+            name: super::bills::account_display_name(
+                &dek,
+                &account,
+                account_details.get(&account.id),
+            ),
+            currency: account.currency,
+        })
+        .collect::<Vec<_>>();
+    let repayment_account_names = repayment_accounts
+        .iter()
+        .map(|account| (account.id, account.name.clone()))
+        .collect::<HashMap<_, _>>();
     let mut views = Vec::new();
     for request in debt_request::Entity::find()
         .order_by_desc(debt_request::Column::CreatedAt)
@@ -615,16 +763,22 @@ pub async fn list(
         };
         let snapshot = decrypt_snapshot(&request, token_bytes.as_slice()).unwrap_or_default();
         let submission = decrypt_submission(&request, token_bytes.as_slice());
+        let repayment = decrypt_repayment(&request, token_bytes.as_slice());
         let expired = request.expires_at <= now;
         let status_label = match request.status.as_str() {
             "submitted" => "等待确认",
-            "confirmed" => "已确认到账",
+            "confirmed" if request.kind == "borrow" => "借款已到账，待还款",
+            "confirmed" => "本次还款已确认",
+            "repayment_submitted" => "已登记还款，等待对方确认",
+            "repaid" => "对方已确认收到还款",
             "revoked" => "已撤销",
             _ if expired => "已过期",
             _ => "等待打款人填写",
         };
         let has_submission = submission.is_some();
         let submitted = submission.unwrap_or_default();
+        let has_repayment = repayment.is_some();
+        let repayment = repayment.unwrap_or_default();
         views.push(RequestView {
             id: request.id,
             path: format!("/r/{token}"),
@@ -650,16 +804,38 @@ pub async fn list(
             paid_at: submitted.paid_at,
             has_submission,
             can_confirm: request.status == "submitted" && verify_chain(&request),
+            can_submit_repayment: request.kind == "borrow"
+                && request.status == "confirmed"
+                && verify_chain(&request),
             can_revoke: matches!(request.status.as_str(), "open" | "submitted"),
+            repayment_pending: request.status == "repayment_submitted",
+            repaid: request.status == "repaid",
+            settled: request.status == "repaid"
+                || (request.kind == "repayment_received" && request.status == "confirmed"),
+            repayment_at: if has_repayment {
+                repayment.repaid_at
+            } else {
+                String::new()
+            },
+            repayment_note: repayment.note,
+            repayment_account_name: request
+                .repayment_account_id
+                .and_then(|id| repayment_account_names.get(&id))
+                .cloned()
+                .unwrap_or_default(),
             confirmed_debt_record_id: request.confirmed_debt_record_id.unwrap_or_default(),
             verification_ok: verify_chain(&request),
             verification_code: digest_code(chain_head(&request)),
         });
     }
     Ok(Html(
-        DebtRequestsTemplate { requests: views }
-            .render()
-            .map_err(err500)?,
+        DebtRequestsTemplate {
+            requests: views,
+            repayment_accounts,
+            default_repayment_at: Utc::now().format(TIME_FMT).to_string(),
+        }
+        .render()
+        .map_err(err500)?,
     ))
 }
 
@@ -676,16 +852,26 @@ pub async fn open(
     let Some(snapshot) = decrypt_snapshot(&request, token_bytes.as_slice()) else {
         return render_public(UnavailableTemplate {});
     };
-    if request.status == "submitted" || request.status == "confirmed" {
+    if matches!(
+        request.status.as_str(),
+        "submitted" | "confirmed" | "repayment_submitted" | "repaid"
+    ) {
         let Some(submission) = decrypt_submission(&request, token_bytes.as_slice()) else {
             return render_public(UnavailableTemplate {});
         };
+        let repayment = decrypt_repayment(&request, token_bytes.as_slice()).unwrap_or_default();
         return render_public(DebtRequestReceiptTemplate {
+            token,
             paid_amount: crate::currency::format(submission.amount_cents, &snapshot.currency),
+            is_borrow: request.kind == "borrow",
             request: snapshot,
             submission,
             expires_at: request.expires_at.format(TIME_FMT).to_string(),
-            confirmed: request.status == "confirmed",
+            confirmed: request.status != "submitted",
+            repayment_pending: request.status == "repayment_submitted",
+            repaid: request.status == "repaid",
+            repayment_at: repayment.repaid_at,
+            repayment_note: repayment.note,
             verification_code: digest_code(chain_head(&request)),
         });
     }
@@ -770,13 +956,169 @@ pub async fn submit(
     active.submitted_at = Set(Some(submitted_at));
     active.update(&state.db).await.map_err(err500)?;
     render_public(DebtRequestReceiptTemplate {
+        token,
         paid_amount: crate::currency::format(amount_cents, &snapshot.currency),
+        is_borrow: snapshot.kind == "borrow",
         request: snapshot,
         submission,
         expires_at,
         confirmed: false,
+        repayment_pending: false,
+        repaid: false,
+        repayment_at: String::new(),
+        repayment_note: String::new(),
         verification_code: digest_code(&submission_digest),
     })
+}
+
+/// 借款人在初次借款到账后登记实际还款，并立即生成“我还给对方”的流水。
+pub async fn submit_repayment(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+    Form(form): Form<SubmitRepaymentForm>,
+) -> HandlerResult<Redirect> {
+    let _write_guard = state.balance_writes.lock().await;
+    let request = debt_request::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "借还请求不存在".into()))?;
+    if request.kind != "borrow" || request.status != "confirmed" || !verify_chain(&request) {
+        return Err(bad_request(
+            "只有已经确认到账且尚未登记还款的借款可以执行此操作",
+        ));
+    }
+    if form.note.chars().count() > 1000 {
+        return Err(bad_request("还款说明不能超过 1000 个字符"));
+    }
+    let repaid_at = NaiveDateTime::parse_from_str(form.repaid_at.trim(), TIME_FMT)
+        .map_err(|_| bad_request("还款时间格式不正确"))?;
+    let token = crypto::decrypt_string(&dek, &request.token);
+    let token_bytes = decode_token(&token).ok_or_else(|| err500("请求令牌无法解密"))?;
+    let snapshot = decrypt_snapshot(&request, token_bytes.as_slice())
+        .ok_or_else(|| err500("请求快照无法解密"))?;
+    let submission = decrypt_submission(&request, token_bytes.as_slice())
+        .ok_or_else(|| err500("借款信息无法解密"))?;
+    let account = account::Entity::find_by_id(form.account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("还款账户不存在"))?;
+    if account.kind == "investment" {
+        return Err(bad_request("投资账户不能直接用于还款"));
+    }
+    if account.currency != snapshot.currency {
+        return Err(bad_request("还款账户必须与原借款使用相同货币"));
+    }
+    let original_record = debt_record::Entity::find_by_id(
+        request
+            .confirmed_debt_record_id
+            .ok_or_else(|| bad_request("原借款流水不存在"))?,
+    )
+    .one(&state.db)
+    .await
+    .map_err(err500)?
+    .ok_or_else(|| bad_request("原借款流水已不存在"))?;
+    let (_, payable) =
+        super::debts::person_outstanding(&state, &dek, original_record.person_id).await?;
+    let amount_in_default = crate::currency::convert_cents(
+        &state,
+        submission.amount_cents,
+        &account.currency,
+        &crate::currency::default_currency(&state)
+            .await
+            .map_err(err500)?,
+        chrono::Local::now().date_naive(),
+    )
+    .await
+    .map_err(err500)?;
+    if amount_in_default > payable {
+        return Err(bad_request("还款金额超过当前尚欠金额"));
+    }
+    super::accounts::ensure_balance_delta(
+        &state,
+        &dek,
+        account.id,
+        submission
+            .amount_cents
+            .checked_neg()
+            .ok_or_else(|| bad_request("还款金额超出范围"))?,
+    )
+    .await?;
+
+    let repayment = RepaymentSubmission {
+        version: 1,
+        amount_cents: submission.amount_cents,
+        repaid_at: repaid_at.format(TIME_FMT).to_string(),
+        note: form.note.trim().into(),
+    };
+    let key = request_key(token_bytes.as_slice(), &request.salt);
+    let repayment_cipher = crypto::encrypt(&key, &serde_json::to_vec(&repayment).map_err(err500)?);
+    let transaction = state.db.begin().await.map_err(err500)?;
+    let repayment_record = debt_record::ActiveModel {
+        person_id: Set(original_record.person_id),
+        account_id: Set(account.id),
+        kind: Set("repayment_paid".into()),
+        amount: Set(crypto::encrypt_cents(&dek, submission.amount_cents)),
+        note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
+        happened_at: Set(repaid_at),
+        created_at: Set(Utc::now()),
+        ..Default::default()
+    }
+    .insert(&transaction)
+    .await
+    .map_err(err500)?;
+    let repayment_submitted_at = Utc::now();
+    let repayment_digest = repayment_digest(
+        &request.confirmation_digest,
+        &repayment_cipher,
+        account.id,
+        repayment_record.id,
+        repayment_submitted_at,
+    );
+    let mut active = request.into_active_model();
+    active.status = Set("repayment_submitted".into());
+    active.repayment_submission = Set(repayment_cipher);
+    active.repayment_digest = Set(repayment_digest);
+    active.repayment_submitted_at = Set(Some(repayment_submitted_at));
+    active.repayment_account_id = Set(Some(account.id));
+    active.repayment_debt_record_id = Set(Some(repayment_record.id));
+    active.update(&transaction).await.map_err(err500)?;
+    transaction.commit().await.map_err(err500)?;
+    Ok(Redirect::to("/debt-requests"))
+}
+
+/// 出借人在借款人登记还款后，通过原公开链接确认自己确已收到还款。
+pub async fn verify(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> HandlerResult<Response> {
+    let _write_guard = state.balance_writes.lock().await;
+    let Some((request, _token_bytes)) = find_public_request(&state, &token).await? else {
+        return render_public(UnavailableTemplate {});
+    };
+    if request.status == "repaid" && verify_chain(&request) {
+        return Ok(public_response(
+            Redirect::to(&format!("/r/{token}")).into_response(),
+        ));
+    }
+    if request.kind != "borrow"
+        || request.status != "repayment_submitted"
+        || !verify_chain(&request)
+    {
+        return render_public(UnavailableTemplate {});
+    }
+    let verified_at = Utc::now();
+    let verification_digest = verified_digest(&request.repayment_digest, verified_at);
+    let mut active = request.into_active_model();
+    active.status = Set("repaid".into());
+    active.verified_at = Set(Some(verified_at));
+    active.verification_digest = Set(verification_digest);
+    active.update(&state.db).await.map_err(err500)?;
+    Ok(public_response(
+        Redirect::to(&format!("/r/{token}")).into_response(),
+    ))
 }
 
 pub async fn confirm(

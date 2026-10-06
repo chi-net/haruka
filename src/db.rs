@@ -86,6 +86,13 @@ pub async fn init() -> DatabaseConnection {
         "INTEGER NOT NULL DEFAULT 0",
     )
     .await;
+    ensure_column(
+        &db,
+        "account_details",
+        "repayment_day",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await;
     let mut create_balance_adjustments =
         schema.create_table_from_entity(balance_adjustment::Entity);
     db.execute(builder.build(create_balance_adjustments.if_not_exists()))
@@ -256,6 +263,37 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_debt_requests.if_not_exists()))
         .await
         .expect("建借还请求表失败");
+    ensure_column(
+        &db,
+        "debt_requests",
+        "verification_digest",
+        "BLOB NOT NULL DEFAULT X''",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "debt_requests",
+        "repayment_digest",
+        "BLOB NOT NULL DEFAULT X''",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "debt_requests",
+        "repayment_submission",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    ensure_column(&db, "debt_requests", "repayment_submitted_at", "TIMESTAMP").await;
+    ensure_column(&db, "debt_requests", "verified_at", "TIMESTAMP").await;
+    ensure_column(&db, "debt_requests", "repayment_debt_record_id", "INTEGER").await;
+    ensure_column(&db, "debt_requests", "repayment_account_id", "INTEGER").await;
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "UPDATE debt_requests SET status = 'confirmed', verification_digest = X'', verified_at = NULL WHERE status = 'verified'".to_string(),
+    ))
+    .await
+    .expect("修正旧借还最终确认状态失败");
     let mut create_categories = schema.create_table_from_entity(category::Entity);
     db.execute(builder.build(create_categories.if_not_exists()))
         .await
