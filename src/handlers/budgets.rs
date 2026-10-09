@@ -57,6 +57,7 @@ struct BudgetsTemplate {
     monthly_amount: String,
     statuses: Vec<BudgetStatus>,
     default_currency: String,
+    time_zone: String,
 }
 
 fn parse_budget(value: &str, label: &str) -> HandlerResult<Option<i64>> {
@@ -120,6 +121,7 @@ fn make_status(
 pub(crate) async fn current_statuses(
     state: &AppState,
     dek: &crypto::Dek,
+    time_zone: super::ClientTimeZone,
 ) -> HandlerResult<Vec<BudgetStatus>> {
     let Some(config) = budget::Entity::find_by_id(1)
         .one(&state.db)
@@ -135,7 +137,7 @@ pub(crate) async fn current_statuses(
         return Ok(Vec::new());
     }
 
-    let today = chrono::Local::now().date_naive();
+    let today = time_zone.today();
     let week_start = today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
     let month_start = today
         .with_day(1)
@@ -163,7 +165,7 @@ pub(crate) async fn current_statuses(
         if item.kind != "expense" {
             continue;
         }
-        let date = item.happened_at.date();
+        let date = time_zone.date(item.happened_at);
         if date > today || date < month_start.min(week_start).min(today) {
             continue;
         }
@@ -231,6 +233,7 @@ pub(crate) async fn current_statuses(
 pub async fn show(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
 ) -> HandlerResult<Html<String>> {
     let config = budget::Entity::find_by_id(1)
         .one(&state.db)
@@ -249,8 +252,9 @@ pub async fn show(
         daily_amount: input_amount(daily_amount),
         weekly_amount: input_amount(weekly_amount),
         monthly_amount: input_amount(monthly_amount),
-        statuses: current_statuses(&state, &dek).await?,
+        statuses: current_statuses(&state, &dek, time_zone).await?,
         default_currency: currency::default_currency(&state).await.map_err(err500)?,
+        time_zone: time_zone.0.name().into(),
     }
     .render()
     .map_err(err500)?;

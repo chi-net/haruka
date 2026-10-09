@@ -1,5 +1,14 @@
 <section id="quick-entry" class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <div class="mb-4"><h2 class="font-medium">{{ quick_entry_heading }}</h2></div>
+  <noscript>
+    <style>
+      #quick-entry [data-quick-entry-panel] { display: block !important; margin-top: 1rem; }
+      #quick-entry .quick-entry-tab, #receipt-scanner, #quick-batch-add,
+      #quick-entry [data-account-balance-for], #quick-entry [data-quick-status] { display: none !important; }
+      #quick-transfer-to-amount-field { display: block !important; }
+    </style>
+    <p class="mb-3 text-sm text-amber-800">JavaScript 未启用：下方分别填写收支、转账或借还；时间请按 UTC 输入，保存后返回当前页面。跨币转账可填写实际到账金额，同币转账请留空。</p>
+  </noscript>
   <div class="flex rounded border border-gray-200 overflow-hidden w-fit mb-4">
     <button type="button" data-panel="bill" class="quick-entry-tab bg-blue-600 text-white text-sm px-4 py-1.5">收支</button>
     <button type="button" data-panel="transfer" class="quick-entry-tab text-gray-600 text-sm px-4 py-1.5">转账</button>
@@ -37,7 +46,7 @@
       <div><label class="block text-xs text-gray-500 mb-1">金额</label><input name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
       <div><label class="block text-xs text-gray-500 mb-1">账户</label><select id="quick-bill-account" name="account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-bill-account" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p></div>
       <div><label class="block text-xs text-gray-500 mb-1">分类</label><select id="quick-bill-category" name="category" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for c in categories %}<option value="{{ c.name }}" data-kind="{{ c.kind }}">{{ c.name }}</option>{% endfor %}</select></div>
-      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间</label><input data-utc-picker data-utc-value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input data-utc-target type="hidden" name="happened_at" value="{{ happened_at }}"></div>
+      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间</label><input data-utc-picker data-utc-value="{{ happened_at }}" name="happened_at" value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input data-utc-target type="hidden" value="{{ happened_at }}"></div>
       <div><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
       <div id="quick-installment-toggle-field" class="hidden lg:col-span-6 border-t border-gray-100 pt-3">
         <label class="inline-flex items-center gap-2 text-sm"><input id="quick-use-installment" type="checkbox" name="use_installment" value="true"> 将这笔支出设置为分期</label>
@@ -71,7 +80,7 @@
       <div><label class="block text-xs text-gray-500 mb-1">转入账户</label><select id="quick-transfer-to" name="to_account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-to" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p></div>
       <div><label id="quick-transfer-amount-label" class="block text-xs text-gray-500 mb-1">转出金额</label><input id="quick-transfer-amount" name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
       <div id="quick-transfer-to-amount-field" class="hidden"><label id="quick-transfer-to-amount-label" class="block text-xs text-gray-500 mb-1">实际转入金额</label><input id="quick-transfer-to-amount" name="to_amount" type="number" step="0.01" min="0.01" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"><p id="quick-transfer-quote-status" class="text-xs text-gray-400 mt-1">按当前可用汇率自动填写，可手动修改。</p></div>
-      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间（当地时间）</label><input id="quick-transfer-time" data-utc-picker data-utc-value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input id="quick-transfer-time-utc" data-utc-target type="hidden" name="happened_at" value="{{ happened_at }}"></div>
+      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间</label><input id="quick-transfer-time" data-utc-picker data-utc-value="{{ happened_at }}" name="happened_at" value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input id="quick-transfer-time-utc" data-utc-target type="hidden" value="{{ happened_at }}"></div>
       <div class="sm:col-span-2 lg:col-span-5"><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
       <div class="sm:col-span-2 lg:col-span-5 flex items-center gap-3"><button data-quick-submit class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">确认转账</button><span data-quick-status class="text-sm text-gray-500" aria-live="polite"></span></div>
     </form>
@@ -89,7 +98,7 @@
       <div><label class="block text-xs text-gray-500 mb-1">借贷对象</label><select name="person_id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for p in people %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div>
       <div><label class="block text-xs text-gray-500 mb-1">资金账户</label><select id="quick-debt-account" name="account_id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-debt-account" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p></div>
       <div><label class="block text-xs text-gray-500 mb-1">金额</label><input name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
-      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间（当地时间）</label><input data-utc-picker data-utc-value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input data-utc-target type="hidden" name="happened_at" value="{{ happened_at }}"></div>
+      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间</label><input data-utc-picker data-utc-value="{{ happened_at }}" name="happened_at" value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input data-utc-target type="hidden" value="{{ happened_at }}"></div>
       <div><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
       <div class="lg:col-span-6 flex items-center gap-3"><button data-quick-submit class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">保存借还记录</button><span data-quick-status class="text-sm text-gray-500" aria-live="polite"></span></div>
     </form>

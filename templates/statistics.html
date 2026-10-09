@@ -3,6 +3,7 @@
 {% block content %}
 <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
   <div><h1 class="text-xl font-bold">收支统计</h1><p class="text-sm text-gray-500 mt-1">从金额、时间、分类、账户和单笔账单分析收支；多币种按当日可用汇率折算为 {{ default_currency }}。</p></div>
+  <p class="text-xs text-gray-500 mt-1" data-business-time-zone="{{ time_zone }}">统计日期、星期及自然日口径：{{ time_zone }}（未提供浏览器时区时使用 UTC）</p>
 </div>
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
@@ -48,6 +49,11 @@
   <section class="bg-white rounded-lg border border-gray-200 p-4"><h2 class="font-medium mb-3">收支构成</h2>{% if has_cashflow %}<div class="h-64"><canvas id="cashflow-pie"></canvas></div>{% else %}<p class="text-sm text-gray-500">当前范围内没有收支。</p>{% endif %}</section>
   <section class="bg-white rounded-lg border border-gray-200 p-4"><h2 class="font-medium mb-3">收入分类占比</h2>{% if has_income %}<div class="h-64"><canvas id="income-category-pie"></canvas></div>{% else %}<p class="text-sm text-gray-500">当前范围内没有收入。</p>{% endif %}</section>
   <section class="bg-white rounded-lg border border-gray-200 p-4"><h2 class="font-medium mb-3">支出分类占比</h2>{% if has_expense %}<div class="h-64"><canvas id="expense-category-pie"></canvas></div>{% else %}<p class="text-sm text-gray-500">当前范围内没有支出。</p>{% endif %}</section>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
+  <section class="bg-white rounded-lg border border-gray-200 p-4"><h2 class="font-medium mb-3">收入账户占比</h2>{% if has_income %}<div class="h-64"><canvas id="income-account-pie"></canvas></div>{% else %}<p class="text-sm text-gray-500">当前范围内没有收入。</p>{% endif %}</section>
+  <section class="bg-white rounded-lg border border-gray-200 p-4"><h2 class="font-medium mb-3">支出账户占比</h2>{% if has_expense %}<div class="h-64"><canvas id="expense-account-pie"></canvas></div>{% else %}<p class="text-sm text-gray-500">当前范围内没有支出。</p>{% endif %}</section>
 </div>
 
 <section class="bg-white rounded-lg border border-gray-200 overflow-hidden mb-4">
@@ -136,6 +142,8 @@
   createPie('income-category-pie', charts.income_categories, palette);
   createPie('expense-category-pie', charts.expense_categories, ['#dc2626', '#ea580c', '#ca8a04', '#db2777', '#9333ea', '#2563eb', '#0891b2', '#64748b']);
   createPie('food-expense-pie', charts.food_expenses, ['#d97706', '#cbd5e1']);
+  createPie('income-account-pie', charts.income_accounts, palette);
+  createPie('expense-account-pie', charts.expense_accounts, palette);
   window.addEventListener('haruka:color-scheme-change', () => instances.forEach(window.harukaApplyChartTheme));
 })();
 </script>

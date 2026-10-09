@@ -99,6 +99,7 @@ struct StatisticsTemplate {
     trend_label: String,
     charts_json: String,
     default_currency: String,
+    time_zone: String,
 }
 
 #[derive(Serialize)]
@@ -112,6 +113,8 @@ struct StatisticsCharts {
     cashflow: ChartSeries,
     income_categories: ChartSeries,
     expense_categories: ChartSeries,
+    income_accounts: ChartSeries,
+    expense_accounts: ChartSeries,
     food_expenses: ChartSeries,
     expense_weekdays: ChartSeries,
     trend: TrendSeries,
@@ -129,11 +132,7 @@ fn bad_request(msg: &str) -> (StatusCode, String) {
 }
 
 fn parse_date(value: &str, fallback: NaiveDate, label: &str) -> HandlerResult<NaiveDate> {
-    if value.trim().is_empty() {
-        return Ok(fallback);
-    }
-    NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
-        .map_err(|_| bad_request(&format!("{label}格式不正确")))
+    Ok(super::parse_search_date(value, label)?.unwrap_or(fallback))
 }
 
 fn ranking_rows(
@@ -287,9 +286,10 @@ fn add_ranking_value(
 pub async fn show(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Query(query): Query<StatisticsQuery>,
 ) -> HandlerResult<Html<String>> {
-    let today = chrono::Local::now().date_naive();
+    let today = time_zone.today();
     let preset = match query.period.as_str() {
         "7d" => Some(("7d", 7)),
         "14d" => Some(("14d", 14)),
@@ -368,7 +368,7 @@ pub async fn show(
     let mut expense_orders = Vec::new();
     let mut food_expense = 0i64;
     for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
-        let date = bill.happened_at.date();
+        let date = time_zone.date(bill.happened_at);
         if date < start_date || date > end_date {
             continue;
         }
@@ -510,6 +510,8 @@ pub async fn show(
         },
         income_categories: chart_series(&income_categories),
         expense_categories: chart_series(&expense_categories),
+        income_accounts: chart_series(&income_accounts),
+        expense_accounts: chart_series(&expense_accounts),
         food_expenses: ChartSeries {
             labels: vec!["食品支出".into(), "其他支出".into()],
             values: vec![food_expense, total_expense - food_expense],
@@ -558,6 +560,7 @@ pub async fn show(
         trend_label,
         charts_json,
         default_currency,
+        time_zone: time_zone.0.name().into(),
     }
     .render()
     .map_err(err500)?;

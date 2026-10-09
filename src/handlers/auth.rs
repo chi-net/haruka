@@ -90,22 +90,20 @@ pub struct RecoverFormData {
     confirm: String,
 }
 
-async fn has_meta(state: &AppState) -> bool {
+async fn has_meta(state: &AppState) -> HandlerResult<bool> {
     meta::Entity::find_by_id(1)
         .one(&state.db)
         .await
-        .ok()
-        .flatten()
-        .is_some()
+        .map(|row| row.is_some())
+        .map_err(err500)
 }
 
-async fn has_recovery(state: &AppState) -> bool {
+async fn has_recovery(state: &AppState) -> HandlerResult<bool> {
     recovery::Entity::find_by_id(1)
         .one(&state.db)
         .await
-        .ok()
-        .flatten()
-        .is_some()
+        .map(|row| row.is_some())
+        .map_err(err500)
 }
 
 async fn store_new_recovery(state: &AppState, dek: &crypto::Dek) -> HandlerResult<String> {
@@ -130,23 +128,23 @@ async fn store_new_recovery(state: &AppState, dek: &crypto::Dek) -> HandlerResul
     Ok(mnemonic.to_string())
 }
 
-pub async fn setup_form(State(state): State<AppState>) -> Response {
-    if has_meta(&state).await {
-        return Redirect::to("/unlock").into_response();
+pub async fn setup_form(State(state): State<AppState>) -> HandlerResult<Response> {
+    if has_meta(&state).await? {
+        return Ok(Redirect::to("/unlock").into_response());
     }
     let html = SetupTemplate {
         error: String::new(),
     }
     .render()
-    .expect("模板渲染失败");
-    no_store(Html(html).into_response())
+    .map_err(err500)?;
+    Ok(no_store(Html(html).into_response()))
 }
 
 pub async fn setup(
     State(state): State<AppState>,
     Form(form): Form<SetupFormData>,
 ) -> HandlerResult<Response> {
-    if has_meta(&state).await {
+    if has_meta(&state).await? {
         return Ok(Redirect::to("/unlock").into_response());
     }
     let render_err = |msg: &str| {
@@ -195,7 +193,7 @@ pub async fn setup(
 }
 
 pub async fn unlock_form(State(state): State<AppState>) -> HandlerResult<Response> {
-    if !has_meta(&state).await {
+    if !has_meta(&state).await? {
         return Ok(Redirect::to("/setup").into_response());
     }
     let html = UnlockTemplate {
@@ -274,17 +272,17 @@ pub async fn generate_recovery(
     Ok(no_store(Html(html).into_response()))
 }
 
-pub async fn recover_form(State(state): State<AppState>) -> Response {
-    if !has_meta(&state).await {
-        return Redirect::to("/setup").into_response();
+pub async fn recover_form(State(state): State<AppState>) -> HandlerResult<Response> {
+    if !has_meta(&state).await? {
+        return Ok(Redirect::to("/setup").into_response());
     }
-    let error = if has_recovery(&state).await {
+    let error = if has_recovery(&state).await? {
         String::new()
     } else {
         "尚未设置恢复助记词，请先使用主密码解锁并在设置中生成。".into()
     };
-    let html = RecoverTemplate { error }.render().expect("模板渲染失败");
-    no_store(Html(html).into_response())
+    let html = RecoverTemplate { error }.render().map_err(err500)?;
+    Ok(no_store(Html(html).into_response()))
 }
 
 pub async fn recover(

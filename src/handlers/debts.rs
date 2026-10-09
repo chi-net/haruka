@@ -319,10 +319,10 @@ pub async fn create_record(
     .insert(&state.db)
     .await
     .map_err(err500)?;
-    let redirect = if form.redirect_to.as_deref() == Some("/bills") {
-        "/bills"
-    } else {
-        "/dashboard"
+    let redirect = match form.redirect_to.as_deref() {
+        Some("/bills/new") => "/bills/new",
+        Some("/bills") => "/bills",
+        _ => "/dashboard",
     };
     if accepts_json(&headers) {
         Ok(Json(DebtCreateResponse {

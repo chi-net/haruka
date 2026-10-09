@@ -4,6 +4,7 @@
 <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
   <div>
     <h1 class="text-xl font-bold">{{ page_heading }}</h1>
+    <p class="text-xs text-gray-500 mt-1" data-business-time-zone="{{ time_zone }}">日期筛选、汇总和时间显示口径：{{ time_zone }}（未提供浏览器时区时使用 UTC）</p>
   </div>
   <div class="flex flex-wrap items-center justify-end gap-2">
     <form method="get" action="{{ export_action }}" hx-boost="false">
@@ -17,10 +18,10 @@
       <input type="hidden" name="min_expense" value="{{ min_expense }}">
       <input type="hidden" name="max_expense" value="{{ max_expense }}">
       <input type="hidden" name="keyword" value="{{ keyword }}">
-      <input type="hidden" name="time_zone" value="UTC" data-export-time-zone>
+      <input type="hidden" name="time_zone" value="{{ time_zone }}">
       <button type="submit" class="border border-gray-300 text-gray-700 text-sm px-3 py-1.5 rounded hover:bg-gray-50">导出 CSV</button>
     </form>
-    {% if advanced_search %}<a href="/bills" class="text-sm text-blue-600 hover:underline">返回账单</a>{% else %}<a href="/bills/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">记一笔</a>{% endif %}
+    {% if advanced_search %}<a href="/bills?time_zone={{ time_zone|urlencode }}" class="text-sm text-blue-600 hover:underline">返回账单</a>{% else %}<a href="/bills/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">记一笔</a>{% endif %}
   </div>
 </div>
 <div class="grid grid-cols-3 gap-3 mb-4 text-center">
@@ -38,6 +39,7 @@
   </div>
 </div>
 <form method="get" action="{{ search_action }}" class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+  <input type="hidden" name="time_zone" value="{{ time_zone }}">
   <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
     <div class="flex items-center gap-2">
     <select name="per_page" aria-label="每页条数" onchange="this.form.requestSubmit()" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
@@ -50,7 +52,7 @@
       <option value="and" {% if search_mode == "and" %}selected{% endif %}>全部条件都满足</option>
       <option value="or" {% if search_mode == "or" %}selected{% endif %}>任一条件满足</option>
     </select>
-    {% else %}<a href="/bills/search" class="text-sm text-blue-600 hover:underline">高级搜索</a>{% endif %}
+    {% else %}<a href="/bills/search?time_zone={{ time_zone|urlencode }}" class="text-sm text-blue-600 hover:underline">高级搜索</a>{% endif %}
     </div>
   </div>
   <div class="grid grid-cols-1 sm:grid-cols-2 {% if advanced_search %}lg:grid-cols-5{% else %}lg:grid-cols-3{% endif %} gap-3">
@@ -70,7 +72,7 @@
     <div><label class="block text-xs text-red-700 mb-1">最高支出</label><input name="max_expense" type="number" min="0" step="0.01" value="{{ max_expense }}" placeholder="不限" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
   </div>
   {% endif %}
-  <div class="flex items-center gap-3 mt-3"><button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">搜索</button><a href="{{ search_action }}" class="text-sm text-gray-600 hover:underline">清除条件</a>{% if has_filters %}<span class="text-xs text-gray-500">找到 {{ total_records }} 条流水</span>{% endif %}</div>
+  <div class="flex items-center gap-3 mt-3"><button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">搜索</button><a href="{{ search_action }}?time_zone={{ time_zone|urlencode }}" class="text-sm text-gray-600 hover:underline">清除条件</a>{% if has_filters %}<span class="text-xs text-gray-500">找到 {{ total_records }} 条流水</span>{% endif %}</div>
 </form>
 {% if records.is_empty() %}
 <p class="text-gray-500 text-sm">{% if has_filters %}没有符合搜索条件的账单或资金流水。{% else %}还没有账单或资金流水。{% endif %}</p>
@@ -115,9 +117,4 @@
 {% include "pagination.html" %}
 {% endif %}
 {% endif %}
-<script>
-document.querySelectorAll('[data-export-time-zone]').forEach(input => {
-  input.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-});
-</script>
 {% endblock %}

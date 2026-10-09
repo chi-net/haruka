@@ -220,14 +220,54 @@ async fn require_unlock(State(state): State<AppState>, mut req: Request, next: N
         return next.run(req).await;
     }
 
-    let has_meta = meta::Entity::find_by_id(1)
-        .one(&state.db)
-        .await
-        .ok()
-        .flatten()
-        .is_some();
+    let has_meta = match meta::Entity::find_by_id(1).one(&state.db).await {
+        Ok(row) => row.is_some(),
+        Err(error) => {
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("查询初始化状态失败：{error}"),
+            )
+                .into_response();
+        }
+    };
     let target = if has_meta { "/unlock" } else { "/setup" };
     Redirect::to(target).into_response()
+}
+
+async fn client_time_zone(mut req: Request, next: Next) -> Response {
+    let zone = req
+        .headers()
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|part| {
+                let (name, value) = part.trim().split_once('=')?;
+                (name == "haruka_time_zone").then_some(value)
+            })
+        })
+        .and_then(|value| {
+            if let Ok(zone) = value.parse::<chrono_tz::Tz>() {
+                return Some(zone);
+            }
+            let mut decoded = [0u8; 128];
+            let mut length = 0;
+            let mut bytes = value.bytes();
+            while let Some(byte) = bytes.next() {
+                let byte = if byte == b'%' {
+                    let high = char::from(bytes.next()?).to_digit(16)?;
+                    let low = char::from(bytes.next()?).to_digit(16)?;
+                    (high * 16 + low) as u8
+                } else {
+                    byte
+                };
+                *decoded.get_mut(length)? = byte;
+                length += 1;
+            }
+            std::str::from_utf8(&decoded[..length]).ok()?.parse().ok()
+        })
+        .unwrap_or(chrono_tz::UTC);
+    req.extensions_mut().insert(handlers::ClientTimeZone(zone));
+    next.run(req).await
 }
 
 #[tokio::main]
@@ -562,6 +602,7 @@ async fn main() {
         .route("/api/sms", post(handlers::investments::receive_sms))
         .merge(protected)
         .with_state(state)
+        .layer(middleware::from_fn(client_time_zone))
         .layer(middleware::from_fn(handlers::render_error_response));
 
     let listener = tokio::net::TcpListener::bind(&addr)

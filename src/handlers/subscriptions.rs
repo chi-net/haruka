@@ -83,6 +83,7 @@ struct SubscriptionsTemplate {
     currencies: &'static [currency::CurrencyOption],
     per_page: usize,
     pagination: super::PaginationView,
+    time_zone: String,
 }
 
 #[derive(Template)]
@@ -322,17 +323,19 @@ async fn validate_auto_debit_account(
 pub async fn list(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Query(query): Query<SubscriptionsQuery>,
 ) -> HandlerResult<Html<String>> {
-    render_list(&state, &dek, query, false).await
+    render_list(&state, &dek, query, false, time_zone).await
 }
 
 pub async fn advanced_search(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Query(query): Query<SubscriptionsQuery>,
 ) -> HandlerResult<Html<String>> {
-    render_list(&state, &dek, query, true).await
+    render_list(&state, &dek, query, true, time_zone).await
 }
 
 async fn render_list(
@@ -340,6 +343,7 @@ async fn render_list(
     dek: &crypto::Dek,
     mut query: SubscriptionsQuery,
     advanced_search: bool,
+    time_zone: super::ClientTimeZone,
 ) -> HandlerResult<Html<String>> {
     if !advanced_search {
         query.mode = "and".into();
@@ -350,22 +354,8 @@ async fn render_list(
         query.start_date.clear();
         query.end_date.clear();
     }
-    let start_date = if query.start_date.trim().is_empty() {
-        None
-    } else {
-        Some(
-            chrono::NaiveDate::parse_from_str(query.start_date.trim(), "%Y-%m-%d")
-                .map_err(|_| bad_request("开始日期格式不正确"))?,
-        )
-    };
-    let end_date = if query.end_date.trim().is_empty() {
-        None
-    } else {
-        Some(
-            chrono::NaiveDate::parse_from_str(query.end_date.trim(), "%Y-%m-%d")
-                .map_err(|_| bad_request("结束日期格式不正确"))?,
-        )
-    };
+    let start_date = super::parse_search_date(&query.start_date, "开始日期")?;
+    let end_date = super::parse_search_date(&query.end_date, "结束日期")?;
     if start_date
         .zip(end_date)
         .is_some_and(|(start, end)| start > end)
@@ -483,7 +473,7 @@ async fn render_list(
                 conditions.push(row.category.to_lowercase() == category_filter);
             }
             if start_date.is_some() || end_date.is_some() {
-                let date = row.expires_at_value.date();
+                let date = time_zone.date(row.expires_at_value);
                 conditions.push(
                     start_date.is_none_or(|start| date >= start)
                         && end_date.is_none_or(|end| date <= end),
@@ -538,6 +528,7 @@ async fn render_list(
         categories: expense_categories(state, dek).await?,
         currencies: currency::CURRENCIES,
         per_page: pagination.per_page,
+        time_zone: time_zone.0.name().into(),
         pagination: super::pagination_view(
             &pagination,
             total_records,

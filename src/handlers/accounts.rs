@@ -90,6 +90,7 @@ struct AccountDetailTemplate {
     created_at: String,
     balance: String,
     month_label: String,
+    time_zone: String,
     month_income: String,
     month_expense: String,
     month_net: String,
@@ -628,6 +629,7 @@ pub async fn list(
 pub async fn detail(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Path(id): Path<i64>,
     Query(query): Query<AccountDetailQuery>,
 ) -> HandlerResult<Html<String>> {
@@ -669,7 +671,7 @@ pub async fn detail(
         .await
         .map_err(err500)?;
 
-    let today = chrono::Local::now().date_naive();
+    let today = time_zone.today();
     let month_start = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
         .ok_or_else(|| err500("无法计算本月开始日期"))?;
     let mut month_income = 0i64;
@@ -686,7 +688,8 @@ pub async fn detail(
         *total = total
             .checked_add(amount)
             .ok_or_else(|| err500("账户收支汇总金额超出范围"))?;
-        if item.happened_at.date() >= month_start && item.happened_at.date() <= today {
+        let date = time_zone.date(item.happened_at);
+        if date >= month_start && date <= today {
             let monthly = if item.kind == "income" {
                 &mut month_income
             } else {
@@ -924,6 +927,7 @@ pub async fn detail(
         created_at: account.created_at.format("%Y-%m-%dT%H:%M").to_string(),
         balance: currency::format(current_balance(&state, &dek, id).await?, &account.currency),
         month_label: format!("{} 年 {} 月", today.year(), today.month()),
+        time_zone: time_zone.0.name().into(),
         month_income: currency::format(month_income, &account.currency),
         month_expense: currency::format(month_expense, &account.currency),
         month_net: currency::format(month_net, &account.currency),

@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::{Html, Redirect},
 };
-use chrono::{Datelike, Duration, Months, NaiveDate, NaiveDateTime, Timelike};
+use chrono::{Datelike, Duration, Months, NaiveDate, Timelike};
 use rust_decimal::Decimal;
 use sea_orm::{EntityTrait, QueryOrder};
 use serde::Serialize;
@@ -96,7 +96,7 @@ struct Reports {
 }
 
 struct BillValue {
-    happened_at: NaiveDateTime,
+    happened_at: chrono::DateTime<chrono_tz::Tz>,
     kind: String,
     amount: i64,
     is_food: bool,
@@ -124,6 +124,7 @@ struct DashboardTemplate {
     food_expense: String,
     reports_json: String,
     default_currency: String,
+    time_zone: String,
     first_due_date: String,
     subscription_reminders: Vec<ReminderRow>,
     installment_reminders: Vec<ReminderRow>,
@@ -195,7 +196,7 @@ fn build_date_series(
         .map(|(index, date)| (*date, index))
         .collect();
     for bill in bills {
-        if let Some(index) = indexes.get(&bill.happened_at.date()) {
+        if let Some(index) = indexes.get(&bill.happened_at.date_naive()) {
             add_value(&mut series, *index, bill)?;
         }
     }
@@ -209,7 +210,7 @@ fn build_reports(today: NaiveDate, bills: &[BillValue]) -> HandlerResult<Reports
         expense: vec![0; 24],
     };
     for bill in bills {
-        if bill.happened_at.date() == today {
+        if bill.happened_at.date_naive() == today {
             add_value(&mut daily, bill.happened_at.hour() as usize, bill)?;
         }
     }
@@ -224,13 +225,14 @@ fn build_reports(today: NaiveDate, bills: &[BillValue]) -> HandlerResult<Reports
 pub async fn show(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
 ) -> HandlerResult<Html<String>> {
     let accounts = account::Entity::find()
         .order_by_asc(account::Column::Id)
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let today = chrono::Local::now().date_naive();
+    let today = time_zone.today();
     let default_currency = currency::default_currency(&state).await.map_err(err500)?;
     let currencies = accounts
         .iter()
@@ -430,7 +432,7 @@ pub async fn show(
         .await
         .map_err(err500)?
         .into_iter()
-        .filter(|item| item.paid_at.is_none() && item.due_date <= reminder_deadline.date())
+        .filter(|item| item.paid_at.is_none() && item.due_date <= today + Duration::days(7))
     {
         let Some(plan) = reminder_plans.get(&item.plan_id) else {
             continue;
@@ -550,7 +552,7 @@ pub async fn show(
                 .map(String::as_str)
                 .unwrap_or(&default_currency);
             Ok(BillValue {
-                happened_at: bill.happened_at,
+                happened_at: time_zone.local_datetime(bill.happened_at),
                 kind: bill.kind,
                 amount: rates
                     .convert(native_amount, bill_currency)
@@ -563,8 +565,8 @@ pub async fn show(
     let mut month_expense = 0i64;
     let mut food_expense = 0i64;
     for bill in &bill_values {
-        let date = bill.happened_at.date();
-        if date.year() == today.year() && date.month() == today.month() {
+        let date = bill.happened_at.date_naive();
+        if date <= today && date.year() == today.year() && date.month() == today.month() {
             if bill.kind == "income" {
                 month_income = month_income
                     .checked_add(bill.amount)
@@ -592,7 +594,7 @@ pub async fn show(
     };
     let reports_json =
         serde_json::to_string(&build_reports(today, &bill_values)?).map_err(err500)?;
-    let budget_statuses = super::budgets::current_statuses(&state, &dek).await?;
+    let budget_statuses = super::budgets::current_statuses(&state, &dek, time_zone).await?;
     let html = DashboardTemplate {
         accounts: account_options,
         transfer_sources,
@@ -613,7 +615,8 @@ pub async fn show(
         food_expense: currency::format(food_expense, &default_currency),
         reports_json,
         default_currency,
-        first_due_date: (chrono::Local::now().date_naive() + chrono::Months::new(1))
+        time_zone: time_zone.0.name().into(),
+        first_due_date: (today + chrono::Months::new(1))
             .format("%Y-%m-%d")
             .to_string(),
         subscription_reminders,

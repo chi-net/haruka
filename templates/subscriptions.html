@@ -4,6 +4,7 @@
 <div class="flex items-center justify-between mb-4">
   <div>
     <h1 class="text-xl font-bold">{{ page_heading }}</h1>
+    <p class="text-xs text-gray-500 mt-1" data-business-time-zone="{{ time_zone }}">到期日期筛选和时间显示口径：{{ time_zone }}（未提供浏览器时区时使用 UTC）；7 天提醒按到期时刻计算。</p>
   </div>
   {% if advanced_search %}<a href="/subscriptions" class="text-sm text-blue-600 hover:underline">返回订阅</a>{% else %}<a href="/subscriptions/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新增订阅</a>{% endif %}
 </div>

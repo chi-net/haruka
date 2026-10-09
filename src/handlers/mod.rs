@@ -26,6 +26,48 @@ use axum::{
 };
 use serde::Serialize;
 
+/// 无时区数据库时间始终按 UTC 解释；仅查询和自然日聚合转换访问者的 IANA 时区。
+#[derive(Clone, Copy)]
+pub struct ClientTimeZone(pub chrono_tz::Tz);
+
+impl ClientTimeZone {
+    pub fn today(self) -> chrono::NaiveDate {
+        chrono::Utc::now().with_timezone(&self.0).date_naive()
+    }
+
+    pub fn local_datetime(self, utc: chrono::NaiveDateTime) -> chrono::DateTime<chrono_tz::Tz> {
+        utc.and_utc().with_timezone(&self.0)
+    }
+
+    pub fn date(self, utc: chrono::NaiveDateTime) -> chrono::NaiveDate {
+        self.local_datetime(utc).date_naive()
+    }
+
+    pub fn from_query(self, value: &str) -> Result<Self, (StatusCode, String)> {
+        if value.trim().is_empty() {
+            return Ok(self);
+        }
+        value.trim().parse().map(Self).map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "时区无效，请使用 IANA 时区名称".into(),
+            )
+        })
+    }
+}
+
+pub(crate) fn parse_search_date(
+    value: &str,
+    label: &str,
+) -> Result<Option<chrono::NaiveDate>, (StatusCode, String)> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    chrono::NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+        .map(Some)
+        .map_err(|_| (StatusCode::BAD_REQUEST, format!("{label}格式不正确")))
+}
+
 #[derive(Template)]
 #[template(path = "error.html")]
 struct ErrorTemplate {
@@ -81,61 +123,84 @@ pub async fn render_error_response(request: Request, next: Next) -> Response {
         .get("hx-request")
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.eq_ignore_ascii_case("true"));
+    let is_public_share =
+        request.uri().path().starts_with("/s/") || request.uri().path().starts_with("/r/");
     let response = next.run(request).await;
     let status = response.status();
     if !status.is_client_error() && !status.is_server_error() {
         return response;
     }
 
-    let content_type = response
-        .headers()
+    let (mut parts, body) = response.into_parts();
+    let content_type = parts
+        .headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
-    let body = to_bytes(response.into_body(), 1024 * 1024)
-        .await
         .unwrap_or_default();
-    let message = error_message(&content_type, &body, status);
+    let message = match to_bytes(body, usize::MAX).await {
+        Ok(body) => error_message(content_type, &body, status),
+        Err(error) => format!(
+            "请求失败（HTTP {}），读取原始错误详情失败：{error}",
+            status.as_u16()
+        ),
+    };
     if status.is_server_error() {
         eprintln!("请求处理失败（{}）: {message}", status.as_u16());
     }
 
-    if accepts_json || sends_json || is_htmx {
-        let mut response = (
-            status,
-            Json(ErrorPayload {
-                ok: false,
-                status: status.as_u16(),
-                error: message,
-            }),
-        )
-            .into_response();
-        response
-            .headers_mut()
-            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        return response;
-    }
-
-    let title = if status.is_server_error() {
-        "服务器处理失败"
-    } else if status == StatusCode::NOT_FOUND {
-        "没有找到请求的内容"
+    let rendered = if accepts_json || sends_json || is_htmx {
+        Json(ErrorPayload {
+            ok: false,
+            status: status.as_u16(),
+            error: message,
+        })
+        .into_response()
     } else {
-        "操作失败"
+        let title = if status.is_server_error() {
+            "服务器处理失败"
+        } else if status == StatusCode::NOT_FOUND {
+            "没有找到请求的内容"
+        } else {
+            "操作失败"
+        };
+        let html = ErrorTemplate {
+            status: status.as_u16(),
+            title: title.to_string(),
+            message,
+        }
+        .render()
+        .unwrap_or_else(|error| format!("请求失败，且错误页面渲染失败：{error}"));
+        Html(html).into_response()
     };
-    let html = ErrorTemplate {
-        status: status.as_u16(),
-        title: title.to_string(),
-        message,
-    }
-    .render()
-    .unwrap_or_else(|_| "请求失败，且错误页面渲染失败".into());
-    let mut response = (status, Html(html)).into_response();
-    response
-        .headers_mut()
+    let (rendered_parts, body) = rendered.into_parts();
+    parts.headers.remove(header::CONTENT_LENGTH);
+    parts.headers.remove(header::CONTENT_ENCODING);
+    parts.headers.remove(header::ETAG);
+    parts.headers.extend(rendered_parts.headers);
+    parts
+        .headers
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
+    if is_public_share {
+        parts.headers.insert(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        );
+        parts.headers.insert(
+            "x-robots-tag",
+            HeaderValue::from_static("noindex, nofollow, noarchive"),
+        );
+        parts.headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(
+                "default-src 'none'; style-src 'self'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+            ),
+        );
+        parts.headers.insert(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        );
+    }
+    Response::from_parts(parts, body)
 }
 
 pub async fn stylesheet() -> impl IntoResponse {

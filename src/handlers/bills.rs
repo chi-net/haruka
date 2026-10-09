@@ -97,6 +97,7 @@ struct BillsTemplate {
     per_page: usize,
     total_records: usize,
     pagination: super::PaginationView,
+    time_zone: String,
 }
 
 #[derive(Template)]
@@ -110,6 +111,7 @@ struct QuickEntryPageTemplate {
     quick_entry_heading: String,
     quick_redirect_to: String,
     first_due_date: String,
+    time_zone: String,
 }
 
 #[derive(Template)]
@@ -212,6 +214,7 @@ pub struct BillsQuery {
 
 struct LedgerFilter {
     mode_or: bool,
+    time_zone: super::ClientTimeZone,
     start_date: Option<chrono::NaiveDate>,
     end_date: Option<chrono::NaiveDate>,
     flow_kind: String,
@@ -224,10 +227,10 @@ struct LedgerFilter {
 }
 
 fn ledger_redirect(redirect_to: Option<&str>) -> &'static str {
-    if redirect_to == Some("/dashboard") {
-        "/dashboard"
-    } else {
-        "/bills"
+    match redirect_to {
+        Some("/dashboard") => "/dashboard",
+        Some("/bills/new") => "/bills/new",
+        _ => "/bills",
     }
 }
 
@@ -236,15 +239,6 @@ fn accepts_json(headers: &HeaderMap) -> bool {
         .get(header::ACCEPT)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"))
-}
-
-fn parse_search_date(value: &str, label: &str) -> HandlerResult<Option<chrono::NaiveDate>> {
-    if value.trim().is_empty() {
-        return Ok(None);
-    }
-    chrono::NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
-        .map(Some)
-        .map_err(|_| bad_request(&format!("{label}格式不正确")))
 }
 
 fn parse_search_amount(value: &str, label: &str) -> HandlerResult<Option<i64>> {
@@ -264,9 +258,9 @@ fn parse_search_amount(value: &str, label: &str) -> HandlerResult<Option<i64>> {
 }
 
 impl LedgerFilter {
-    fn from_query(query: &BillsQuery) -> HandlerResult<Self> {
-        let start_date = parse_search_date(&query.start_date, "开始日期")?;
-        let end_date = parse_search_date(&query.end_date, "结束日期")?;
+    fn from_query(query: &BillsQuery, time_zone: super::ClientTimeZone) -> HandlerResult<Self> {
+        let start_date = super::parse_search_date(&query.start_date, "开始日期")?;
+        let end_date = super::parse_search_date(&query.end_date, "结束日期")?;
         if start_date
             .zip(end_date)
             .is_some_and(|(start, end)| start > end)
@@ -295,6 +289,7 @@ impl LedgerFilter {
         }
         Ok(Self {
             mode_or: query.mode == "or",
+            time_zone,
             start_date,
             end_date,
             flow_kind,
@@ -322,7 +317,7 @@ impl LedgerFilter {
     fn matches(&self, row: &LedgerRow) -> bool {
         let mut conditions = Vec::with_capacity(3);
         if self.start_date.is_some() || self.end_date.is_some() {
-            let date = row.sort_key.date();
+            let date = self.time_zone.date(row.sort_key);
             conditions.push(
                 self.start_date.is_none_or(|start| date >= start)
                     && self.end_date.is_none_or(|end| date <= end),
@@ -425,11 +420,7 @@ fn parse_form(form: BillFormData) -> HandlerResult<ParsedBill> {
         category: form.category.trim().to_string(),
         note: form.note.trim().to_string(),
         happened_at,
-        redirect_to: if form.redirect_to.as_deref() == Some("/dashboard") {
-            "/dashboard".into()
-        } else {
-            "/bills".into()
-        },
+        redirect_to: ledger_redirect(form.redirect_to.as_deref()).into(),
         installment: if form.use_installment {
             Some(super::installments::parse_input(
                 &form.installment_term,
@@ -519,13 +510,14 @@ fn debt_kind_label(kind: &str) -> &'static str {
 pub(crate) async fn ledger_rows(
     state: &AppState,
     dek: &crypto::Dek,
+    time_zone: super::ClientTimeZone,
 ) -> HandlerResult<Vec<LedgerRow>> {
     let accounts = account::Entity::find()
         .all(&state.db)
         .await
         .map_err(err500)?;
     let default_currency = currency::default_currency(state).await.map_err(err500)?;
-    let today = chrono::Local::now().date_naive();
+    let today = time_zone.today();
     let currencies = accounts
         .iter()
         .map(|account| account.currency.clone())
@@ -811,17 +803,19 @@ pub(crate) async fn category_is_food(
 pub async fn list(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Query(query): Query<BillsQuery>,
 ) -> HandlerResult<Html<String>> {
-    render_list(&state, &dek, query, false).await
+    render_list(&state, &dek, query, false, time_zone).await
 }
 
 pub async fn advanced_search(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Query(query): Query<BillsQuery>,
 ) -> HandlerResult<Html<String>> {
-    render_list(&state, &dek, query, true).await
+    render_list(&state, &dek, query, true, time_zone).await
 }
 
 fn normalize_query(query: &mut BillsQuery, advanced_search: bool) {
@@ -866,19 +860,12 @@ async fn export_csv_response(
     dek: &crypto::Dek,
     mut query: BillsQuery,
     advanced_search: bool,
+    time_zone: super::ClientTimeZone,
 ) -> HandlerResult<Response> {
     normalize_query(&mut query, advanced_search);
-    let filter = LedgerFilter::from_query(&query)?;
-    let time_zone = if query.time_zone.trim().is_empty() {
-        chrono_tz::UTC
-    } else {
-        query
-            .time_zone
-            .trim()
-            .parse::<chrono_tz::Tz>()
-            .map_err(|_| bad_request("浏览器时区无效，无法导出"))?
-    };
-    let rows = ledger_rows(state, dek)
+    let time_zone = time_zone.from_query(&query.time_zone)?;
+    let filter = LedgerFilter::from_query(&query, time_zone)?;
+    let rows = ledger_rows(state, dek, time_zone)
         .await?
         .into_iter()
         .filter(|row| filter.matches(row))
@@ -888,7 +875,7 @@ async fn export_csv_response(
     push_csv_row(
         &mut csv,
         &[
-            format!("时间（{}）", time_zone.name()),
+            format!("时间（{}）", time_zone.0.name()),
             "类型".into(),
             "账户".into(),
             "分类 / 对象".into(),
@@ -897,10 +884,8 @@ async fn export_csv_response(
         ],
     );
     for row in rows {
-        let happened_at = row
-            .sort_key
-            .and_utc()
-            .with_timezone(&time_zone)
+        let happened_at = time_zone
+            .local_datetime(row.sort_key)
             .format("%Y-%m-%d %H:%M")
             .to_string();
         push_csv_row(
@@ -938,17 +923,19 @@ async fn export_csv_response(
 pub async fn export_csv(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Query(query): Query<BillsQuery>,
 ) -> HandlerResult<Response> {
-    export_csv_response(&state, &dek, query, false).await
+    export_csv_response(&state, &dek, query, false, time_zone).await
 }
 
 pub async fn export_advanced_csv(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Query(query): Query<BillsQuery>,
 ) -> HandlerResult<Response> {
-    export_csv_response(&state, &dek, query, true).await
+    export_csv_response(&state, &dek, query, true, time_zone).await
 }
 
 async fn render_list(
@@ -956,12 +943,15 @@ async fn render_list(
     dek: &crypto::Dek,
     mut query: BillsQuery,
     advanced_search: bool,
+    time_zone: super::ClientTimeZone,
 ) -> HandlerResult<Html<String>> {
     normalize_query(&mut query, advanced_search);
-    let filter = LedgerFilter::from_query(&query)?;
+    let time_zone = time_zone.from_query(&query.time_zone)?;
+    query.time_zone = time_zone.0.name().into();
+    let filter = LedgerFilter::from_query(&query, time_zone)?;
     let has_filters = filter.is_active();
     let default_currency = currency::default_currency(state).await.map_err(err500)?;
-    let all_records = ledger_rows(state, dek)
+    let all_records = ledger_rows(state, dek, time_zone)
         .await?
         .into_iter()
         .filter(|row| filter.matches(row))
@@ -996,6 +986,7 @@ async fn render_list(
         Vec::new()
     };
     let html = BillsTemplate {
+        time_zone: query.time_zone.clone(),
         page_heading: if advanced_search {
             "高级搜索".into()
         } else {
@@ -1051,6 +1042,7 @@ async fn render_list(
                 ("min_expense", query.min_expense.clone()),
                 ("max_expense", query.max_expense.clone()),
                 ("keyword", query.keyword.clone()),
+                ("time_zone", query.time_zone.clone()),
             ],
         ),
     }
@@ -1062,6 +1054,7 @@ async fn render_list(
 pub async fn new_form(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
 ) -> HandlerResult<Html<String>> {
     let accounts = account_options(&state, &dek).await?;
     let transfer_sources = accounts.clone();
@@ -1072,8 +1065,9 @@ pub async fn new_form(
         categories: category_options(&state, &dek).await?,
         happened_at: chrono::Utc::now().naive_utc().format(TIME_FMT).to_string(),
         quick_entry_heading: "记一笔".into(),
-        quick_redirect_to: "/bills".into(),
-        first_due_date: (chrono::Local::now().date_naive() + chrono::Months::new(1))
+        quick_redirect_to: "/bills/new".into(),
+        time_zone: time_zone.0.name().into(),
+        first_due_date: (time_zone.today() + chrono::Months::new(1))
             .format("%Y-%m-%d")
             .to_string(),
     }

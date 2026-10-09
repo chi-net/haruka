@@ -5,5 +5,6 @@
   <div><h1 class="text-xl font-bold">记一笔</h1></div>
   <a href="/bills" class="text-sm text-blue-600 hover:underline">返回账单</a>
 </div>
+<p class="text-xs text-gray-500 mb-4" data-business-time-zone="{{ time_zone }}">自然日期口径：{{ time_zone }}（未提供浏览器时区时使用 UTC）</p>
 {% include "quick_entry.html" %}
 {% endblock %}
