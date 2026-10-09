@@ -111,10 +111,8 @@
   </section>
 </div>
 
-<script src="/static/vendor/chart.umd.min.js"></script>
 <script>
 (() => {
-  if (typeof Chart === 'undefined') return;
   const charts = {{ charts_json|safe }};
   const palette = ['#16a34a', '#2563eb', '#ca8a04', '#9333ea', '#0891b2', '#db2777', '#4f46e5', '#65a30d', '#ea580c', '#64748b'];
   const instances = [];
@@ -144,7 +142,6 @@
   createPie('food-expense-pie', charts.food_expenses, ['#d97706', '#cbd5e1']);
   createPie('income-account-pie', charts.income_accounts, palette);
   createPie('expense-account-pie', charts.expense_accounts, palette);
-  window.addEventListener('haruka:color-scheme-change', () => instances.forEach(window.harukaApplyChartTheme));
 })();
 </script>
 {% endblock %}

@@ -93,7 +93,6 @@
   <div class="h-72"><canvas id="cashflow-chart"></canvas></div>
 </section>
 
-<script src="/static/vendor/chart.umd.min.js"></script>
 <script>
 (() => {
   const status = document.getElementById('sms-process-status');
@@ -144,7 +143,7 @@
 (() => {
   const reports = {{ reports_json|safe }};
   const canvas = document.getElementById('cashflow-chart');
-  if (!canvas || typeof Chart === 'undefined') return;
+  if (!canvas) return;
   let chart;
   const draw = period => {
     const data = reports[period];
@@ -169,7 +168,6 @@
     });
   };
   document.querySelectorAll('.report-tab').forEach(button => button.addEventListener('click', () => draw(button.dataset.period)));
-  window.addEventListener('haruka:color-scheme-change', () => window.harukaApplyChartTheme(chart));
   draw('daily');
 })();
 </script>

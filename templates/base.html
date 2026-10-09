@@ -9,6 +9,7 @@
 <title>{% block title %}haruka{% endblock %}</title>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/vendor/htmx.min.js"></script>
+<script src="/static/vendor/chart.umd.min.js"></script>
 <script>
 window.harukaColorScheme = window.matchMedia('(prefers-color-scheme: dark)');
 window.harukaChartTheme = function() {
@@ -44,7 +45,11 @@ window.harukaApplyChartTheme = function(chart) {
   chart.update('none');
 };
 window.harukaColorScheme.addEventListener('change', () => {
-  window.dispatchEvent(new CustomEvent('haruka:color-scheme-change'));
+  if (typeof Chart !== 'undefined') Object.values(Chart.instances).forEach(window.harukaApplyChartTheme);
+});
+document.addEventListener('htmx:beforeCleanupElement', event => {
+  const element = event.detail.elt;
+  if (element instanceof HTMLCanvasElement && typeof Chart !== 'undefined') Chart.getChart(element)?.destroy();
 });
 </script>
 </head>
