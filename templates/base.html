@@ -49,6 +49,7 @@ window.harukaColorScheme.addEventListener('change', () => {
 </script>
 </head>
 <body class="bg-gray-50 text-gray-900 min-h-screen" hx-boost="true">
+{% block navigation %}
 <nav class="bg-white border-b border-gray-200">
   <div class="max-w-6xl mx-auto px-4 h-12 flex items-center gap-4 overflow-x-auto whitespace-nowrap">
     <a href="/" class="font-bold shrink-0">Haruka</a>
@@ -72,6 +73,7 @@ window.harukaColorScheme.addEventListener('change', () => {
     </form>
   </div>
 </nav>
+{% endblock %}
 <main class="max-w-6xl mx-auto px-4 py-6">
 {% block content %}{% endblock %}
 </main>

@@ -29,6 +29,8 @@ Tailwind 样式由 `assets/tailwind.css` 扫描模板和 Rust 源码后编译到
 
 浏览器会注册一个轻量 Service Worker，仅缓存编译后的 CSS 和锁定版本的非敏感前端运行文件。包含账户、账单等解密内容的 HTML/JSON 不会进入离线缓存，任何 AJAX 或账务写入也不会离线排队；断网操作会明确失败，恢复网络后不会自动重放。
 
+首次设置密码、解锁和密码恢复页面不渲染顶部菜单栏；解锁页内的 Passkey 兼容绑定也保持无菜单布局。成功解锁进入仪表板后显示正常导航，主动锁定后重新隐藏菜单。菜单在模板层移除，不依赖 JavaScript 或 CSS 隐藏。
+
 ## 浏览器票据识别
 
 快速记账的“扫描票据”在浏览器 Web Worker 中运行 Tesseract.js WASM，图片不会上传至 haruka 后端。首次识别需要从 haruka 自身加载约 18 MB 的本地 OCR 运行文件和中英文模型，之后语言数据由 Tesseract.js 缓存在浏览器 IndexedDB 中。
