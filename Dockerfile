@@ -14,21 +14,31 @@ COPY templates ./templates
 COPY src ./src
 RUN npm run web:build
 
-FROM rust:1-bookworm AS builder
+FROM lukemathwalker/cargo-chef:0.1.78-rust-1-bookworm@sha256:2ee6e8edf0b91b5a7295071299596601710bccb243bd9735e0b9abf6e114582b AS chef
 WORKDIR /app
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
+FROM chef AS planner
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS dependencies
+COPY --from=planner /app/recipe.json ./recipe.json
+# Keep compiled dependencies in the exported layer, not an ephemeral cache mount.
+RUN cargo chef cook --locked --release --recipe-path recipe.json
+
+FROM dependencies AS builder
+
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 COPY templates ./templates
 COPY --from=web-assets /app/static ./static
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    cargo build --locked --release \
+RUN cargo build --locked --release \
     && cp target/release/haruka /tmp/haruka \
     && strip /tmp/haruka
 

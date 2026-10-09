@@ -57,6 +57,17 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha
 
+      - name: Build and cache Rust dependencies
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: dependencies
+          platforms: linux/amd64,linux/arm64
+          outputs: type=cacheonly
+          cache-from: type=gha,scope=haruka-rust-deps
+          cache-to: type=gha,mode=max,scope=haruka-rust-deps
+          provenance: false
+
       - name: Build and publish image
         uses: docker/build-push-action@v7
         with:
@@ -65,7 +76,9 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=haruka-container
+          cache-from: |
+            type=gha,scope=haruka-container
+            type=gha,scope=haruka-rust-deps
           cache-to: type=gha,mode=max,scope=haruka-container
           provenance: mode=max
           sbom: true

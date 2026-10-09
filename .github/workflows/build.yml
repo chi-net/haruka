@@ -49,6 +49,12 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt
           rustup default stable
 
+      - name: Restore Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x86_64-release
+          cache-workspace-crates: true
+
       - name: Check Rust formatting
         run: cargo fmt --check
 
