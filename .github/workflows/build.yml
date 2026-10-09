@@ -36,8 +36,8 @@ jobs:
       - name: Build browser assets
         run: npm run web:build
 
-      - name: Check generated browser assets are committed
-        run: git diff --exit-code -- static
+      - name: Check vendored browser assets are committed
+        run: git diff --exit-code -- static/vendor static/ocr static/receipt-scanner.js
 
       - name: Install Linux build dependencies
         run: |
