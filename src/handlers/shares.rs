@@ -229,10 +229,27 @@ async fn bill_summary(
     let amount =
         crate::currency::format(crypto::decrypt_cents(dek, &item.amount), &account.currency);
     let category = crypto::decrypt_string(dek, &item.category);
+    let account_name = if account.kind == "investment_fund" {
+        let parent_id = account
+            .parent_id
+            .ok_or_else(|| err500("基金缺少投资分类"))?;
+        let parent = account::Entity::find_by_id(parent_id)
+            .one(&state.db)
+            .await
+            .map_err(err500)?
+            .ok_or_else(|| err500("基金投资分类不存在"))?;
+        let mut name = crypto::decrypt_string(dek, &parent.name);
+        name.push_str(" / ");
+        name.push_str(&crypto::decrypt_string(dek, &account.name));
+        super::bills::append_account_identity(dek, &account, detail.as_ref(), &mut name);
+        name
+    } else {
+        super::bills::account_display_name(dek, &account, detail.as_ref())
+    };
     let view = BillSummaryView {
         kind: kind.clone(),
         amount: amount.clone(),
-        account: super::bills::account_display_name(dek, &account, detail.as_ref()),
+        account: account_name,
         category: category.clone(),
         note: crypto::decrypt_string(dek, &item.note),
         happened_at: item.happened_at.format(TIME_FMT).to_string(),

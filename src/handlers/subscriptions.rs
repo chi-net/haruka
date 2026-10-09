@@ -287,15 +287,18 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
         .into_iter()
         .map(|detail| (detail.account_id, detail))
         .collect();
-    Ok(account::Entity::find()
+    let accounts = account::Entity::find()
         .order_by_asc(account::Column::Id)
         .all(&state.db)
         .await
-        .map_err(err500)?
+        .map_err(err500)?;
+    let mut names = super::bills::account_display_names(dek, &accounts, &details);
+    Ok(accounts
         .into_iter()
+        .filter(crate::investment_funds::is_money_account)
         .map(|account| AccountOption {
             id: account.id,
-            name: super::bills::account_display_name(dek, &account, details.get(&account.id)),
+            name: names.remove(&account.id).unwrap_or_default(),
             currency: account.currency,
         })
         .collect())
@@ -314,6 +317,7 @@ async fn validate_auto_debit_account(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("自动扣款账户不存在"))?;
+    crate::investment_funds::validate_money_account(state, &account).await?;
     if account.currency != subscription_currency {
         return Err(bad_request("自动扣款账户必须与订阅使用相同货币"));
     }

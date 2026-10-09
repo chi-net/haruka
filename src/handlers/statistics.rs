@@ -338,15 +338,7 @@ pub async fn show(
         .into_iter()
         .map(|detail| (detail.account_id, detail))
         .collect();
-    let account_names: HashMap<i64, String> = accounts
-        .iter()
-        .map(|account| {
-            (
-                account.id,
-                super::bills::account_display_name(&dek, &account, details.get(&account.id)),
-            )
-        })
-        .collect();
+    let account_names = super::bills::account_display_names(&dek, &accounts, &details);
     let account_currencies: HashMap<i64, String> = accounts
         .iter()
         .map(|account| (account.id, account.currency.clone()))

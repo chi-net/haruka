@@ -686,37 +686,24 @@ pub async fn detail(
         .into_iter()
         .map(|detail| (detail.account_id, detail))
         .collect();
-    let repayment_account_models = account::Entity::find()
+    let account_models = account::Entity::find()
         .order_by_asc(account::Column::Id)
         .all(&state.db)
         .await
-        .map_err(err500)?
-        .into_iter()
-        .filter(|candidate| {
-            !matches!(candidate.kind.as_str(), "credit_card" | "credit_service")
-                && candidate.currency == account.currency
-        })
-        .collect::<Vec<_>>();
-    let repayment_account_names: HashMap<i64, String> = repayment_account_models
-        .iter()
-        .map(|candidate| {
-            (
-                candidate.id,
-                super::bills::account_display_name(
-                    &dek,
-                    candidate,
-                    account_details.get(&candidate.id),
-                ),
-            )
-        })
-        .collect();
+        .map_err(err500)?;
+    let mut repayment_account_names =
+        super::bills::account_display_names(&dek, &account_models, &account_details);
+    let repayment_account_models = account_models.into_iter().filter(|candidate| {
+        crate::investment_funds::is_money_account(candidate)
+            && !matches!(candidate.kind.as_str(), "credit_card" | "credit_service")
+            && candidate.currency == account.currency
+    });
     let repayment_accounts = repayment_account_models
         .into_iter()
         .map(|candidate| RepaymentAccountOption {
             id: candidate.id,
             name: repayment_account_names
-                .get(&candidate.id)
-                .cloned()
+                .remove(&candidate.id)
                 .unwrap_or_default(),
         })
         .collect();
@@ -856,6 +843,7 @@ pub async fn set_paid(
             .await
             .map_err(err500)?
             .ok_or_else(|| bad_request("还款渠道不存在"))?;
+        crate::investment_funds::validate_money_account(&state, &repayment_account).await?;
         if matches!(
             repayment_account.kind.as_str(),
             "credit_card" | "credit_service"

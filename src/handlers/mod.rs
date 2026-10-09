@@ -6,6 +6,7 @@ pub mod currencies;
 pub mod dashboard;
 pub mod debt_requests;
 pub mod debts;
+pub mod funds;
 pub mod installments;
 pub mod investments;
 pub mod passkeys;

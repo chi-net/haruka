@@ -451,11 +451,13 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
         .into_iter()
         .map(|detail| (detail.account_id, detail))
         .collect();
+    let mut names = account_display_names(dek, &accounts, &details);
     Ok(accounts
         .into_iter()
+        .filter(crate::investment_funds::is_money_account)
         .map(|a| AccountOption {
             id: a.id,
-            name: account_display_name(dek, &a, details.get(&a.id)),
+            name: names.remove(&a.id).unwrap_or_default(),
             kind: a.kind,
             currency: a.currency,
         })
@@ -481,20 +483,46 @@ pub(crate) fn account_display_name(
     account: &account::Model,
     detail: Option<&account_detail::Model>,
 ) -> String {
-    let name = crypto::decrypt_string(dek, &account.name);
-    let identity = detail.and_then(|detail| {
+    let mut name = crypto::decrypt_string(dek, &account.name);
+    append_account_identity(dek, account, detail, &mut name);
+    name
+}
+
+pub(crate) fn account_display_names(
+    dek: &crypto::Dek,
+    accounts: &[account::Model],
+    details: &HashMap<i64, account_detail::Model>,
+) -> HashMap<i64, String> {
+    let mut names = crate::investment_funds::display_names(dek, accounts);
+    for account in accounts {
+        if let Some(name) = names.get_mut(&account.id) {
+            append_account_identity(dek, account, details.get(&account.id), name);
+        }
+    }
+    names
+}
+
+pub(crate) fn append_account_identity(
+    dek: &crypto::Dek,
+    account: &account::Model,
+    detail: Option<&account_detail::Model>,
+    name: &mut String,
+) {
+    if let Some(detail) = detail {
         let card_number = crypto::decrypt_string(dek, &detail.card_number);
         if !card_number.is_empty() {
-            return Some(format!("卡号 {}", super::mask_card_number(&card_number)));
+            name.push_str(" · 卡号 ");
+            name.push_str(&super::mask_card_number(&card_number));
+        } else {
+            let username = crypto::decrypt_string(dek, &detail.account_username);
+            if !username.is_empty() {
+                name.push_str(" · 用户名 ");
+                name.push_str(&super::mask_account_username(&username));
+            }
         }
-        let username = crypto::decrypt_string(dek, &detail.account_username);
-        (!username.is_empty())
-            .then(|| format!("用户名 {}", super::mask_account_username(&username)))
-    });
-    match identity {
-        Some(identity) => format!("{name} · {identity} · {}", account.currency),
-        None => format!("{name} · {}", account.currency),
     }
+    name.push_str(" · ");
+    name.push_str(&account.currency);
 }
 
 fn debt_kind_label(kind: &str) -> &'static str {
@@ -532,15 +560,7 @@ pub(crate) async fn ledger_rows(
         .into_iter()
         .map(|detail| (detail.account_id, detail))
         .collect();
-    let account_names: HashMap<i64, String> = accounts
-        .iter()
-        .map(|account| {
-            (
-                account.id,
-                account_display_name(dek, &account, details.get(&account.id)),
-            )
-        })
-        .collect();
+    let account_names = account_display_names(dek, &accounts, &details);
     let account_currencies: HashMap<i64, String> = accounts
         .iter()
         .map(|account| (account.id, account.currency.clone()))

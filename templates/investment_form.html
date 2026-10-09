@@ -9,7 +9,7 @@
 {% if fund_accounts.is_empty() %}
 <section class="max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
   <p class="font-medium">还没有可用的基金账户</p>
-  <p class="mt-1">请先新增一个“投资账户”，再回来创建定投计划。</p>
+  <p class="mt-1">请先新增一个“投资账户”及其下的具体基金，再回来创建定投计划；分组本身不接收资金。</p>
   <a href="/accounts/new" class="inline-block mt-3 text-blue-700 hover:underline">新增投资账户</a>
 </section>
 {% else if source_accounts.is_empty() %}
@@ -22,7 +22,7 @@
   </div>
   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
     <div>
-      <label class="block text-sm text-gray-600 mb-1">固定基金账户</label>
+      <label class="block text-sm text-gray-600 mb-1">具体基金（投资账户 / 基金）</label>
       <select id="investment-fund-account" name="fund_account_id" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
         {% for account in fund_accounts %}<option value="{{ account.id }}" data-currency="{{ account.currency }}" {% if account.id == fund_account_id %}selected{% endif %}>{{ account.name }} · {{ account.currency }}</option>{% endfor %}
       </select>
@@ -66,8 +66,8 @@
     </div>
     <div id="investment-manual-help" class="rounded bg-amber-50 border border-amber-100 p-3 text-xs text-amber-800 {% if strategy != "manual" %}hidden{% endif %}">每个到期交易日会显示一个金额输入框，由你核对银行或基金平台后确认记账；同一计划同一天只能执行一次。</div>
     <div id="investment-sms-fields" class="rounded bg-emerald-50 border border-emerald-100 p-3 space-y-3 {% if strategy != "sms" %}hidden{% endif %}">
-      <div><label class="block text-sm text-emerald-900 mb-1">银行通知短信中的基金名称</label><input id="investment-sms-fund-name" name="sms_fund_name" value="{{ sms_fund_name }}" placeholder="例如：富国中证沪港深500ETF联接基金A" class="w-full border border-emerald-200 rounded px-3 py-1.5 text-sm"><p class="text-xs text-emerald-800 mt-1">内置模板或未绑定计划的自定义模板按基金名称和银行卡尾号匹配；在短信模板中直接绑定本计划时，提取到的基金名或尾号仍会校验。</p></div>
-      <p class="text-xs text-emerald-800">成功短信按实扣金额在扣款账户与投资账户之间生成转账；失败短信只显示失败记录。短信金额已经是银行实际扣款，本模式不会再另记手续费。</p>
+      <p class="text-xs text-emerald-800">按所选具体基金的名称或银行名称别名及银行卡尾号匹配，不使用投资账户分组名。银行名称请在基金编辑页维护；绑定计划的自定义模板如提取了基金名，也必须匹配该基金。</p>
+      <p class="text-xs text-emerald-800">成功短信按实扣金额在扣款账户与所选具体基金之间生成转账；失败短信只显示失败记录。短信金额已经是银行实际扣款，本模式不会再另记手续费。</p>
     </div>
   </section>
   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -106,7 +106,6 @@
   const smartFields = document.getElementById('investment-smart-fields');
   const manualHelp = document.getElementById('investment-manual-help');
   const smsFields = document.getElementById('investment-sms-fields');
-  const smsFundName = document.getElementById('investment-sms-fund-name');
   const amount = document.getElementById('investment-amount');
   const amountField = document.getElementById('investment-amount-field');
   const amountLabel = document.getElementById('investment-amount-label');
@@ -137,7 +136,6 @@
     smartFields.classList.toggle('hidden', strategy.value !== 'smart');
     manualHelp.classList.toggle('hidden', !manual);
     smsFields.classList.toggle('hidden', !sms);
-    smsFundName.required = sms;
     amount.required = !manual && !sms;
     amount.readOnly = sms;
     amountField.classList.toggle('hidden', sms);

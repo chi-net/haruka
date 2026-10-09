@@ -479,6 +479,7 @@ fn account_kind_label(kind: &str) -> &'static str {
         "credit_card" => "信用卡",
         "credit_service" => "信贷服务",
         "investment" => "投资账户",
+        "investment_fund" => "基金",
         _ => "其他账户",
     }
 }
@@ -564,16 +565,19 @@ pub async fn new_form(
         .into_iter()
         .map(|detail| (detail.account_id, detail))
         .collect();
-    let accounts = account::Entity::find()
+    let account_models = account::Entity::find()
         .order_by_asc(account::Column::Id)
         .all(&state.db)
         .await
-        .map_err(err500)?
+        .map_err(err500)?;
+    let mut account_names = super::bills::account_display_names(&dek, &account_models, &details);
+    let accounts = account_models
         .into_iter()
+        .filter(crate::investment_funds::is_money_account)
         .filter(|item| shared_account_identifier(&dek, details.get(&item.id)).is_some())
         .map(|item| AccountOption {
             id: item.id,
-            name: super::bills::account_display_name(&dek, &item, details.get(&item.id)),
+            name: account_names.remove(&item.id).unwrap_or_default(),
         })
         .collect();
     let people = debt_person::Entity::find()
@@ -627,6 +631,7 @@ pub async fn create(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("收款账户不存在"))?;
+    crate::investment_funds::validate_money_account(&state, &account).await?;
     let detail = account_detail::Entity::find_by_id(account.id)
         .one(&state.db)
         .await
@@ -729,20 +734,19 @@ pub async fn list(
         .into_iter()
         .map(|detail| (detail.account_id, detail))
         .collect();
-    let repayment_accounts = account::Entity::find()
+    let account_models = account::Entity::find()
         .order_by_asc(account::Column::Id)
         .all(&state.db)
         .await
-        .map_err(err500)?
+        .map_err(err500)?;
+    let mut account_names =
+        super::bills::account_display_names(&dek, &account_models, &account_details);
+    let repayment_accounts = account_models
         .into_iter()
-        .filter(|account| account.kind != "investment")
+        .filter(crate::investment_funds::is_money_account)
         .map(|account| RepaymentAccountOption {
             id: account.id,
-            name: super::bills::account_display_name(
-                &dek,
-                &account,
-                account_details.get(&account.id),
-            ),
+            name: account_names.remove(&account.id).unwrap_or_default(),
             currency: account.currency,
         })
         .collect::<Vec<_>>();
@@ -1005,9 +1009,7 @@ pub async fn submit_repayment(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("还款账户不存在"))?;
-    if account.kind == "investment" {
-        return Err(bad_request("投资账户不能直接用于还款"));
-    }
+    crate::investment_funds::validate_money_account(&state, &account).await?;
     if account.currency != snapshot.currency {
         return Err(bad_request("还款账户必须与原借款使用相同货币"));
     }

@@ -9,8 +9,8 @@ use chrono::Datelike;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{
     sea_query::{Expr, OnConflict},
-    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, IntoActiveModel, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, IntoActiveModel,
+    QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, str::FromStr};
@@ -48,6 +48,7 @@ struct AccountRow {
     id: i64,
     name: String,
     kind_label: String,
+    is_investment: bool,
     card_number: String,
     account_username: String,
     credit_summary: String,
@@ -115,6 +116,7 @@ struct AccountFormTemplate {
     account_kind: String,
     currency: String,
     currencies: &'static [currency::CurrencyOption],
+    hierarchy_locked: bool,
     card_number: String,
     account_username: String,
     credit_limit: String,
@@ -191,6 +193,7 @@ fn account_kind_label(kind: &str) -> &'static str {
         "credit_card" => "信用卡",
         "credit_service" => "信贷服务",
         "investment" => "投资账户",
+        "investment_fund" => "投资基金",
         _ => "其他",
     }
 }
@@ -209,6 +212,7 @@ async fn save_account_detail(
     let (card_number, account_username, credit_limit, billing_day, repayment_day) = match kind {
         "payment" => ("", account_username.trim(), 0, 0, 0),
         "bank" | "stored_value" => (card_number.trim(), "", 0, 0, 0),
+        "investment" => (card_number.trim(), account_username.trim(), 0, 0, 0),
         "credit_card" => (
             card_number.trim(),
             "",
@@ -262,14 +266,14 @@ async fn save_account_detail(
     Ok(())
 }
 
-async fn transaction_balance(
-    state: &AppState,
+async fn transaction_balance<C: ConnectionTrait>(
+    db: &C,
     dek: &crypto::Dek,
     account_id: i64,
 ) -> HandlerResult<i64> {
     let bills = bill::Entity::find()
         .filter(bill::Column::AccountId.eq(account_id))
-        .all(&state.db)
+        .all(db)
         .await
         .map_err(err500)?;
     let mut total = 0i64;
@@ -290,7 +294,7 @@ async fn transaction_balance(
                 .add(transfer::Column::FromAccountId.eq(account_id))
                 .add(transfer::Column::ToAccountId.eq(account_id)),
         )
-        .all(&state.db)
+        .all(db)
         .await
         .map_err(err500)?;
     for transfer in transfers {
@@ -308,7 +312,7 @@ async fn transaction_balance(
     }
     let debt_records = debt_record::Entity::find()
         .filter(debt_record::Column::AccountId.eq(account_id))
-        .all(&state.db)
+        .all(db)
         .await
         .map_err(err500)?;
     for record in debt_records {
@@ -330,12 +334,41 @@ pub(crate) async fn current_balance(
     dek: &crypto::Dek,
     account_id: i64,
 ) -> HandlerResult<i64> {
+    current_balance_on(&state.db, dek, account_id).await
+}
+
+pub(crate) async fn current_balance_on<C: ConnectionTrait>(
+    db: &C,
+    dek: &crypto::Dek,
+    account_id: i64,
+) -> HandlerResult<i64> {
     let account = account::Entity::find_by_id(account_id)
-        .one(&state.db)
+        .one(db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
-    transaction_balance(state, dek, account_id)
+    if account.kind == "investment" {
+        let children = account::Entity::find()
+            .filter(account::Column::ParentId.eq(account_id))
+            .all(db)
+            .await
+            .map_err(err500)?;
+        let mut total = 0i64;
+        for child in children {
+            if child.kind != "investment_fund" || child.currency != account.currency {
+                return Err(err500("基金分组或货币不一致"));
+            }
+            let value = transaction_balance(db, dek, child.id)
+                .await?
+                .checked_add(crypto::decrypt_cents(dek, &child.balance_offset))
+                .ok_or_else(|| err500("余额超出范围"))?;
+            total = total
+                .checked_add(value)
+                .ok_or_else(|| err500("持仓总价值超出范围"))?;
+        }
+        return Ok(total);
+    }
+    transaction_balance(db, dek, account_id)
         .await?
         .checked_add(crypto::decrypt_cents(dek, &account.balance_offset))
         .ok_or_else(|| err500("余额超出范围"))
@@ -352,6 +385,7 @@ pub(crate) async fn ensure_allowed_balance(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("账户不存在"))?;
+    crate::investment_funds::validate_money_account(state, &account).await?;
     if !matches!(account.kind.as_str(), "credit_card" | "credit_service") {
         if balance < 0 {
             return Err(bad_request("该账户不允许透支"));
@@ -406,9 +440,9 @@ pub async fn balance_summary(
             ok: true,
             account_id: id,
             balance: currency::format(balance, &account.currency),
+            can_transfer_out: balance > 0 && crate::investment_funds::is_money_account(&account),
             currency: account.currency,
             kind: account.kind,
-            can_transfer_out: balance > 0,
         }),
     ))
 }
@@ -561,9 +595,11 @@ pub async fn list(
                 .ok_or_else(|| err500("余额超出范围"))?,
         );
     }
+    crate::investment_funds::roll_up_balances(&accounts, &mut net)?;
 
     let rows = accounts
         .into_iter()
+        .filter(|account| account.kind != "investment_fund")
         .map(|account| {
             let (card_number, account_username, credit_limit, billing_day, repayment_day) =
                 details.get(&account.id).cloned().unwrap_or_default();
@@ -590,6 +626,7 @@ pub async fn list(
                 id: account.id,
                 name: crypto::decrypt_string(&dek, &account.name),
                 kind_label: account_kind_label(&account.kind).into(),
+                is_investment: account.kind == "investment",
                 card_number,
                 account_username,
                 credit_summary,
@@ -632,12 +669,15 @@ pub async fn detail(
     Extension(time_zone): Extension<super::ClientTimeZone>,
     Path(id): Path<i64>,
     Query(query): Query<AccountDetailQuery>,
-) -> HandlerResult<Html<String>> {
+) -> HandlerResult<axum::response::Response> {
     let account = account::Entity::find_by_id(id)
         .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    if account.kind == "investment" {
+        return Ok(Redirect::to(&format!("/accounts/{id}/funds")).into_response());
+    }
     let detail = account_detail::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -704,13 +744,11 @@ pub async fn detail(
         .checked_sub(month_expense)
         .ok_or_else(|| err500("账户月结余超出范围"))?;
 
-    let other_account_names: HashMap<i64, String> = account::Entity::find()
+    let all_accounts = account::Entity::find()
         .all(&state.db)
         .await
-        .map_err(err500)?
-        .into_iter()
-        .map(|item| (item.id, crypto::decrypt_string(&dek, &item.name)))
-        .collect();
+        .map_err(err500)?;
+    let other_account_names = crate::investment_funds::display_names(&dek, &all_accounts);
     let person_names: HashMap<i64, String> = debt_person::Entity::find()
         .all(&state.db)
         .await
@@ -912,9 +950,12 @@ pub async fn detail(
         .unwrap_or_default();
     let html = AccountDetailTemplate {
         id,
-        name: crypto::decrypt_string(&dek, &account.name),
+        name: other_account_names
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| crypto::decrypt_string(&dek, &account.name)),
         kind_label: account_kind_label(&account.kind).into(),
-        is_investment: account.kind == "investment",
+        is_investment: account.kind == "investment_fund",
         currency: account.currency.clone(),
         card_number_masked: if card_number.is_empty() {
             String::new()
@@ -945,7 +986,7 @@ pub async fn detail(
     }
     .render()
     .map_err(err500)?;
-    Ok(Html(html))
+    Ok(Html(html).into_response())
 }
 
 pub async fn card_number(
@@ -981,6 +1022,7 @@ pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<Strin
         account_kind: DEFAULT_ACCOUNT_KIND.into(),
         currency: currency::default_currency(&state).await.map_err(err500)?,
         currencies: currency::CURRENCIES,
+        hierarchy_locked: false,
         card_number: String::new(),
         account_username: String::new(),
         credit_limit: String::new(),
@@ -1013,6 +1055,8 @@ pub async fn create(
         &form.billing_day,
         &form.repayment_day,
     )?;
+    let _balance_guard = state.balance_writes.lock().await;
+    let transaction = state.db.begin().await.map_err(err500)?;
     let account = account::ActiveModel {
         name: Set(crypto::encrypt(&dek, form.name.trim().as_bytes())),
         kind: Set(form.account_kind.clone()),
@@ -1022,9 +1066,26 @@ pub async fn create(
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
     }
-    .insert(&state.db)
+    .insert(&transaction)
     .await
     .map_err(err500)?;
+    if account.kind == "investment" {
+        account::ActiveModel {
+            name: Set(crypto::encrypt(&dek, "默认基金".as_bytes())),
+            kind: Set("investment_fund".into()),
+            parent_id: Set(Some(account.id)),
+            currency: Set(account.currency.clone()),
+            balance_offset: Set(crypto::encrypt_cents(&dek, 0)),
+            note: Set(crypto::encrypt(&dek, b"")),
+            sms_names: Set(crypto::encrypt(&dek, b"[]")),
+            created_at: Set(account.created_at),
+            ..Default::default()
+        }
+        .insert(&transaction)
+        .await
+        .map_err(err500)?;
+    }
+    transaction.commit().await.map_err(err500)?;
     save_account_detail(
         &state,
         &dek,
@@ -1050,6 +1111,9 @@ pub async fn edit_form(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    if account.kind == "investment_fund" {
+        return super::funds::edit_form(State(state), Extension(SessionDek(dek)), Path(id)).await;
+    }
     let detail = account_detail::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -1080,6 +1144,7 @@ pub async fn edit_form(
         heading: "编辑账户".into(),
         action: format!("/accounts/{id}/edit"),
         name: crypto::decrypt_string(&dek, &account.name),
+        hierarchy_locked: account.kind == "investment",
         account_kind: account.kind,
         currency: account.currency,
         currencies: currency::CURRENCIES,
@@ -1122,6 +1187,17 @@ pub async fn update(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    if account.kind == "investment_fund" {
+        return Err(bad_request("请使用基金编辑页；基金货币由投资分组决定"));
+    }
+    if account.kind == "investment" || form.account_kind == "investment" {
+        if account.kind != form.account_kind {
+            return Err(bad_request("投资分组不能与普通账户互相转换；请新建账户"));
+        }
+        if account.currency != form.currency {
+            return Err(bad_request("投资分组货币不可修改；请新建对应货币分组"));
+        }
+    }
     let balance = current_balance(&state, &dek, id).await?;
     if account.currency != form.currency {
         let has_activity = bill::Entity::find()
@@ -1199,47 +1275,31 @@ pub async fn balance_form(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
-) -> HandlerResult<Html<String>> {
+) -> HandlerResult<axum::response::Response> {
     let account = account::Entity::find_by_id(id)
         .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    if matches!(account.kind.as_str(), "investment" | "investment_fund") {
+        let group = account.parent_id.unwrap_or(id);
+        return Ok(Redirect::to(&format!("/accounts/{group}/funds/valuation")).into_response());
+    }
     let html = AccountBalanceTemplate {
-        heading: if account.kind == "investment" {
-            "校准持仓价值"
-        } else {
-            "设置账户余额"
-        }
-        .into(),
+        heading: "设置账户余额".into(),
         account_name: crypto::decrypt_string(&dek, &account.name),
         current_balance: currency::format(
             current_balance(&state, &dek, id).await?,
             &account.currency,
         ),
         action: format!("/accounts/{id}/balance"),
-        help: if account.kind == "investment" {
-            "填写本月查看到的实际持仓总价值。高于当前值会增加账面价值，低于当前值会扣减；差额记录为余额调整，不计入普通收入或支出。"
-        } else {
-            "最多保留两位小数，并会在账单中新增一条不可删除的“余额调整”流水。普通账户不允许负数；信用账户不能低于负授信额。"
-        }
-        .into(),
-        confirm_message: if account.kind == "investment" {
-            "确认按当前持仓价值校准该投资账户？"
-        } else {
-            "确认强制设置该账户的余额？"
-        }
-        .into(),
-        button_label: if account.kind == "investment" {
-            "确认校准"
-        } else {
-            "设置余额"
-        }
-        .into(),
+        help: "最多保留两位小数，并会新增一条不可删除的“余额调整”流水。普通账户不允许负数；信用账户不能低于负授信额。".into(),
+        confirm_message: "确认强制设置该账户的余额？".into(),
+        button_label: "设置余额".into(),
     }
     .render()
     .map_err(err500)?;
-    Ok(Html(html))
+    Ok(Html(html).into_response())
 }
 
 pub async fn force_balance(
@@ -1254,11 +1314,14 @@ pub async fn force_balance(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    if matches!(account.kind.as_str(), "investment" | "investment_fund") {
+        return Err(bad_request("请使用基金批量估值页面；不允许覆盖分组总余额"));
+    }
     let target = parse_balance(&form.balance)?;
     ensure_allowed_balance(&state, &dek, id, target).await?;
     let previous = current_balance(&state, &dek, id).await?;
     let offset = target
-        .checked_sub(transaction_balance(&state, &dek, id).await?)
+        .checked_sub(transaction_balance(&state.db, &dek, id).await?)
         .ok_or_else(|| bad_request("余额超出范围"))?;
     let now = chrono::Utc::now().naive_utc();
     let transaction = state.db.begin().await.map_err(err500)?;
@@ -1286,13 +1349,37 @@ pub async fn delete(
     Path(id): Path<i64>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
-    if account::Entity::find_by_id(id)
+    let target = account::Entity::find_by_id(id)
         .one(&state.db)
         .await
         .map_err(err500)?
-        .is_none()
-    {
-        return Err((StatusCode::NOT_FOUND, "账户不存在".into()));
+        .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    if target.kind == "investment_fund" {
+        crate::investment_funds::ensure_unused(&state, &dek, id).await?;
+        account::Entity::delete_by_id(id)
+            .exec(&state.db)
+            .await
+            .map_err(err500)?;
+        return Ok(Redirect::to(&format!(
+            "/accounts/{}/funds",
+            target.parent_id.unwrap_or(id)
+        )));
+    }
+    if target.kind == "investment" {
+        let children = account::Entity::find()
+            .filter(account::Column::ParentId.eq(id))
+            .all(&state.db)
+            .await
+            .map_err(err500)?;
+        crate::investment_funds::ensure_unused(&state, &dek, id).await?;
+        for child in children {
+            crate::investment_funds::ensure_unused(&state, &dek, child.id).await?;
+        }
+        account::Entity::delete_by_id(id)
+            .exec(&state.db)
+            .await
+            .map_err(err500)?;
+        return Ok(Redirect::to("/accounts"));
     }
     let mut balance_changes: HashMap<i64, i64> = HashMap::new();
     for transfer in transfer::Entity::find()

@@ -9,6 +9,7 @@
   <p>自定义模板优先匹配；没有匹配时仍使用内置招商银行模板，无需为现有快捷指令重新配置。多个自定义模板同时匹配会报错，请避免条件重叠。</p>
   <p class="mt-2">转入／转出只生成待确认候选，必须在短信页选择另一账户后记账。只有明确选择“自动生成收入／支出账单”才会自动生成普通账单；审计动作不改变余额。</p>
   <p class="mt-2">发送号码和【银行标记】同时设置时必须全部满足（AND）。它们不是银行身份认证，短信 API 仍需令牌。本功能仅记录账本，不连接银行、不发起支付。</p>
+  <p class="mt-2">定投按具体基金的名称和银行别名匹配，别名在基金编辑页维护；投资账户分组名不参与匹配。收入、支出和转账只能选择实际账户或具体基金，不能向分组记账。</p>
 </section>
 <form method="get" action="/sms/templates" class="bg-white rounded-lg border border-gray-200 p-4 mb-5 flex flex-wrap items-end gap-3">
   <div class="min-w-52 flex-1"><label for="template-keyword" class="block text-xs text-gray-500 mb-1">关键词</label><input id="template-keyword" name="keyword" value="{{ keyword }}" placeholder="名称、发送号码、银行标记、表达式或关联项" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>

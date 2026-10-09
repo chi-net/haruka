@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} - haruka{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-2">{{ heading }}</h1><p class="text-sm text-gray-500 mb-4">{{ parent_name }} · {{ currency }}（继承分组货币，不可单独修改）</p>
+<form method="post" action="{{ action }}" class="max-w-md bg-white rounded border border-gray-200 p-4 space-y-4">
+<div><label class="block text-sm mb-1">基金名称</label><input name="name" required value="{{ name }}" class="w-full border rounded px-3 py-2"></div>
+<div><label class="block text-sm mb-1">银行短信基金名称（可选，每行一个）</label><textarea name="aliases" rows="4" class="w-full border rounded px-3 py-2">{{ aliases }}</textarea><p class="text-xs text-gray-500">基金名称本身也能匹配。填写银行使用的简称或别名，匹配时忽略空白。旧计划中的名称已迁移至此。</p></div>
+<div><label class="block text-sm mb-1">备注</label><input name="note" value="{{ note }}" class="w-full border rounded px-3 py-2"></div>
+<div class="flex gap-3"><button class="bg-blue-600 text-white rounded px-4 py-2">保存</button><a href="/accounts/{{ parent_id }}/funds" class="px-4 py-2 text-gray-600">取消</a></div>
+</form>
+{% endblock %}

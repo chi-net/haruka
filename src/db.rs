@@ -68,6 +68,15 @@ pub async fn init() -> DatabaseConnection {
         "TEXT NOT NULL DEFAULT ''",
     )
     .await;
+    ensure_column(
+        &db,
+        "accounts",
+        "parent_id",
+        "INTEGER DEFAULT NULL REFERENCES accounts(id) ON DELETE CASCADE",
+    )
+    .await;
+    ensure_column(&db, "accounts", "last_calibrated_at", "TEXT DEFAULT NULL").await;
+    ensure_column(&db, "accounts", "sms_names", "TEXT NOT NULL DEFAULT ''").await;
     let mut create_account_details = schema.create_table_from_entity(account_detail::Entity);
     db.execute(builder.build(create_account_details.if_not_exists()))
         .await
@@ -158,13 +167,6 @@ pub async fn init() -> DatabaseConnection {
         "recurring_investments",
         "moving_average_days",
         "INTEGER NOT NULL DEFAULT 180",
-    )
-    .await;
-    ensure_column(
-        &db,
-        "recurring_investments",
-        "sms_fund_name",
-        "TEXT NOT NULL DEFAULT ''",
     )
     .await;
     let mut create_investment_executions =

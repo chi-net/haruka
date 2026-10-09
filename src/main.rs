@@ -3,6 +3,7 @@ mod currency;
 mod db;
 mod entity;
 mod handlers;
+mod investment_funds;
 mod market_data;
 mod sms_templates;
 
@@ -120,6 +121,7 @@ pub struct AppState {
     pub db: DatabaseConnection,
     sessions: Arc<RwLock<HashMap<String, Dek>>>,
     pub balance_writes: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) fund_migration_ready: Arc<tokio::sync::OnceCell<()>>,
     fx_client: reqwest::Client,
     fx_fetches: Arc<tokio::sync::Mutex<()>>,
     market_client: reqwest::Client,
@@ -217,6 +219,9 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 
 async fn require_unlock(State(state): State<AppState>, mut req: Request, next: Next) -> Response {
     if let Some(dek) = state.session_dek(req.headers()) {
+        if let Err(error) = investment_funds::ensure_default_funds(&state, &dek).await {
+            return error.into_response();
+        }
         req.extensions_mut().insert(SessionDek(dek));
         return next.run(req).await;
     }
@@ -306,6 +311,7 @@ async fn main() {
         db,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         balance_writes: Arc::new(tokio::sync::Mutex::new(())),
+        fund_migration_ready: Arc::new(tokio::sync::OnceCell::new()),
         fx_client: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(8))
             .user_agent("haruka/0.1")
@@ -353,6 +359,24 @@ async fn main() {
             get(handlers::accounts::balance_form).post(handlers::accounts::force_balance),
         )
         .route("/accounts/{id}/delete", post(handlers::accounts::delete))
+        .route(
+            "/accounts/{id}/funds",
+            get(handlers::funds::list).post(handlers::funds::create),
+        )
+        .route("/accounts/{id}/funds/new", get(handlers::funds::new_form))
+        .route(
+            "/accounts/{id}/funds/valuation",
+            get(handlers::funds::valuation_form).post(handlers::funds::calibrate),
+        )
+        .route(
+            "/funds/{id}/edit",
+            get(handlers::funds::edit_form).post(handlers::funds::update),
+        )
+        .route("/funds/{id}/delete", post(handlers::funds::delete))
+        .route(
+            "/funds/valuation-reminders",
+            get(handlers::funds::reminders),
+        )
         .route(
             "/budgets",
             get(handlers::budgets::show).post(handlers::budgets::update),

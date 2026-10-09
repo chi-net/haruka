@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}基金估值提醒 - haruka{% endblock %}
+{% block content %}
+<div class="flex justify-between mb-4"><h1 class="text-xl font-bold">基金估值提醒</h1><a href="/accounts" class="text-blue-600 text-sm">返回账户</a></div>
+<p class="bg-blue-50 border border-blue-200 rounded p-4 text-sm text-blue-800 mb-4">建议每月核对一次基金价值。以下仅列出持仓大于零且距最近估值核对（首次按创建日期）至少 30 天的基金；空仓不会提醒。价值未变化也可以在校准页勾选“已核对”，保存审计并解除提醒。</p>
+<form method="get" action="/funds/valuation-reminders" class="mb-3"><select name="per_page" aria-label="每页条数" onchange="this.form.requestSubmit()" class="border rounded p-2 text-sm"><option value="50" {% if per_page == 50 %}selected{% endif %}>50 条/页</option><option value="100" {% if per_page == 100 %}selected{% endif %}>100 条/页</option><option value="200" {% if per_page == 200 %}selected{% endif %}>200 条/页</option></select></form>
+{% if reminders.is_empty() %}<p class="text-sm text-gray-500">当前没有超过 30 天未核对的非空基金。</p>{% else %}<div class="bg-white border rounded overflow-x-auto"><table class="w-full text-sm"><thead class="bg-gray-50"><tr><th class="text-left p-3">投资分组 / 基金</th><th class="text-right p-3">持仓价值</th><th class="text-right p-3">未核对天数</th><th class="p-3"></th></tr></thead><tbody>{% for r in reminders %}<tr class="border-t"><td class="p-3">{{ r.parent_name }} / {{ r.name }}</td><td class="text-right p-3 font-mono">{{ r.value }}</td><td class="text-right p-3">{{ r.days_since }} 天</td><td class="p-3"><a href="/accounts/{{ r.parent_id }}/funds/valuation" class="text-blue-600">立即核对并校准</a></td></tr>{% endfor %}</tbody></table></div>{% include "pagination.html" %}{% endif %}
+{% endblock %}

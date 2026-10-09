@@ -6,7 +6,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i64,
     pub name: String,
-    /// "payment" | "bank" | "stored_value" | "investment" | "other"
+    /// Ordinary money account, investment group, or investment_fund ledger leaf.
     pub kind: String,
     /// ISO 4217 货币代码；账户内的金额均使用此币种。
     pub currency: String,
@@ -14,10 +14,22 @@ pub struct Model {
     pub balance_offset: String,
     pub note: String,
     pub created_at: DateTimeUtc,
+    pub parent_id: Option<i64>,
+    pub last_calibrated_at: Option<DateTimeUtc>,
+    /// Encrypted JSON array of bank SMS aliases; empty on ordinary accounts.
+    #[sea_orm(default_value = "")]
+    pub sms_names: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
+    #[sea_orm(
+        belongs_to = "Entity",
+        from = "Column::ParentId",
+        to = "Column::Id",
+        on_delete = "Cascade"
+    )]
+    Parent,
     #[sea_orm(has_many = "super::bill::Entity")]
     Bill,
     #[sea_orm(has_one = "super::account_detail::Entity")]

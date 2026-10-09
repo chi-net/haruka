@@ -8,7 +8,7 @@ pub struct Model {
     /// 定投计划名（密文）。
     pub name: String,
     pub from_account_id: i64,
-    /// 固定接收资金的基金账户，必须是 investment 类型。
+    /// 固定接收资金的具体基金，必须是 investment_fund 类型。
     pub fund_account_id: i64,
     /// 固定/聪明策略的基准金额，或手动策略的默认金额（密文，可为 0）。
     pub amount: String,
@@ -20,8 +20,6 @@ pub struct Model {
     pub index_code: String,
     /// 移动平均线包含的指数交易日数。
     pub moving_average_days: i32,
-    /// 招商银行短信模式下用于匹配短信内基金名称的密文关键词。
-    pub sms_fund_name: String,
     pub start_date: Date,
     pub next_trade_date: Date,
     pub active: bool,

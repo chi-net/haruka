@@ -2,7 +2,7 @@
 {% block title %}短信 - haruka{% endblock %}
 {% block content %}
 <div class="flex flex-wrap items-start justify-between gap-3 mb-5">
-  <div><h1 class="text-xl font-bold">短信管理</h1><p class="text-sm text-gray-500 mt-1">查看银行短信处理记录，确认本人账户转账或信用卡还款。</p></div>
+  <div><h1 class="text-xl font-bold">短信管理</h1><p class="text-sm text-gray-500 mt-1">查看银行短信处理记录，确认本人账户转账或信用卡还款；基金按“投资账户 / 基金”显示，分组不接收资金。</p></div>
   <div class="flex items-center gap-4"><a href="/sms/templates" class="text-sm text-blue-600 hover:underline">短信模板</a><a href="/investments" class="text-sm text-blue-600 hover:underline">每日定投</a></div>
 </div>
 {% if confirmed %}<div class="rounded-lg border border-green-200 bg-green-50 p-4 mb-5 text-sm text-green-800" role="status">短信已确认，转账已记账，账户余额已更新。</div>{% endif %}

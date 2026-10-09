@@ -102,6 +102,14 @@ struct BillValue {
     is_food: bool,
 }
 
+struct FundValuationReminder {
+    parent_id: i64,
+    name: String,
+    parent_name: String,
+    amount: String,
+    days_since: i64,
+}
+
 #[derive(Template)]
 #[template(path = "dashboard.html")]
 struct DashboardTemplate {
@@ -131,6 +139,8 @@ struct DashboardTemplate {
     subscription_reminder_count: usize,
     installment_reminder_count: usize,
     budget_statuses: Vec<super::budgets::BudgetStatus>,
+    valuation_reminders: Vec<FundValuationReminder>,
+    valuation_reminder_count: usize,
 }
 
 fn account_kind_label(kind: &str) -> &'static str {
@@ -140,7 +150,8 @@ fn account_kind_label(kind: &str) -> &'static str {
         "stored_value" => "储值卡",
         "credit_card" => "信用卡",
         "credit_service" => "信贷服务",
-        "investment" => "投资",
+        "investment" => "投资分类",
+        "investment_fund" => "基金",
         _ => "其他",
     }
 }
@@ -252,17 +263,10 @@ pub async fn show(
         .into_iter()
         .map(|detail| (detail.account_id, detail))
         .collect();
-    let account_names: HashMap<i64, String> = accounts
-        .iter()
-        .map(|account| {
-            (
-                account.id,
-                super::bills::account_display_name(&dek, account, details.get(&account.id)),
-            )
-        })
-        .collect();
+    let account_names = super::bills::account_display_names(&dek, &accounts, &details);
     let account_options = accounts
         .iter()
+        .filter(|account| crate::investment_funds::is_money_account(account))
         .map(|account| AccountOption {
             id: account.id,
             name: account_names.get(&account.id).cloned().unwrap_or_default(),
@@ -271,12 +275,42 @@ pub async fn show(
         })
         .collect::<Vec<_>>();
     let mut account_balances = HashMap::new();
+    for account in accounts
+        .iter()
+        .filter(|account| crate::investment_funds::is_money_account(account))
+    {
+        let balance = super::accounts::current_balance(&state, &dek, account.id).await?;
+        account_balances.insert(account.id, balance);
+    }
+    crate::investment_funds::roll_up_balances(&accounts, &mut account_balances)?;
+    let due_valuations = crate::investment_funds::valuation_reminders(
+        &dek,
+        &accounts,
+        &account_balances,
+        chrono::Utc::now(),
+    )?;
+    let valuation_reminder_count = due_valuations.len();
+    let valuation_reminders = due_valuations
+        .into_iter()
+        .take(10)
+        .map(|fund| FundValuationReminder {
+            parent_id: fund.parent_id,
+            name: fund.name,
+            parent_name: fund.parent_name,
+            amount: currency::format(fund.amount, &fund.currency),
+            days_since: fund.days_since,
+        })
+        .collect();
     let mut net_assets = 0i64;
     let mut account_summaries = Vec::with_capacity(accounts.len());
     let mut credit_accounts = Vec::new();
-    for account in &accounts {
-        let balance = super::accounts::current_balance(&state, &dek, account.id).await?;
-        account_balances.insert(account.id, balance);
+    for account in accounts
+        .iter()
+        .filter(|account| account.parent_id.is_none())
+    {
+        let balance = *account_balances
+            .get(&account.id)
+            .ok_or_else(|| err500("账户余额缺失"))?;
         net_assets = net_assets
             .checked_add(rates.convert(balance, &account.currency).map_err(err500)?)
             .ok_or_else(|| err500("资产金额超出范围"))?;
@@ -469,6 +503,7 @@ pub async fn show(
     let installment_reminders = all_installment_reminders.into_iter().take(10).collect();
     let transfer_sources = accounts
         .iter()
+        .filter(|account| crate::investment_funds::is_money_account(account))
         .map(|account| AccountOption {
             id: account.id,
             name: account_names.get(&account.id).cloned().unwrap_or_default(),
@@ -623,6 +658,8 @@ pub async fn show(
         installment_reminders,
         subscription_reminder_count,
         installment_reminder_count,
+        valuation_reminders,
+        valuation_reminder_count,
         budget_statuses,
     }
     .render()

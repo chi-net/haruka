@@ -26,6 +26,7 @@ use crate::{
         account, account_detail, bill, category, investment_execution, investment_sms_event,
         market_closed_day, preference, recurring_investment, sms_template, transfer,
     },
+    investment_funds,
     sms_templates::{MatchedSms, TemplateConfig},
     AppState, SessionDek,
 };
@@ -499,7 +500,6 @@ struct InvestmentFormTemplate {
     fee_rate: String,
     strategy: String,
     index_code: String,
-    sms_fund_name: String,
     from_account_id: i64,
     fund_account_id: i64,
     start_date: String,
@@ -535,8 +535,6 @@ pub struct InvestmentFormData {
     #[serde(default)]
     index_code: String,
     #[serde(default)]
-    sms_fund_name: String,
-    #[serde(default)]
     moving_average_days: String,
     from_account_id: i64,
     fund_account_id: i64,
@@ -563,7 +561,6 @@ struct ParsedInvestment {
     fee_rate_bps: i64,
     strategy: String,
     index_code: String,
-    sms_fund_name: String,
     moving_average_days: i32,
     from_account: account::Model,
     fund_account: account::Model,
@@ -610,19 +607,56 @@ pub struct SmartPreviewResponse {
 }
 
 async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<Vec<AccountOption>> {
-    Ok(account::Entity::find()
+    let accounts = account::Entity::find()
         .order_by_asc(account::Column::Id)
         .all(&state.db)
         .await
-        .map_err(err500)?
+        .map_err(err500)?;
+    let mut names = investment_funds::display_names(dek, &accounts);
+    Ok(accounts
         .into_iter()
+        .filter(investment_funds::is_money_account)
         .map(|account| AccountOption {
             id: account.id,
-            name: crypto::decrypt_string(dek, &account.name),
+            name: names.remove(&account.id).unwrap_or_default(),
             kind: account.kind,
             currency: account.currency,
         })
         .collect())
+}
+
+async fn account_names(state: &AppState, dek: &crypto::Dek) -> HandlerResult<HashMap<i64, String>> {
+    let accounts = account::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    Ok(investment_funds::display_names(dek, &accounts))
+}
+
+pub(crate) async fn validate_plan_accounts(
+    state: &AppState,
+    from: &account::Model,
+    fund: &account::Model,
+    strategy: &str,
+) -> HandlerResult<()> {
+    investment_funds::validate_money_account(state, from).await?;
+    investment_funds::validate_money_account(state, fund).await?;
+    if from.id == fund.id {
+        return Err(bad_request("扣款账户和基金不能相同"));
+    }
+    if matches!(from.kind.as_str(), "credit_card" | "credit_service") {
+        return Err(bad_request("信用卡和信贷服务不能作为定投扣款账户"));
+    }
+    if fund.kind != "investment_fund" {
+        return Err(bad_request("定投必须选择投资账户下的具体基金"));
+    }
+    if from.currency != fund.currency {
+        return Err(bad_request("定投扣款账户和基金必须使用相同货币"));
+    }
+    if strategy == "sms" && from.currency != "CNY" {
+        return Err(bad_request("短信实扣模式目前只支持 CNY 账户"));
+    }
+    Ok(())
 }
 
 async fn parse_form(
@@ -642,20 +676,11 @@ async fn parse_form(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("扣款账户不存在"))?;
-    if matches!(from_account.kind.as_str(), "credit_card" | "credit_service") {
-        return Err(bad_request("信用卡和信贷服务不能作为定投扣款账户"));
-    }
     let fund_account = account::Entity::find_by_id(form.fund_account_id)
         .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("基金账户不存在"))?;
-    if fund_account.kind != "investment" {
-        return Err(bad_request("定投的固定基金账户必须是投资账户"));
-    }
-    if from_account.currency != fund_account.currency {
-        return Err(bad_request("定投扣款账户和基金账户必须使用相同货币"));
-    }
     let start_date = NaiveDate::parse_from_str(form.start_date.trim(), "%Y-%m-%d")
         .map_err(|_| bad_request("开始日期格式不正确"))?;
     let strategy = match form.strategy.as_str() {
@@ -665,6 +690,7 @@ async fn parse_form(
         "sms" => "sms",
         _ => return Err(bad_request("请选择支持的扣款策略")),
     };
+    validate_plan_accounts(state, &from_account, &fund_account, strategy).await?;
     let (index_code, moving_average_days) = if strategy == "smart" {
         if crate::market_data::index_option(form.index_code.trim()).is_none() {
             return Err(bad_request("请选择支持的跟踪指数"));
@@ -680,14 +706,7 @@ async fn parse_form(
     } else {
         (String::new(), 180)
     };
-    let sms_fund_name = if strategy == "sms" {
-        if from_account.currency != "CNY" {
-            return Err(bad_request("短信实扣模式目前只支持 CNY 账户"));
-        }
-        let value = form.sms_fund_name.trim();
-        if value.is_empty() {
-            return Err(bad_request("短信实扣模式必须填写短信中的基金名称"));
-        }
+    if strategy == "sms" {
         let detail = account_detail::Entity::find_by_id(from_account.id)
             .one(&state.db)
             .await
@@ -697,10 +716,7 @@ async fn parse_form(
         if card_number.chars().filter(|ch| ch.is_ascii_digit()).count() < 4 {
             return Err(bad_request("短信实扣模式的扣款账户必须配置有效银行卡号"));
         }
-        value.to_string()
-    } else {
-        String::new()
-    };
+    }
     let amount = if strategy == "sms" {
         0
     } else if strategy == "manual" && form.amount.trim().is_empty() {
@@ -719,7 +735,6 @@ async fn parse_form(
         fee_rate_bps,
         strategy: strategy.into(),
         index_code,
-        sms_fund_name,
         moving_average_days,
         from_account,
         fund_account,
@@ -1024,7 +1039,7 @@ pub async fn new_form(
         .collect();
     let fund_accounts = accounts
         .into_iter()
-        .filter(|account| account.kind == "investment")
+        .filter(|account| account.kind == "investment_fund")
         .collect();
     let today = china_today().format("%Y-%m-%d").to_string();
     let html = InvestmentFormTemplate {
@@ -1035,7 +1050,6 @@ pub async fn new_form(
         fee_rate: "0.00".into(),
         strategy: "fixed".into(),
         index_code: "000300".into(),
-        sms_fund_name: String::new(),
         from_account_id: 0,
         fund_account_id: 0,
         start_date: today.clone(),
@@ -1072,7 +1086,6 @@ pub async fn create(
         strategy: Set(parsed.strategy),
         index_code: Set(parsed.index_code),
         moving_average_days: Set(parsed.moving_average_days),
-        sms_fund_name: Set(crypto::encrypt(&dek, parsed.sms_fund_name.as_bytes())),
         start_date: Set(parsed.start_date),
         next_trade_date: Set(next_trade_date),
         active: Set(parsed.active),
@@ -1104,7 +1117,7 @@ pub async fn edit_form(
         .collect();
     let fund_accounts = accounts
         .into_iter()
-        .filter(|account| account.kind == "investment")
+        .filter(|account| account.kind == "investment_fund")
         .collect();
     let start_date = plan.start_date.format("%Y-%m-%d").to_string();
     let stored_amount = crypto::decrypt_cents(&dek, &plan.amount);
@@ -1120,7 +1133,6 @@ pub async fn edit_form(
         fee_rate: super::fmt_cents(crypto::decrypt_cents(&dek, &plan.fee_rate_bps)),
         strategy: plan.strategy.clone(),
         index_code: plan.index_code.clone(),
-        sms_fund_name: crypto::decrypt_string(&dek, &plan.sms_fund_name),
         from_account_id: plan.from_account_id,
         fund_account_id: plan.fund_account_id,
         start_date: start_date.clone(),
@@ -1165,7 +1177,6 @@ pub async fn update(
     active.strategy = Set(parsed.strategy);
     active.index_code = Set(parsed.index_code);
     active.moving_average_days = Set(parsed.moving_average_days);
-    active.sms_fund_name = Set(crypto::encrypt(&dek, parsed.sms_fund_name.as_bytes()));
     active.start_date = Set(parsed.start_date);
     active.next_trade_date = Set(next_trade_date);
     active.active = Set(parsed.active);
@@ -1272,15 +1283,7 @@ async fn execute_plan_day(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("定投基金账户不存在"))?;
-    if matches!(from_account.kind.as_str(), "credit_card" | "credit_service") {
-        return Err(bad_request("信用卡和信贷服务不能作为定投扣款账户"));
-    }
-    if fund_account.kind != "investment" {
-        return Err(bad_request("定投基金账户不再是投资账户，请先修改计划"));
-    }
-    if from_account.currency != fund_account.currency {
-        return Err(bad_request("定投两端账户货币不一致，请先修改计划"));
-    }
+    validate_plan_accounts(state, &from_account, &fund_account, &plan.strategy).await?;
     let base_amount = if matches!(plan.strategy.as_str(), "manual" | "sms") {
         manual_amount.ok_or_else(|| bad_request("手动金额计划需要填写本期定投金额"))?
     } else {
@@ -1324,6 +1327,7 @@ async fn execute_plan_day(
             .ok_or_else(|| bad_request("定投金额超出范围"))?,
     )
     .await?;
+    super::accounts::ensure_balance_delta(state, dek, fund_account.id, amount).await?;
     if fee > 0 {
         ensure_fee_category(state, dek).await?;
     }
@@ -1603,14 +1607,35 @@ async fn sms_plan_matches(
     if bound_plan.is_some_and(|id| id != plan.id) {
         return Ok(false);
     }
-    let configured = normalized_sms_name(&crypto::decrypt_string(dek, &plan.sms_fund_name));
-    let incoming = normalized_sms_name(&sms.fund_name);
-    if (!incoming.is_empty() || bound_plan.is_none())
-        && (incoming.is_empty()
-            || configured.is_empty()
-            || !(configured.contains(&incoming) || incoming.contains(&configured)))
-    {
+    let Some(fund) = account::Entity::find_by_id(plan.fund_account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+    else {
         return Ok(false);
+    };
+    if fund.kind != "investment_fund" {
+        return Ok(false);
+    }
+    let Some(from) = account::Entity::find_by_id(plan.from_account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+    else {
+        return Ok(false);
+    };
+    validate_plan_accounts(state, &from, &fund, &plan.strategy).await?;
+    let incoming = normalized_sms_name(&sms.fund_name);
+    if !incoming.is_empty() || bound_plan.is_none() {
+        if incoming.is_empty()
+            || !investment_funds::sms_names(dek, &fund)?.iter().any(|name| {
+                let configured = normalized_sms_name(name);
+                !configured.is_empty()
+                    && (configured.contains(&incoming) || incoming.contains(&configured))
+            })
+        {
+            return Ok(false);
+        }
     }
     if sms.card_last4.is_empty() {
         return Ok(bound_plan.is_some());
@@ -1655,6 +1680,7 @@ async fn process_custom_sms(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("短信模板关联的账户已不存在，请修改模板"))?;
+    investment_funds::validate_money_account(state, &account).await?;
     let amount = custom
         .amount
         .ok_or_else(|| bad_request("短信模板未提取金额"))?;
@@ -1664,10 +1690,14 @@ async fn process_custom_sms(
         } else {
             "转出"
         };
+        let names = account_names(state, dek).await?;
         let detail = format!(
             "模板“{}”识别到账户 {} 的{direction} {}：{}；请选择对方账户并确认后记账",
             custom.template_name,
-            crypto::decrypt_string(dek, &account.name),
+            names
+                .get(&account.id)
+                .map(String::as_str)
+                .unwrap_or_default(),
             crate::currency::format(amount, &account.currency),
             custom.content
         );
@@ -1929,7 +1959,7 @@ async fn process_one_sms(
     }
     if matched.len() > 1 {
         let detail = format!(
-            "有多个计划同时匹配尾号 {} 和基金“{}”，请修改短信基金名称使其唯一",
+            "有多个计划同时匹配尾号 {} 和基金“{}”，请核对具体基金的银行名称及计划使其唯一",
             sms.card_last4, sms.fund_name
         );
         record_sms_event(state, dek, sms, None, "error", &detail).await?;
@@ -2025,6 +2055,7 @@ pub async fn receive_sms(
     }
     let sms = parse_sms(data)?;
     if let Some(dek) = state.any_session_dek() {
+        investment_funds::ensure_default_funds(&state, &dek).await?;
         let _balance_guard = state.balance_writes.lock().await;
         let templates = load_sms_templates(&state, &dek).await?;
         let outcome = process_one_sms(&state, &dek, &sms, &templates).await?;
@@ -2163,6 +2194,9 @@ async fn sms_source_account(
         .map_err(err500)?;
     let mut matches = Vec::new();
     for account in accounts {
+        if !investment_funds::is_money_account(&account) {
+            continue;
+        }
         let detail = account_detail::Entity::find_by_id(account.id)
             .one(&state.db)
             .await
@@ -2175,6 +2209,7 @@ async fn sms_source_account(
             .filter(|ch| ch.is_ascii_digit())
             .collect::<String>();
         if digits.ends_with(last4) {
+            investment_funds::validate_money_account(state, &account).await?;
             matches.push(account);
         }
     }
@@ -2207,6 +2242,10 @@ pub async fn sms_list(
         query.status.clear();
     }
     let accounts = account_options(&state, &dek).await?;
+    let fund_names = accounts
+        .iter()
+        .map(|account| (account.id, account.name.as_str()))
+        .collect::<HashMap<_, _>>();
     let transfer_targets = accounts.iter().cloned().collect();
     let repayment_targets = accounts
         .iter()
@@ -2221,7 +2260,19 @@ pub async fn sms_list(
         .await
         .map_err(err500)?
         .into_iter()
-        .map(|plan| (plan.id, crypto::decrypt_string(&dek, &plan.name)))
+        .map(|plan| {
+            (
+                plan.id,
+                format!(
+                    "{} · {}",
+                    crypto::decrypt_string(&dek, &plan.name),
+                    fund_names
+                        .get(&plan.fund_account_id)
+                        .copied()
+                        .unwrap_or("已删除基金")
+                ),
+            )
+        })
         .collect::<HashMap<_, _>>();
     let events = investment_sms_event::Entity::find()
         .order_by_desc(investment_sms_event::Column::OccurredAt)
@@ -2355,6 +2406,8 @@ async fn confirm_custom_sms_transfer(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("选择的对方账户不存在"))?;
+    investment_funds::validate_money_account(state, &own).await?;
+    investment_funds::validate_money_account(state, &counterpart).await?;
     let (from, to) = if snapshot.action == "transfer_in" {
         (counterpart, own)
     } else {
@@ -2388,10 +2441,11 @@ async fn confirm_custom_sms_transfer(
         "短信模板“{}”确认 · {}",
         snapshot.template_name, snapshot.content
     );
+    let names = account_names(state, dek).await?;
     let detail = format!(
         "已确认从 {} 转入 {}，金额 {}",
-        crypto::decrypt_string(dek, &from.name),
-        crypto::decrypt_string(dek, &to.name),
+        names.get(&from.id).map(String::as_str).unwrap_or_default(),
+        names.get(&to.id).map(String::as_str).unwrap_or_default(),
         crate::currency::format(amount, &from.currency)
     );
     let transaction = state.db.begin().await.map_err(err500)?;
@@ -2475,6 +2529,8 @@ pub async fn confirm_sms_transfer(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("选择的转入账户不存在"))?;
+    investment_funds::validate_money_account(&state, &from_account).await?;
+    investment_funds::validate_money_account(&state, &to_account).await?;
     if from_account.id == to_account.id {
         return Err(bad_request("转出账户和转入账户不能相同"));
     }
@@ -2535,6 +2591,7 @@ pub async fn confirm_sms_transfer(
     )
     .await?;
     super::accounts::ensure_balance_delta(&state, &dek, to_account.id, amount).await?;
+    let names = account_names(&state, &dek).await?;
     let transaction = state.db.begin().await.map_err(err500)?;
     let transfer = transfer::ActiveModel {
         from_account_id: Set(from_account.id),
@@ -2551,8 +2608,14 @@ pub async fn confirm_sms_transfer(
     .map_err(err500)?;
     let detail = format!(
         "已确认从 {} 转入 {}，金额 {} 元",
-        crypto::decrypt_string(&dek, &from_account.name),
-        crypto::decrypt_string(&dek, &to_account.name),
+        names
+            .get(&from_account.id)
+            .map(String::as_str)
+            .unwrap_or_default(),
+        names
+            .get(&to_account.id)
+            .map(String::as_str)
+            .unwrap_or_default(),
         super::fmt_cents(amount)
     );
     let mut active = event.into_active_model();

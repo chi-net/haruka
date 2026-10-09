@@ -104,6 +104,8 @@ pub async fn quote(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("转入账户不存在"))?;
+    crate::investment_funds::validate_money_account(&state, &from_account).await?;
+    crate::investment_funds::validate_money_account(&state, &to_account).await?;
     let amount = parse_amount(&query.amount)?;
     NaiveDateTime::parse_from_str(query.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确"))?;
@@ -143,6 +145,8 @@ pub async fn create(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("转入账户不存在"))?;
+    crate::investment_funds::validate_money_account(&state, &from_account).await?;
+    crate::investment_funds::validate_money_account(&state, &to_account).await?;
     let amount = parse_amount(&form.amount)?;
     let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确"))?;

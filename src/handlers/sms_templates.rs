@@ -202,11 +202,12 @@ fn parse_config(id: i64, form: TemplateFormData) -> HandlerResult<TemplateConfig
 
 async fn validate_references(state: &AppState, config: &TemplateConfig) -> HandlerResult<()> {
     if let Some(id) = config.account_id {
-        account::Entity::find_by_id(id)
+        let item = account::Entity::find_by_id(id)
             .one(&state.db)
             .await
             .map_err(err500)?
             .ok_or_else(|| bad_request("所选账户不存在，请重新选择"))?;
+        crate::investment_funds::validate_money_account(state, &item).await?;
     }
     if let Some(id) = config.plan_id {
         let plan = recurring_investment::Entity::find_by_id(id)
@@ -217,13 +218,17 @@ async fn validate_references(state: &AppState, config: &TemplateConfig) -> Handl
         if !plan.active || plan.strategy != "sms" {
             return Err(bad_request("只能绑定启用中的短信实扣定投计划"));
         }
-        for account_id in [plan.from_account_id, plan.fund_account_id] {
-            account::Entity::find_by_id(account_id)
-                .one(&state.db)
-                .await
-                .map_err(err500)?
-                .ok_or_else(|| bad_request("定投计划关联账户已删除，请先修正计划"))?;
-        }
+        let from = account::Entity::find_by_id(plan.from_account_id)
+            .one(&state.db)
+            .await
+            .map_err(err500)?
+            .ok_or_else(|| bad_request("定投计划扣款账户已删除，请先修正计划"))?;
+        let fund = account::Entity::find_by_id(plan.fund_account_id)
+            .one(&state.db)
+            .await
+            .map_err(err500)?
+            .ok_or_else(|| bad_request("定投计划基金已删除，请先修正计划"))?;
+        super::investments::validate_plan_accounts(state, &from, &fund, &plan.strategy).await?;
     }
     if let Some(id) = config.category_id {
         let item = category::Entity::find_by_id(id)
@@ -250,16 +255,23 @@ async fn load_references(
         .into_iter()
         .map(|item| (item.account_id, item))
         .collect();
-    let accounts = account::Entity::find()
+    let account_models = account::Entity::find()
         .order_by_asc(account::Column::Id)
         .all(&state.db)
         .await
-        .map_err(err500)?
-        .into_iter()
+        .map_err(err500)?;
+    let names = crate::investment_funds::display_names(dek, &account_models);
+    let accounts = account_models
+        .iter()
+        .filter(|item| crate::investment_funds::is_money_account(item))
         .map(|item| ReferenceOption {
             id: item.id,
-            name: super::bills::account_display_name(dek, &item, details.get(&item.id)),
-            kind: item.kind,
+            name: if item.kind == "investment_fund" {
+                names.get(&item.id).cloned().unwrap_or_default()
+            } else {
+                super::bills::account_display_name(dek, item, details.get(&item.id))
+            },
+            kind: item.kind.clone(),
             selected: config.account_id == Some(item.id),
         })
         .collect();
@@ -272,7 +284,14 @@ async fn load_references(
         .filter(|item| item.active && item.strategy == "sms")
         .map(|item| ReferenceOption {
             id: item.id,
-            name: crypto::decrypt_string(dek, &item.name),
+            name: format!(
+                "{} · {}",
+                crypto::decrypt_string(dek, &item.name),
+                names
+                    .get(&item.fund_account_id)
+                    .map(String::as_str)
+                    .unwrap_or("已删除基金")
+            ),
             kind: String::new(),
             selected: config.plan_id == Some(item.id),
         })

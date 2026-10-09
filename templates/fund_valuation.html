@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} - 批量校准基金价值 - haruka{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-2">{{ name }} · 批量校准基金价值</h1><p class="text-sm text-gray-500 mb-4">当前总价值：{{ total }} · {{ currency }}</p>
+<div class="rounded border border-blue-200 bg-blue-50 text-blue-800 p-4 mb-4 text-sm">请按月至少每 30 天核对实际持仓。左侧只读，右侧预填当前价值；未勾选“已核对”的留空或未修改行不会写入，也不会覆盖期间的新流水。明确填写 0 会清空该基金价值。价值未变但已实际核对时，勾选“已核对”可更新核对日期并保存零差额审计；留空且勾选表示核对左侧价值。修改或勾选的行如有新流水，整批拒绝保存，请刷新重新核对。所有差额仅记录为不可删除的估值审计，不计普通收支，不产生转账。</div>
+<form method="post" action="/accounts/{{ id }}/funds/valuation" hx-confirm="确认保存已修改或已核对基金的价值和审计？" class="bg-white rounded border border-gray-200 p-4">
+<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left p-2">基金</th><th class="text-right p-2">当前价值（只读）</th><th class="text-left p-2">实际持仓价值（{{ currency }}）</th><th class="p-2">已核对</th></tr></thead><tbody>{% for f in funds %}<tr><td class="p-2">{{ f.name }}{% if f.overdue %}<span class="block text-xs text-amber-700">超过 30 天未核对</span>{% endif %}</td><td class="p-2 text-right font-mono">{{ f.value }}</td><td class="p-2"><input type="hidden" name="baseline_{{ f.id }}" value="{{ f.baseline }}"><input aria-label="{{ f.name }} 实际持仓价值" name="target_{{ f.id }}" value="{{ f.target }}" type="number" min="0" step="0.01" inputmode="decimal" class="w-full border rounded px-3 py-2 font-mono"></td><td class="p-2 text-center"><input type="checkbox" name="reviewed_{{ f.id }}" value="1" aria-label="{{ f.name }} 已核对"></td></tr>{% endfor %}</tbody></table></div>
+<div class="flex gap-3 mt-4"><button class="bg-blue-600 text-white rounded px-4 py-2">保存本批次校准</button><a href="/accounts/{{ id }}/funds" class="text-gray-600 px-4 py-2">返回基金</a></div>
+</form>
+{% endblock %}
