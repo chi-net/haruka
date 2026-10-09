@@ -7,7 +7,10 @@ use axum::{
     Json,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, IntoActiveModel, QueryFilter,
+    Set, TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use webauthn_rs::prelude::{Passkey, PublicKeyCredential, RegisterPublicKeyCredential, Uuid};
@@ -83,17 +86,26 @@ fn unwrap_passkey_dek(row: &passkey::Model, kek: &[u8]) -> HandlerResult<Option<
 }
 
 async fn add_compatible_wrapper(
-    state: &AppState,
-    row: passkey::Model,
+    db: &DatabaseConnection,
+    passkey_id: i64,
     dek: &crypto::Dek,
     kek: &[u8],
 ) -> HandlerResult<()> {
+    // 在事务内重读，避免两台同步设备绑定时用旧快照覆盖另一台的包裹。
+    let transaction = db.begin().await.map_err(err500)?;
+    let row = passkey::Entity::find_by_id(passkey_id)
+        .one(&transaction)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("Passkey 不存在"))?;
     if unwrap_passkey_dek(&row, kek)?.is_some() {
         return Ok(());
     }
     let mut wrappers = compatible_wrappers(&row)?;
     if wrappers.len() >= MAX_COMPATIBLE_WRAPPERS {
-        return Err(bad_request("这个 Passkey 的浏览器兼容绑定数量已达上限"));
+        return Err(bad_request(
+            "这个 Passkey 的设备兼容绑定数量已达上限，请用主密码解锁后在设置中重新添加 Passkey",
+        ));
     }
     let (nonce, wrapped) = crypto::wrap_dek(dek, kek);
     wrappers.push(CompatibleWrapper {
@@ -102,7 +114,8 @@ async fn add_compatible_wrapper(
     });
     let mut active = row.into_active_model();
     active.dek_wrappers = Set(serde_json::to_string(&wrappers).map_err(err500)?);
-    active.update(&state.db).await.map_err(err500)?;
+    active.update(&transaction).await.map_err(err500)?;
+    transaction.commit().await.map_err(err500)?;
     Ok(())
 }
 
@@ -372,7 +385,7 @@ pub async fn finish_authentication(
         let mut response = Json(json!({
             "repair_required": true,
             "repair_flow_id": id,
-            "error": "Firefox/macOS 返回了与注册时不同的 PRF 输出，请用主密码进行一次兼容绑定"
+            "error": "Passkey 签名已验证，但当前设备或凭据提供方返回的 PRF 无法解开已有密钥包裹。请在五分钟内用主密码绑定本次 PRF；原设备的包裹会保留"
         }))
         .into_response();
         response.headers_mut().insert(
@@ -434,12 +447,7 @@ pub async fn repair_authentication(
         password_kek.as_slice(),
     )
     .ok_or((StatusCode::UNAUTHORIZED, "主密码错误".into()))?;
-    let row = passkey::Entity::find_by_id(passkey_id)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or_else(|| bad_request("Passkey 不存在"))?;
-    add_compatible_wrapper(&state, row, &dek, passkey_kek.as_slice()).await?;
+    add_compatible_wrapper(&state.db, passkey_id, &dek, passkey_kek.as_slice()).await?;
     state.passkey_repairs.lock().await.remove(&form.flow_id);
 
     crate::handlers::auth::ensure_default_account(&state, &dek).await?;
@@ -464,4 +472,107 @@ pub async fn delete(
         .await
         .map_err(err500)?;
     Ok(axum::response::Redirect::to("/settings"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::{ConnectionTrait, Database, Schema};
+
+    #[test]
+    fn prf_requires_exactly_32_decoded_bytes() {
+        for length in [0, 31, 33] {
+            assert!(decode_prf(&URL_SAFE_NO_PAD.encode(vec![7; length])).is_err());
+        }
+        assert!(decode_prf("not/base64!").is_err());
+        assert_eq!(
+            decode_prf(&URL_SAFE_NO_PAD.encode([7; 32])).unwrap(),
+            [7; 32]
+        );
+    }
+
+    async fn wrapper_fixture() -> (DatabaseConnection, passkey::Model, crypto::Dek) {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let backend = db.get_database_backend();
+        let table = Schema::new(backend).create_table_from_entity(passkey::Entity);
+        db.execute(backend.build(&table)).await.unwrap();
+        let dek = crypto::Dek::new([19; crypto::DEK_LEN]);
+        let (nonce, wrapped) = crypto::wrap_dek(&dek, &[1; crypto::DEK_LEN]);
+        let row = passkey::ActiveModel {
+            credential_id: Set(vec![42]),
+            credential: Set("{}".into()),
+            name: Set(crypto::encrypt(&dek, b"synced passkey")),
+            dek_nonce: Set(nonce),
+            wrapped_dek: Set(wrapped),
+            dek_wrappers: Set("[]".into()),
+            created_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        (db, row, dek)
+    }
+
+    #[tokio::test]
+    async fn device_bindings_preserve_original_and_previous_wrappers() {
+        let (db, original, dek) = wrapper_fixture().await;
+        for key in [2, 3, 2] {
+            add_compatible_wrapper(&db, original.id, &dek, &[key; crypto::DEK_LEN])
+                .await
+                .unwrap();
+        }
+        let row = passkey::Entity::find_by_id(original.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.dek_nonce, original.dek_nonce);
+        assert_eq!(row.wrapped_dek, original.wrapped_dek);
+        assert_eq!(compatible_wrappers(&row).unwrap().len(), 2);
+        for key in [1, 2, 3] {
+            assert_eq!(
+                unwrap_passkey_dek(&row, &[key; crypto::DEK_LEN])
+                    .unwrap()
+                    .unwrap()
+                    .as_slice(),
+                dek.as_slice()
+            );
+        }
+        assert!(unwrap_passkey_dek(&row, &[4; crypto::DEK_LEN])
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn binding_limit_does_not_remove_working_wrappers() {
+        let (db, original, dek) = wrapper_fixture().await;
+        for key in 2..=(MAX_COMPATIBLE_WRAPPERS as u8 + 1) {
+            add_compatible_wrapper(&db, original.id, &dek, &[key; crypto::DEK_LEN])
+                .await
+                .unwrap();
+        }
+        assert!(
+            add_compatible_wrapper(&db, original.id, &dek, &[99; crypto::DEK_LEN])
+                .await
+                .is_err()
+        );
+        let row = passkey::Entity::find_by_id(original.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        for key in 1..=(MAX_COMPATIBLE_WRAPPERS as u8 + 1) {
+            assert_eq!(
+                unwrap_passkey_dek(&row, &[key; crypto::DEK_LEN])
+                    .unwrap()
+                    .unwrap()
+                    .as_slice(),
+                dek.as_slice()
+            );
+        }
+        assert!(unwrap_passkey_dek(&row, &[99; crypto::DEK_LEN])
+            .unwrap()
+            .is_none());
+    }
 }

@@ -11,10 +11,10 @@
     <button data-passkey-login="platform" type="button" class="w-full bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50">使用 Passkey 进行登录</button>
     <!-- <button data-passkey-login="external" type="button" class="w-full mt-2 border border-gray-300 bg-white text-gray-700 text-sm px-4 py-2 rounded hover:bg-gray-50 disabled:opacity-50">使用手机或安全密钥</button> -->
     <p id="passkey-login-status" class="hidden text-sm mt-3" role="status"></p>
-    <form id="passkey-repair-form" class="hidden mt-4 pt-4 border-t border-gray-100 space-y-3">
+    <form id="passkey-repair-form" hx-boost="false" class="hidden mt-4 pt-4 border-t border-gray-100 space-y-3">
       <div><label class="block text-sm text-gray-600 mb-1">密码</label><input id="passkey-repair-password" type="password" required autocomplete="current-password" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm" placeholder="仅本次兼容绑定需要"></div>
-      <p class="text-xs text-gray-500">验证一次密码后，会为同一个 Passkey 保存 Firefox 当前 PRF 路径的兼容包裹；原有 Safari/其他浏览器登录不会失效。</p>
-      <button type="submit" class="w-full bg-amber-600 text-white text-sm px-4 py-2 rounded hover:bg-amber-700">兼容当前浏览器并解锁</button>
+      <p class="text-xs text-gray-500">仅在同一个 Passkey 已通过签名验证、但本次 PRF 无法解开已有包裹时，需要在五分钟内验证一次主密码。绑定当前设备或凭据提供方返回的 PRF，不覆盖原包裹，MacBook 等原设备仍可登录。没有 PRF 时不能绑定。</p>
+      <button type="submit" class="w-full bg-amber-600 text-white text-sm px-4 py-2 rounded hover:bg-amber-700">绑定当前设备并解锁</button>
     </form>
   </div>
   <div class="flex items-center gap-3 mb-4"><span class="h-px bg-gray-200 flex-1"></span><span class="text-xs text-gray-400">或使用密码进行解锁</span><span class="h-px bg-gray-200 flex-1"></span></div>
@@ -36,17 +36,20 @@ for (const button of document.querySelectorAll('[data-passkey-login]')) {
 button.addEventListener('click', async () => {
   const buttons = document.querySelectorAll('[data-passkey-login]');
   const status = document.getElementById('passkey-login-status');
+  window.harukaPasskeyRepairFlow = '';
+  document.getElementById('passkey-repair-form').classList.add('hidden');
+  document.getElementById('passkey-repair-password').value = '';
   for (const item of buttons) item.disabled = true;
   status.className = 'text-sm text-blue-600 mt-3';
   status.textContent = button.dataset.passkeyLogin === 'platform'
-    ? '正在打开此 Mac 的 Passkey…'
+    ? '正在打开此设备的 Passkey（包括已通过 iCloud 同步的凭据）…'
     : '正在等待手机或安全密钥…';
   try {
     const result = await harukaLoginWithPasskey(button.dataset.passkeyLogin);
     if (result.repair_required) {
       window.harukaPasskeyRepairFlow = result.repair_flow_id;
       status.className = 'text-sm text-amber-700 mt-3';
-      status.textContent = result.error || '需要进行一次浏览器兼容绑定。';
+      status.textContent = result.error || '已验证 Passkey，但需要用主密码进行一次设备兼容绑定。';
       document.getElementById('passkey-repair-form').classList.remove('hidden');
       document.getElementById('passkey-repair-password').focus();
       return;
@@ -55,6 +58,7 @@ button.addEventListener('click', async () => {
   } catch (error) {
     status.className = 'text-sm text-red-600 mt-3';
     status.textContent = harukaPasskeyError(error);
+  } finally {
     for (const item of buttons) item.disabled = false;
   }
 });
@@ -66,7 +70,7 @@ document.getElementById('passkey-repair-form').addEventListener('submit', async 
   const status = document.getElementById('passkey-login-status');
   button.disabled = true;
   status.className = 'text-sm text-blue-600 mt-3';
-  status.textContent = '正在验证主密码并保存 Firefox 兼容绑定…';
+  status.textContent = '正在验证主密码并绑定当前设备的 PRF…';
   try {
     const result = await harukaRepairPasskey(
       window.harukaPasskeyRepairFlow,

@@ -25,7 +25,7 @@ function harukaCreateOptions(payload, authenticatorMode) {
   });
   options.authenticatorSelection = Object.assign({}, options.authenticatorSelection || {});
   if (authenticatorMode === 'platform') {
-    // Firefox/macOS 不会总是从无偏好的挑战中选择 iCloud 钥匙串，明确请求本机平台凭据。
+    // 本机模式请求可发现凭据；同步到手机的同一凭据也通过此入口使用。
     options.authenticatorSelection.authenticatorAttachment = 'platform';
     options.authenticatorSelection.residentKey = 'required';
     options.authenticatorSelection.requireResidentKey = true;
@@ -39,14 +39,14 @@ function harukaCreateOptions(payload, authenticatorMode) {
   return { publicKey: options };
 }
 
-function harukaRequestOptions(payload, authenticatorMode) {
+function harukaRequestOptions(payload, authenticatorMode, discoverable = true) {
   const options = payload.options.publicKey;
   options.challenge = harukaB64urlToBytes(options.challenge);
   const allowed = options.allowCredentials || [];
   for (const item of allowed) item.id = harukaB64urlToBytes(item.id);
   if (authenticatorMode === 'platform') {
-    // Firefox/macOS 需要可发现凭据流程才会稳定打开 iCloud 钥匙串，而不是外部设备面板。
-    options.allowCredentials = [];
+    // 登录使用可发现流程；注册后的确认必须只允许刚创建的凭据。
+    options.allowCredentials = discoverable ? [] : allowed;
     options.hints = ['client-device'];
   } else {
     options.allowCredentials = allowed;
@@ -58,9 +58,21 @@ function harukaRequestOptions(payload, authenticatorMode) {
   return { publicKey: options };
 }
 
+function harukaPrfResult(extensions, required) {
+  const result = extensions.prf && extensions.prf.results && extensions.prf.results.first;
+  if (!result) {
+    if (required) {
+      throw new Error('当前设备或凭据提供方没有返回 WebAuthn PRF，不能解锁加密数据或进行兼容绑定。请先用主密码解锁，并检查系统、凭据提供方和浏览器的 PRF 支持；不要删除原设备的 Passkey。');
+    }
+    return null;
+  }
+  if (result.byteLength !== 32) throw new Error('Passkey 返回的 PRF 长度无效，必须为 32 字节。请用主密码解锁并检查凭据提供方。');
+  return harukaBytesToB64url(result);
+}
+
 function harukaRegistrationCredential(credential) {
   const extensions = credential.getClientExtensionResults();
-  const result = extensions.prf && extensions.prf.results && extensions.prf.results.first;
+  const result = harukaPrfResult(extensions, false);
   return {
     json: {
       id: credential.id,
@@ -74,14 +86,13 @@ function harukaRegistrationCredential(credential) {
       clientExtensionResults: extensions
     },
     prfEnabled: Boolean(extensions.prf && extensions.prf.enabled),
-    prfResult: harukaBytesToB64url(result)
+    prfResult: result
   };
 }
 
 function harukaAuthenticationCredential(credential) {
   const extensions = credential.getClientExtensionResults();
-  const result = extensions.prf && extensions.prf.results && extensions.prf.results.first;
-  if (!result) throw new Error('此浏览器或认证器没有返回 WebAuthn PRF 结果，无法解锁加密数据');
+  const result = harukaPrfResult(extensions, true);
   return {
     json: {
       id: credential.id,
@@ -95,7 +106,7 @@ function harukaAuthenticationCredential(credential) {
       },
       clientExtensionResults: extensions
     },
-    prfResult: harukaBytesToB64url(result)
+    prfResult: result
   };
 }
 
@@ -117,12 +128,12 @@ async function harukaJson(url, body) {
 
 async function harukaRequireWebAuthn() {
   if (!window.PublicKeyCredential || !navigator.credentials) {
-    throw new Error('当前浏览器不支持 Passkey');
+    throw new Error('当前访问环境不能使用 Passkey。请通过与注册时一致的 HTTPS 域名访问；本机开发仅支持 localhost。也可以先用主密码解锁。');
   }
   if (PublicKeyCredential.getClientCapabilities) {
     const capabilities = await PublicKeyCredential.getClientCapabilities();
     if (capabilities['extension:prf'] === false) {
-      throw new Error('当前浏览器明确不支持 WebAuthn PRF，无法用于解锁加密数据');
+      throw new Error('当前环境明确不支持 WebAuthn PRF，不能解锁加密数据。请先用主密码解锁，再检查系统、凭据提供方和浏览器的 PRF 支持。');
     }
   }
 }
@@ -140,7 +151,7 @@ async function harukaEnrollPasskey(name, authenticatorMode) {
     prf_result: registration.prfResult
   });
   if (confirm.complete) return;
-  const asserted = await navigator.credentials.get(harukaRequestOptions(confirm, authenticatorMode || 'platform'));
+  const asserted = await navigator.credentials.get(harukaRequestOptions(confirm, authenticatorMode || 'platform', false));
   if (!asserted) throw new Error('浏览器没有确认 Passkey');
   const authentication = harukaAuthenticationCredential(asserted);
   await harukaJson('/settings/passkeys/register/complete', {
@@ -172,8 +183,8 @@ async function harukaRepairPasskey(flowId, password) {
 }
 
 function harukaPasskeyError(error) {
-  if (error && error.name === 'NotAllowedError') return '已取消 Passkey 操作，或操作等待超时。';
-  if (error && error.name === 'SecurityError') return 'Passkey 来源配置不匹配；请使用服务器配置的域名访问。';
+  if (error && error.name === 'NotAllowedError') return '已取消 Passkey 操作，或操作等待超时。请确认此设备已同步对应 Passkey，并使用与注册时一致的域名；可重试或先用主密码解锁。';
+  if (error && error.name === 'SecurityError') return 'Passkey 来源配置不匹配；请使用注册时相同、与服务器 PASSKEY_ORIGIN / PASSKEY_RP_ID 配置一致的 HTTPS 域名访问。';
   return error && error.message ? error.message : 'Passkey 操作失败';
 }
 </script>

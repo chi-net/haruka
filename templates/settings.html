@@ -61,12 +61,12 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium">Passkey 登录</h2>
-  <p class="text-sm text-gray-500 mt-1 mb-3">Passkey 基于 WebAuthn，可以让你轻松使用设备解锁、Touch ID、Windows Hello 或安全密钥直接解锁账本，但需要浏览器与认证器支持 WebAuthn PRF。</p>
-  <form id="passkey-enroll-form" class="flex flex-wrap gap-2 mb-4">
+  <p class="text-sm text-gray-500 mt-1 mb-3">Passkey 使用 Touch ID、Face ID、Windows Hello 或安全密钥验证身份，并要求 WebAuthn PRF 解锁加密账本。iCloud 可将 Passkey 同步到其他 Apple 设备；同步设备请使用注册时相同的域名和凭据。如果合法认证后本次 PRF 与原包裹不兼容，可用主密码做一次设备绑定，保留原设备包裹；没有 PRF 时不能使用 Passkey 解锁。</p>
+  <form id="passkey-enroll-form" hx-boost="false" class="flex flex-wrap gap-2 mb-4">
     <input id="passkey-name" required maxlength="80" autocomplete="off" placeholder="例如：MacBook Touch ID" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
     <select id="passkey-authenticator" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">
-      <option value="platform">Passkey 添加渠道1</option>
-      <option value="external">Passkey 添加渠道2</option>
+      <option value="platform">此设备（可同步 Passkey）</option>
+      <option value="external">手机或安全密钥</option>
     </select>
     <button id="passkey-enroll-button" type="submit" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">添加 Passkey</button>
   </form>
