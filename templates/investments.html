@@ -2,11 +2,11 @@
 {% block title %}定投 - haruka{% endblock %}
 {% block content %}
 <div class="flex flex-wrap items-start justify-between gap-3 mb-5">
-  <div><h1 class="text-xl font-bold">每日定投</h1><p class="text-sm text-gray-500 mt-1">支持固定金额、指数聪明定投、每日手动金额和招商银行短信实扣。</p></div>
+  <div><h1 class="text-xl font-bold">每日定投</h1><p class="text-sm text-gray-500 mt-1">支持固定金额、指数聪明定投、每日手动金额和银行短信实扣。</p></div>
   <a href="/investments/new" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">新增定投</a>
 </div>
 
-<section id="investment-runner" data-auto-run="{% if calendar_warning %}false{% else if automatic_due_count > 0 %}true{% else %}false{% endif %}" data-pending-sms="{{ pending_sms_count }}" class="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-5">
+<section id="investment-runner" data-auto-run="{% if calendar_warning %}false{% else if automatic_due_count > 0 %}true{% else %}false{% endif %}" class="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-5">
   <div class="flex flex-wrap items-center justify-between gap-3">
     <div><p class="text-sm font-medium text-blue-900">解锁后自动补执行</p><p class="text-xs text-blue-700 mt-1">今天（北京时间 {{ today }}）有 {{ automatic_due_count }} 个固定或聪明定投待自动执行。手动计划在下方确认，短信计划等待银行短信；所有模式都按计划和日期幂等去重。</p></div>
     <button id="investment-run-button" type="button" class="shrink-0 rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">检查并执行</button>
@@ -61,9 +61,9 @@
   {% if executions.is_empty() %}<p class="p-4 text-sm text-gray-500">尚无定投执行记录。</p>{% else %}<div class="overflow-x-auto"><table class="w-full text-sm"><thead class="bg-gray-50 text-gray-500"><tr><th class="text-left px-4 py-2">交易日</th><th class="text-left px-4 py-2">计划</th><th class="text-left px-4 py-2">策略与依据</th><th class="text-left px-4 py-2">资金流向</th><th class="text-right px-4 py-2">本金</th><th class="text-right px-4 py-2">手续费</th></tr></thead><tbody class="divide-y divide-gray-100">{% for item in executions %}<tr><td class="px-4 py-2 font-mono whitespace-nowrap">{{ item.trade_date }}</td><td class="px-4 py-2">{{ item.plan_name }}</td><td class="px-4 py-2"><div>{{ item.strategy }}</div>{% if !item.decision.is_empty() %}<div class="text-xs text-gray-500 mt-1 min-w-72">{{ item.decision }}</div>{% endif %}</td><td class="px-4 py-2 text-gray-500">{{ item.from_account }} → {{ item.fund_account }}</td><td class="px-4 py-2 text-right font-mono">{{ item.amount }}</td><td class="px-4 py-2 text-right font-mono text-red-600">{{ item.fee }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
 </section>
 
-<section class="bg-white rounded-lg border border-gray-200 mt-6 overflow-hidden">
-  <div class="px-4 py-3 border-b border-gray-100"><h2 class="font-medium">招商银行短信功能</h2>此功能需要配合 招商银行短信通知 和 Shortcuts 进行使用，添加快捷指令：https://www.icloud.com/shortcuts/a61e4d6c37be467f8d1354a625fde6b5</div>
-  {% if sms_events.is_empty() %}<p class="p-4 text-sm text-gray-500">尚无短信处理记录。</p>{% else %}<div class="divide-y divide-gray-100">{% for event in sms_events %}<article class="p-4 {% if event.danger %}bg-red-50{% endif %}"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="font-medium {% if event.danger %}text-red-800{% endif %}">{{ event.plan_name }}</div><p class="text-sm mt-1 {% if event.danger %}text-red-700{% else %}text-gray-600{% endif %}">{{ event.detail }}</p></div><time data-utc-time="{{ event.occurred_at }}" class="text-xs text-gray-500">{{ event.occurred_at }}</time></div>{% if event.pending %}<form method="post" action="/investments/sms-events/{{ event.id }}/confirm" class="mt-3 flex flex-wrap items-end gap-2 rounded border border-blue-200 bg-blue-50 p-3"><div class="min-w-48 flex-1"><label class="block text-xs text-blue-800 mb-1">{% if event.repayment %}还款进入的信用账户{% else %}本人名下的转入账户{% endif %}</label><select name="to_account_id" required class="w-full border border-blue-200 rounded bg-white px-3 py-1.5 text-sm">{% if event.repayment %}{% for account in repayment_targets %}<option value="{{ account.id }}">{{ account.name }} · {{ account.currency }}</option>{% endfor %}{% else %}{% for account in transfer_targets %}<option value="{{ account.id }}">{{ account.name }} · {{ account.currency }}</option>{% endfor %}{% endif %}</select></div><button class="rounded bg-blue-600 px-3 py-1.5 text-sm text-white">确认生成转账</button></form>{% endif %}<details class="mt-2 text-xs text-gray-500"><summary class="cursor-pointer">查看原始短信</summary><p class="mt-2 break-words">{{ event.raw }}</p></details></article>{% endfor %}</div>{% endif %}
+<section class="bg-white rounded-lg border border-gray-200 p-4 mt-6 text-sm">
+  <h2 class="font-medium">银行短信实扣</h2><p class="text-gray-600 mt-2">短信模式计划按银行实扣金额记账，可使用内置招商银行模板或自定义银行模板。短信处理记录、待确认转账与信用卡还款集中在独立短信页。</p>
+  <a href="/sms" class="inline-block mt-2 text-blue-600 hover:underline">查看和处理短信</a>
 </section>
 
 <details class="bg-white rounded-lg border border-gray-200 mt-6">
@@ -76,19 +76,6 @@
 </details>
 
 <script>
-(() => {
-  const runner = document.getElementById('investment-runner');
-  if (!runner) return;
-  fetch('/investments/process-sms', { method: 'POST', headers: { Accept: 'application/json' }, cache: 'no-store' })
-    .then(async response => {
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || payload.message || `HTTP ${response.status}`);
-      if (payload.processed > 0 && (!payload.failures || payload.failures.length === 0)) window.location.reload();
-      if (payload.failures && payload.failures.length) window.harukaShowError(`短信需要处理：${payload.failures.join('；')}`);
-    })
-    .catch(error => window.harukaShowError(`短信处理失败：${error.message || error}`));
-})();
-
 (() => {
   const runner = document.getElementById('investment-runner');
   const button = document.getElementById('investment-run-button');

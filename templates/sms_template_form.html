@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} - haruka{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between gap-3 mb-5"><h1 class="text-xl font-bold">{{ heading }}</h1><a href="/sms/templates" class="text-sm text-blue-600 hover:underline">返回模板</a></div>
+<div class="rounded-lg border border-amber-200 bg-amber-50 p-4 mb-5 text-sm text-amber-900">
+  <p>本功能只创建账本记录，不接入银行或发起支付。转入／转出永远等待手动确认；只有明确选择收入／支出动作才自动生成普通账单。审计动作不改变账户余额。</p>
+  <p class="mt-2">自定义模板优先于内置招商银行模板；多个模板同时匹配会报错。编辑或删除模板不会改写已有候选的匹配快照。停用模板仍可预览，但不会用于实际接收。</p>
+</div>
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium text-sm">可直接使用的预设</h2><p class="text-xs text-gray-500 mt-2">点击仅填写下面的草稿与样例，不保存、不接收短信、不记账。请核对实际短信格式；转账／快捷支付需选择短信所属账户。招商银行定投可不绑定计划，使用尾号与基金名称匹配现有短信实扣计划。</p>
+  <div class="flex flex-wrap gap-2 mt-3"><button type="button" data-preset="cmb-success" class="rounded border border-gray-300 px-3 py-1.5 text-sm">招行定投成功</button><button type="button" data-preset="cmb-failure" class="rounded border border-gray-300 px-3 py-1.5 text-sm">招行定投失败</button><button type="button" data-preset="cmb-transfer" class="rounded border border-gray-300 px-3 py-1.5 text-sm">招行实时转账</button><button type="button" data-preset="cmb-payment" class="rounded border border-gray-300 px-3 py-1.5 text-sm">招行快捷支付</button><button type="button" data-preset="generic" class="rounded border border-gray-300 px-3 py-1.5 text-sm">通用金额／内容示例</button></div>
+</section>
+<form id="sms-template-form" method="post" action="{{ submit_action }}" class="bg-white rounded-lg border border-gray-200 p-4 sm:p-6 space-y-4">
+  <div><label for="template-name" class="block text-sm font-medium mb-1">模板名称</label><input id="template-name" name="name" value="{{ config.name }}" maxlength="80" required class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></div>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div><label for="template-sender" class="block text-sm font-medium mb-1">发送号码</label><input id="template-sender" name="sender" value="{{ config.sender }}" maxlength="128" placeholder="例如 95555；留空表示不限" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></div>
+    <div><label for="template-bank-tag" class="block text-sm font-medium mb-1">银行标记</label><input id="template-bank-tag" name="bank_tag" value="{{ config.bank_tag }}" placeholder="例如 招商银行 或 【招商银行】" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></div>
+  </div>
+  <p class="text-xs text-gray-500">至少填写发送号码或银行标记之一；发送号码精确匹配，银行标记匹配短信任意位置的【标记】。同时填写必须全部满足（AND）。这些条件不是身份认证，API 仍需 Bearer 令牌。</p>
+  <div><label for="template-pattern" class="block text-sm font-medium mb-1">命名正则表达式</label><textarea id="template-pattern" name="pattern" rows="5" required spellcheck="false" class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ config.pattern }}</textarea><p class="text-xs text-gray-500 mt-1">最多 4096 字节，匹配原始短信。使用 Rust 安全正则，不支持前后查找（lookaround）或反向引用；建议用 ^ 和 $ 限定整条短信。</p></div>
+  <div><label for="template-action" class="block text-sm font-medium mb-1">匹配后动作</label><select id="template-action" name="action" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white"><option value="audit" {% if config.action == "audit" %}selected{% endif %}>仅保留审计记录（不改变余额）</option><option value="investment_success" {% if config.action == "investment_success" %}selected{% endif %}>定投扣款成功</option><option value="investment_failure" {% if config.action == "investment_failure" %}selected{% endif %}>定投扣款失败（不扣款）</option><option value="transfer_out" {% if config.action == "transfer_out" %}selected{% endif %}>转出候选（手动确认另一账户）</option><option value="transfer_in" {% if config.action == "transfer_in" %}selected{% endif %}>转入候选（手动确认另一账户）</option><option value="expense" {% if config.action == "expense" %}selected{% endif %}>自动生成支出账单（明确启用）</option><option value="income" {% if config.action == "income" %}selected{% endif %}>自动生成收入账单（明确启用）</option></select></div>
+  <div id="template-account-field"><label for="template-account" class="block text-sm font-medium mb-1">短信所属账户</label><select id="template-account" name="account_id" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white"><option value="">请选择账户</option>{% for item in accounts %}<option value="{{ item.id }}" {% if item.selected %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select><p class="text-xs text-gray-500 mt-1">转出时是转出账户，转入时是转入账户；另一账户在短信页手动选择且必须同币种。信用账户转出只可使用已有正余额，不能借款转账。</p></div>
+  <div id="template-plan-field"><label for="template-plan" class="block text-sm font-medium mb-1">绑定定投计划（可选）</label><select id="template-plan" name="plan_id" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white"><option value="">不绑定，按账户尾号和基金名称匹配</option>{% for item in plans %}<option value="{{ item.id }}" {% if item.selected %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select><p class="text-xs text-gray-500 mt-1">只可选择启用中的短信实扣计划。不绑定时必须提取 last4 和 fund（或用 content 作为基金名）；绑定时如提取了 last4／fund，仍须与计划一致。</p></div>
+  <div id="template-category-field"><label for="template-category" class="block text-sm font-medium mb-1">账单分类</label><select id="template-category" name="category_id" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white"><option value="">请选择同类型分类</option>{% for item in categories %}<option value="{{ item.id }}" data-kind="{{ item.kind }}" {% if item.selected %}selected{% endif %}>{{ item.name }}（{% if item.kind == "income" %}收入{% else %}支出{% endif %}）</option>{% endfor %}</select><p class="text-xs text-gray-500 mt-1">只展示与动作一致的分类。自动账单按所选账户币种记账；食品属性沿用所选分类。余额不足或关联项被删除会明确报错，不生成账单。</p></div>
+  <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="enabled" value="on" {% if config.enabled %}checked{% endif %}>启用此模板</label>
+  <div class="flex items-center gap-4"><button type="submit" class="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">保存模板</button><a href="/sms/templates" class="text-sm text-gray-500">取消</a></div>
+</form>
+<section class="bg-white rounded-lg border border-gray-200 p-4 mt-5 text-sm">
+  <h2 class="font-medium">命名捕获帮助</h2>
+  <ul class="list-disc pl-5 space-y-2 mt-3 text-gray-600">
+    <li><code>(?P&lt;amount&gt;[0-9]+(?:\.[0-9]{1,2})?)</code> 提取金额，以元为单位输入，内部为整数分。金额必须大于 0；支持规范千分位如 1,234.56。定投成功、转账、收入／支出需要 amount。</li>
+    <li><code>(?P&lt;content&gt;.+?)</code> 提取备注／收款人／失败原因；<code>(?P&lt;fund&gt;.+?)</code> 提取基金名。除仅审计以外需相应的 content 或 fund。不要把整个短信命名为 amount。</li>
+    <li><code>(?P&lt;last4&gt;[0-9]{4})</code> 提取四位账户尾号；可选的 <code>balance</code> 提取非负余额。仅审计可不提取金额或内容。</li>
+    <li>可选时间字段：<code>year</code>、<code>month</code>＋<code>day</code>、<code>hour</code>＋<code>minute</code>。月日／时分须成对，提取的日期时间必须与 API time 的北京时间一致；不提取日期则使用 API 时间。</li>
+  </ul>
+  <details class="mt-3"><summary class="cursor-pointer text-blue-600">可复制的通用金额与内容表达式</summary><pre class="mt-2 whitespace-pre-wrap break-words rounded bg-gray-50 p-3">^【示例银行】金额(?P&lt;amount&gt;[0-9]+(?:\.[0-9]{1,2})?)元，内容：(?P&lt;content&gt;.+?)[。.]?$</pre><p class="text-xs text-gray-500 mt-2">样例：来源号码 95500，短信「【示例银行】金额12.34元，内容：午餐。」；先用仅审计预览，再自行明确选择所需动作。</p></details>
+</section>
+<section id="template-preview" class="bg-white rounded-lg border border-gray-200 p-4 mt-5">
+  <h2 class="font-medium text-sm">不落盘预览</h2><p class="text-xs text-gray-500 mt-2">仅用当前草稿提取字段，不保存模板或样例，不调用短信接收 API，不创建审计记录、账单或转账。必要关联项仍需有效选择；此预览不会执行余额变动，也不验证其他模板是否同时匹配。</p>
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4"><div><label for="preview-time" class="block text-xs text-gray-500 mb-1">样例时间（带时区）</label><input id="preview-time" value="{{ preview_time }}" placeholder="2026-10-08T12:30:00+08:00" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></div><div><label for="preview-sender" class="block text-xs text-gray-500 mb-1">样例发送号码（可选）</label><input id="preview-sender" maxlength="128" placeholder="例如 95555" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></div></div>
+  <div class="mt-4"><label for="preview-raw" class="block text-xs text-gray-500 mb-1">样例短信原文</label><textarea id="preview-raw" rows="4" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></textarea></div>
+  <button id="preview-button" type="button" class="rounded bg-gray-900 px-4 py-2 text-sm text-white mt-3">预览匹配结果（不保存）</button>
+  <pre id="preview-result" class="hidden mt-3 whitespace-pre-wrap break-words rounded border px-3 py-2 text-sm" role="status" aria-live="polite"></pre>
+</section>
+<script>
+(() => {
+  const form = document.getElementById('sms-template-form');
+  const action = form.elements.action;
+  const category = form.elements.category_id;
+  const result = document.getElementById('preview-result');
+  const button = document.getElementById('preview-button');
+  const labels = { audit: '仅保留审计记录', investment_success: '定投扣款成功', investment_failure: '定投扣款失败', transfer_out: '转出候选（手动确认）', transfer_in: '转入候选（手动确认）', expense: '自动生成支出账单', income: '自动生成收入账单' };
+  const show = (message, ok) => {
+    result.textContent = message;
+    result.className = `mt-3 whitespace-pre-wrap break-words rounded border px-3 py-2 text-sm ${ok ? 'border-green-200 bg-green-50 text-green-800' : 'border-red-200 bg-red-50 text-red-700'}`;
+  };
+  const syncFields = () => {
+    const bill = ['expense', 'income'].includes(action.value);
+    const investment = ['investment_success', 'investment_failure'].includes(action.value);
+    const account = bill || ['transfer_out', 'transfer_in'].includes(action.value);
+    for (const [id, field, active, required] of [
+      ['template-account-field', form.elements.account_id, account, account],
+      ['template-plan-field', form.elements.plan_id, investment, false],
+      ['template-category-field', category, bill, bill],
+    ]) {
+      document.getElementById(id).hidden = !active;
+      field.disabled = !active;
+      field.required = required;
+    }
+    for (const option of category.options) {
+      const incompatible = option.value !== '' && option.dataset.kind !== action.value;
+      option.hidden = incompatible;
+      option.disabled = incompatible;
+      if (incompatible && option.selected) category.value = '';
+    }
+  };
+  action.addEventListener('change', syncFields);
+  syncFields();
+  const presets = {
+    'cmb-success': {
+      name: '招商银行定投成功', tag: '招商银行', sender: '95555', action: 'investment_success',
+      pattern: String.raw`^【招商银行】您尾号(?P<last4>[0-9]{4})的账户于(?P<month>[0-9]{2})月(?P<day>[0-9]{2})日执行「(?P<fund>.+?)」的(?:聪明)?定投计划，扣款(?P<amount>[0-9]+(?:\.[0-9]{1,2})?)元，活期余额(?P<balance>[0-9]+(?:\.[0-9]{1,2})?)元[。.]?$`,
+      raw: '【招商银行】您尾号1234的账户于10月08日执行「示例基金」的定投计划，扣款100.00元，活期余额900.00元。'
+    },
+    'cmb-failure': {
+      name: '招商银行定投失败', tag: '招商银行', sender: '95555', action: 'investment_failure',
+      pattern: String.raw`^【招商银行】您尾号(?P<last4>[0-9]{4})的账户于(?P<month>[0-9]{2})月(?P<day>[0-9]{2})日存在[0-9]+笔定投计划执行失败，原因：(?P<content>.+?涉及(?P<fund>[^。，,]+))(?:。查看计划.*)?[。.]?$`,
+      raw: '【招商银行】您尾号1234的账户于10月08日存在1笔定投计划执行失败，原因：余额不足，涉及示例基金。'
+    },
+    'cmb-transfer': {
+      name: '招商银行实时转出', tag: '招商银行', sender: '95555', action: 'transfer_out',
+      pattern: String.raw`^【招商银行】您账户(?P<last4>[0-9]{4})于(?P<month>[0-9]{2})月(?P<day>[0-9]{2})日(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2})实时转至他行人民币(?P<amount>[0-9]+(?:\.[0-9]{1,2})?)(?:元)?，余额(?P<balance>[0-9]+(?:\.[0-9]{1,2})?)(?:元)?，收款人(?P<content>.+?)[。.]?$`,
+      raw: '【招商银行】您账户1234于10月08日12:30实时转至他行人民币100.00元，余额900.00元，收款人张三。'
+    },
+    'cmb-payment': {
+      name: '招商银行快捷支付候选', tag: '招商银行', sender: '95555', action: 'transfer_out',
+      pattern: String.raw`^【招商银行】您账户(?P<last4>[0-9]{4})于(?P<month>[0-9]{2})月(?P<day>[0-9]{2})日(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2})在(?P<content>.+?)快捷支付(?P<amount>[0-9]+(?:\.[0-9]{1,2})?)元，余额(?P<balance>[0-9]+(?:\.[0-9]{1,2})?)(?:元)?[。.]?$`,
+      raw: '【招商银行】您账户1234于10月08日12:30在信用卡还款-张三快捷支付100.00元，余额900.00元。'
+    },
+    generic: {
+      name: '通用金额与内容审计', tag: '示例银行', sender: '95500', action: 'audit',
+      pattern: String.raw`^【示例银行】金额(?P<amount>[0-9]+(?:\.[0-9]{1,2})?)元，内容：(?P<content>.+?)[。.]?$`,
+      raw: '【示例银行】金额12.34元，内容：午餐。'
+    }
+  };
+  document.querySelectorAll('[data-preset]').forEach(control => control.addEventListener('click', () => {
+    const preset = presets[control.dataset.preset];
+    form.elements.name.value = preset.name;
+    form.elements.sender.value = '';
+    form.elements.bank_tag.value = preset.tag;
+    form.elements.pattern.value = preset.pattern;
+    action.value = preset.action;
+    form.elements.account_id.value = '';
+    form.elements.plan_id.value = '';
+    category.value = '';
+    document.getElementById('preview-time').value = '2026-10-08T12:30:00+08:00';
+    document.getElementById('preview-sender').value = preset.sender;
+    document.getElementById('preview-raw').value = preset.raw;
+    syncFields();
+    show('已填写草稿与样例，尚未保存。请核对实际短信；需要账户／分类的动作请先选择，再点击预览。', true);
+  }));
+  button.addEventListener('click', async () => {
+    if (button.disabled) return;
+    button.disabled = true;
+    button.textContent = '正在预览…';
+    const payload = Object.fromEntries(new FormData(form));
+    payload.time = document.getElementById('preview-time').value;
+    payload.sender_sample = document.getElementById('preview-sender').value;
+    payload.raw = document.getElementById('preview-raw').value;
+    try {
+      const response = await fetch('/sms/templates/preview', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(payload), cache: 'no-store'
+      });
+      if (!response.ok) throw new Error(await window.harukaReadErrorResponse(response));
+      const data = await response.json();
+      if (!data.ok) throw new Error(data.error || '预览失败');
+      if (!data.matched) {
+        show('未匹配：请检查发送号码、【银行标记】及表达式，所有条件须同时满足。未保存任何记录。', false);
+      } else {
+        show(`匹配成功（未保存、未记账）\n模板：${data.template_name}\n动作：${labels[data.action] || data.action}\n金额：${data.amount || '未提取'}\n内容：${data.content || '未提取'}\n账户尾号：${data.last4 || '未提取'}\n基金：${data.fund || '未提取'}`, true);
+      }
+    } catch (error) {
+      show(`预览失败：${error.message || error}。未保存任何记录。`, false);
+    } finally {
+      button.disabled = false;
+      button.textContent = '预览匹配结果（不保存）';
+    }
+  });
+})();
+</script>
+{% endblock %}

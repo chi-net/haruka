@@ -84,7 +84,7 @@
 (() => {
   const status = document.getElementById('sms-process-status');
   if (!status) return;
-  fetch('/investments/process-sms', { method: 'POST', headers: { Accept: 'application/json' }, cache: 'no-store' })
+  fetch('/sms/process-pending', { method: 'POST', headers: { Accept: 'application/json' }, cache: 'no-store' })
     .then(async response => {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || payload.message || `HTTP ${response.status}`);

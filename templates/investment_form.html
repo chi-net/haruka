@@ -42,7 +42,7 @@
         <option value="fixed" {% if strategy == "fixed" %}selected{% endif %}>固定金额</option>
         <option value="smart" {% if strategy == "smart" %}selected{% endif %}>聪明定投（均线偏离）</option>
         <option value="manual" {% if strategy == "manual" %}selected{% endif %}>每日手动填写金额</option>
-        <option value="sms" {% if strategy == "sms" %}selected{% endif %}>短信实扣金额（目前需要配合 iCloud Shortcuts + 招商银行短信通知 使用）</option>
+        <option value="sms" {% if strategy == "sms" %}selected{% endif %}>短信实扣金额（内置招行模板，也可在短信页配置其他银行模板）</option>
       </select>
     </div>
     <div id="investment-smart-fields" class="grid grid-cols-1 sm:grid-cols-2 gap-4 {% if strategy != "smart" %}hidden{% endif %}">
@@ -66,7 +66,7 @@
     </div>
     <div id="investment-manual-help" class="rounded bg-amber-50 border border-amber-100 p-3 text-xs text-amber-800 {% if strategy != "manual" %}hidden{% endif %}">每个到期交易日会显示一个金额输入框，由你核对银行或基金平台后确认记账；同一计划同一天只能执行一次。</div>
     <div id="investment-sms-fields" class="rounded bg-emerald-50 border border-emerald-100 p-3 space-y-3 {% if strategy != "sms" %}hidden{% endif %}">
-      <div><label class="block text-sm text-emerald-900 mb-1">招商银行通知短信中的基金名称</label><input id="investment-sms-fund-name" name="sms_fund_name" value="{{ sms_fund_name }}" placeholder="例如：富国中证沪港深500ETF联接基金A" class="w-full border border-emerald-200 rounded px-3 py-1.5 text-sm"><p class="text-xs text-emerald-800 mt-1">用于和短信中的「基金名称」或“涉及基金”匹配；扣款账户必须已经填写银行卡号，短信账户尾号也必须一致。</p></div>
+      <div><label class="block text-sm text-emerald-900 mb-1">银行通知短信中的基金名称</label><input id="investment-sms-fund-name" name="sms_fund_name" value="{{ sms_fund_name }}" placeholder="例如：富国中证沪港深500ETF联接基金A" class="w-full border border-emerald-200 rounded px-3 py-1.5 text-sm"><p class="text-xs text-emerald-800 mt-1">内置模板或未绑定计划的自定义模板按基金名称和银行卡尾号匹配；在短信模板中直接绑定本计划时，提取到的基金名或尾号仍会校验。</p></div>
       <p class="text-xs text-emerald-800">成功短信按实扣金额在扣款账户与投资账户之间生成转账；失败短信只显示失败记录。短信金额已经是银行实际扣款，本模式不会再另记手续费。</p>
     </div>
   </section>
@@ -143,7 +143,7 @@
     amountField.classList.toggle('hidden', sms);
     feeRate.disabled = sms;
     amountLabel.textContent = manual ? '默认填写金额（可留空）' : sms ? '每次金额' : '每个交易日基准金额';
-    amountHelp.textContent = manual ? '到期时仍可覆盖为当天实际金额。' : sms ? '由招商银行成功短信中的扣款金额自动填写。' : '';
+    amountHelp.textContent = manual ? '到期时仍可覆盖为当天实际金额。' : sms ? '由银行成功短信中的扣款金额自动填写。' : '';
   };
   strategy.addEventListener('change', syncStrategy);
   preview.addEventListener('click', async () => {

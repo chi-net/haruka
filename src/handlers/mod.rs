@@ -11,6 +11,7 @@ pub mod investments;
 pub mod passkeys;
 pub mod settings;
 pub mod shares;
+pub mod sms_templates;
 pub mod statistics;
 pub mod subscriptions;
 pub mod transfers;

@@ -4,6 +4,7 @@ mod db;
 mod entity;
 mod handlers;
 mod market_data;
+mod sms_templates;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -424,14 +425,37 @@ async fn main() {
             post(handlers::investments::delete),
         )
         .route("/investments/run-due", post(handlers::investments::run_due))
+        .route("/sms", get(handlers::investments::sms_list))
         .route(
-            "/investments/process-sms",
+            "/sms/templates",
+            get(handlers::sms_templates::list).post(handlers::sms_templates::create),
+        )
+        .route("/sms/templates/new", get(handlers::sms_templates::new_form))
+        .route(
+            "/sms/templates/preview",
+            post(handlers::sms_templates::preview),
+        )
+        .route(
+            "/sms/templates/{id}/edit",
+            get(handlers::sms_templates::edit_form).post(handlers::sms_templates::update),
+        )
+        .route(
+            "/sms/templates/{id}/delete",
+            post(handlers::sms_templates::delete),
+        )
+        .route(
+            "/sms/templates/{id}/toggle",
+            post(handlers::sms_templates::toggle),
+        )
+        .route(
+            "/sms/process-pending",
             post(handlers::investments::process_pending_sms),
         )
         .route(
-            "/investments/sms-events/{id}/confirm",
+            "/sms/{id}/confirm",
             post(handlers::investments::confirm_sms_transfer),
         )
+        .route("/sms/{id}/ignore", post(handlers::investments::ignore_sms))
         .route(
             "/investments/smart-preview",
             get(handlers::investments::smart_preview),

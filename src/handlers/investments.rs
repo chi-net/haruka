@@ -9,19 +9,24 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, Timelike, U
 use regex::{Captures, Regex};
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    QueryOrder, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, str::FromStr, sync::OnceLock};
+use std::{
+    collections::{HashMap, VecDeque},
+    str::FromStr,
+    sync::OnceLock,
+};
 
 use crate::{
     crypto,
     entity::{
         account, account_detail, bill, category, investment_execution, investment_sms_event,
-        market_closed_day, preference, recurring_investment, transfer,
+        market_closed_day, preference, recurring_investment, sms_template, transfer,
     },
+    sms_templates::{MatchedSms, TemplateConfig},
     AppState, SessionDek,
 };
 
@@ -39,10 +44,14 @@ fn bad_request(message: impl Into<String>) -> (StatusCode, String) {
 pub struct SmsWebhookData {
     time: String,
     raw: String,
+    #[serde(default)]
+    sender: String,
 }
 
 #[derive(Clone)]
 pub(crate) enum SmsKind {
+    Unparsed,
+    Custom,
     Success {
         amount: i64,
         balance: Option<i64>,
@@ -67,6 +76,8 @@ pub(crate) struct PendingSms {
     event_hash: String,
     occurred_at: DateTime<Utc>,
     raw: String,
+    sender: String,
+    custom: Option<MatchedSms>,
     sms_date: NaiveDate,
     card_last4: String,
     fund_name: String,
@@ -179,13 +190,42 @@ fn validate_captured_time(
 }
 
 fn parse_sms(data: SmsWebhookData) -> HandlerResult<PendingSms> {
-    if data.raw.len() > 4096 {
-        return Err(bad_request("raw 短信内容不能超过 4096 字节"));
+    if data.raw.len() > 4096 || data.raw.trim().is_empty() {
+        return Err(bad_request("raw 短信内容不能为空且不能超过 4096 字节"));
+    }
+    let sender = data.sender.trim();
+    if sender.len() > 128 || sender.chars().any(char::is_control) {
+        return Err(bad_request(
+            "sender 发送号码不能超过 128 字节或包含控制字符",
+        ));
     }
     let occurred_at = DateTime::parse_from_rfc3339(data.time.trim())
         .map_err(|_| bad_request("time 必须是带时区的 ISO8601 日期时间"))?
         .with_timezone(&Utc);
     let raw = data.raw.trim();
+    let hash = if sender.is_empty() {
+        event_hash(data.time.trim(), raw)
+    } else {
+        event_hash(&occurred_at.to_rfc3339(), &format!("{sender}\n{raw}"))
+    };
+    Ok(PendingSms {
+        event_hash: hash,
+        occurred_at,
+        raw: raw.to_string(),
+        sender: sender.to_string(),
+        custom: None,
+        sms_date: occurred_at
+            .with_timezone(&chrono_tz::Asia::Shanghai)
+            .date_naive(),
+        card_last4: String::new(),
+        fund_name: String::new(),
+        kind: SmsKind::Unparsed,
+    })
+}
+
+fn parse_builtin_sms(sms: &PendingSms) -> HandlerResult<PendingSms> {
+    let occurred_at = sms.occurred_at;
+    let raw = sms.raw.as_str();
     let (captures, template) = if let Some(captures) = investment_success_regex().captures(raw) {
         (captures, "investment_success")
     } else if let Some(captures) = investment_failure_regex().captures(raw) {
@@ -195,7 +235,9 @@ fn parse_sms(data: SmsWebhookData) -> HandlerResult<PendingSms> {
     } else if let Some(captures) = quick_payment_regex().captures(raw) {
         (captures, "quick_payment")
     } else {
-        return Err(bad_request("无法匹配已支持的招商银行短信模板"));
+        return Err(bad_request(
+            "无法匹配已启用的自定义模板或内置招商银行短信模板",
+        ));
     };
     let parsed_date = validate_captured_time(&captures, occurred_at)?;
     let card_last4 = capture(&captures, "last4")?.to_string();
@@ -235,13 +277,11 @@ fn parse_sms(data: SmsWebhookData) -> HandlerResult<PendingSms> {
         _ => unreachable!(),
     };
     Ok(PendingSms {
-        event_hash: event_hash(data.time.trim(), raw),
-        occurred_at,
-        raw: raw.to_string(),
         sms_date: parsed_date,
         card_last4,
         fund_name,
         kind,
+        ..sms.clone()
     })
 }
 
@@ -348,9 +388,14 @@ struct SmsEventRow {
     plan_name: String,
     detail: String,
     raw: String,
+    status: String,
+    status_label: String,
     danger: bool,
     pending: bool,
     repayment: bool,
+    sender: String,
+    incoming: bool,
+    custom: bool,
 }
 
 struct ManualDueRow {
@@ -400,10 +445,6 @@ fn moving_average_options(selected: i32) -> Vec<MovingAverageOption> {
 struct InvestmentsTemplate {
     plans: Vec<PlanRow>,
     manual_due: Vec<ManualDueRow>,
-    sms_events: Vec<SmsEventRow>,
-    pending_sms_count: usize,
-    transfer_targets: Vec<AccountOption>,
-    repayment_targets: Vec<AccountOption>,
     executions: Vec<ExecutionRow>,
     custom_closed_days: Vec<ClosedDayRow>,
     keyword: String,
@@ -415,6 +456,37 @@ struct InvestmentsTemplate {
     active_count: usize,
     today: String,
     calendar_warning: bool,
+}
+
+#[derive(Template)]
+#[template(path = "sms.html")]
+struct SmsTemplate {
+    sms_events: Vec<SmsEventRow>,
+    pending_sms_count: usize,
+    transfer_targets: Vec<AccountOption>,
+    repayment_targets: Vec<AccountOption>,
+    keyword: String,
+    status: String,
+    per_page: usize,
+    pagination: super::PaginationView,
+    confirmed: bool,
+    ignored: bool,
+}
+
+#[derive(Default, Deserialize)]
+pub struct SmsQuery {
+    #[serde(default)]
+    page: usize,
+    #[serde(default)]
+    per_page: usize,
+    #[serde(default)]
+    keyword: String,
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    confirmed: i64,
+    #[serde(default)]
+    ignored: i64,
 }
 
 #[derive(Template)]
@@ -610,7 +682,7 @@ async fn parse_form(
     };
     let sms_fund_name = if strategy == "sms" {
         if from_account.currency != "CNY" {
-            return Err(bad_request("招商银行短信实扣模式目前只支持 CNY 账户"));
+            return Err(bad_request("短信实扣模式目前只支持 CNY 账户"));
         }
         let value = form.sms_fund_name.trim();
         if value.is_empty() {
@@ -675,19 +747,6 @@ pub async fn list(
         .iter()
         .map(|account| (account.id, account.currency.clone()))
         .collect::<HashMap<_, _>>();
-    let transfer_targets = accounts
-        .iter()
-        .filter(|account| account.currency == "CNY")
-        .cloned()
-        .collect();
-    let repayment_targets = accounts
-        .iter()
-        .filter(|account| {
-            account.currency == "CNY"
-                && matches!(account.kind.as_str(), "credit_card" | "credit_service")
-        })
-        .cloned()
-        .collect();
     let keyword = query.keyword.trim().to_lowercase();
     let plan_rows = recurring_investment::Entity::find()
         .order_by_asc(recurring_investment::Column::NextTradeDate)
@@ -713,7 +772,7 @@ pub async fn list(
                     )
                 }
                 "manual" => "每日手动填写金额".into(),
-                "sms" => "招商银行短信实扣金额".into(),
+                "sms" => "银行短信实扣金额".into(),
                 _ => "固定金额".into(),
             };
             let from_account = account_names
@@ -823,36 +882,6 @@ pub async fn list(
         .into_iter()
         .map(|plan| (plan.id, crypto::decrypt_string(&dek, &plan.name)))
         .collect::<HashMap<_, _>>();
-    let sms_events = investment_sms_event::Entity::find()
-        .order_by_desc(investment_sms_event::Column::OccurredAt)
-        .order_by_desc(investment_sms_event::Column::Id)
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-        .into_iter()
-        .map(|event| {
-            let plan_name = event
-                .plan_id
-                .and_then(|id| all_plans.get(&id).cloned())
-                .unwrap_or_else(|| match event.kind.as_str() {
-                    "bank_transfer" => "本人账户转账".into(),
-                    "quick_payment" => "信用卡还款".into(),
-                    _ => "未匹配计划".into(),
-                });
-            SmsEventRow {
-                id: event.id,
-                occurred_at: event.occurred_at.format("%Y-%m-%dT%H:%M").to_string(),
-                plan_name,
-                detail: crypto::decrypt_string(&dek, &event.detail),
-                raw: crypto::decrypt_string(&dek, &event.raw),
-                danger: matches!(event.status.as_str(), "failed" | "unmatched" | "error"),
-                pending: event.status == "pending",
-                repayment: event.kind == "quick_payment",
-            }
-        })
-        .take(20)
-        .collect();
-    let pending_sms_count = state.pending_sms.lock().await.len();
     let transfers = transfer::Entity::find()
         .all(&state.db)
         .await
@@ -886,10 +915,7 @@ pub async fn list(
                 .map(|bill| crypto::decrypt_cents(&dek, &bill.amount))
                 .unwrap_or_default();
             let (strategy, decision) = if execution.strategy == "sms" {
-                (
-                    "短信实扣".into(),
-                    "按招商银行短信中的实际扣款金额执行".into(),
-                )
+                ("短信实扣".into(), "按银行短信中的实际扣款金额执行".into())
             } else if execution.strategy == "manual" {
                 ("手动金额".into(), "当日由用户确认后执行".into())
             } else if execution.index_code.is_empty() {
@@ -963,10 +989,6 @@ pub async fn list(
     let html = InvestmentsTemplate {
         plans,
         manual_due,
-        sms_events,
-        pending_sms_count,
-        transfer_targets,
-        repayment_targets,
         executions,
         custom_closed_days,
         keyword: query.keyword.clone(),
@@ -1328,7 +1350,7 @@ async fn execute_plan_day(
             crate::market_data::format_multiplier(decision.multiplier_bps)
         )
     } else if plan.strategy == "sms" {
-        format!("招商银行短信定投 · {plan_name}")
+        format!("银行短信定投 · {plan_name}")
     } else if plan.strategy == "manual" {
         format!("手动金额定投 · {plan_name}")
     } else {
@@ -1447,6 +1469,111 @@ struct SmsOutcome {
     message: String,
 }
 
+async fn load_sms_templates(
+    state: &AppState,
+    dek: &crypto::Dek,
+) -> HandlerResult<Vec<TemplateConfig>> {
+    Ok(sms_template::Entity::find()
+        .filter(sms_template::Column::Enabled.eq(true))
+        .order_by_asc(sms_template::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .iter()
+        .map(|row| crate::sms_templates::decode_template(dek, row))
+        .collect())
+}
+
+fn resolve_sms(sms: &PendingSms, templates: &[TemplateConfig]) -> HandlerResult<PendingSms> {
+    let matched =
+        crate::sms_templates::match_templates(templates, &sms.sender, &sms.raw, sms.occurred_at)
+            .map_err(bad_request)?;
+    let Some(matched) = matched else {
+        return parse_builtin_sms(sms);
+    };
+    let kind = match matched.action.as_str() {
+        "investment_success" => SmsKind::Success {
+            amount: matched
+                .amount
+                .ok_or_else(|| bad_request("定投短信缺少金额"))?,
+            balance: matched.balance,
+        },
+        "investment_failure" => SmsKind::Failure {
+            reason: matched.content.clone(),
+        },
+        _ => SmsKind::Custom,
+    };
+    Ok(PendingSms {
+        card_last4: matched.last4.clone(),
+        fund_name: if matched.fund.is_empty() && matched.plan_id.is_none() {
+            matched.content.clone()
+        } else {
+            matched.fund.clone()
+        },
+        kind,
+        custom: Some(matched),
+        ..sms.clone()
+    })
+}
+
+fn sms_kind_name(sms: &PendingSms) -> &str {
+    if let Some(custom) = &sms.custom {
+        return &custom.action;
+    }
+    match sms.kind {
+        SmsKind::Unparsed => "unmatched",
+        SmsKind::Custom => "audit",
+        SmsKind::Success { .. } => "success",
+        SmsKind::Failure { .. } => "failure",
+        SmsKind::BankTransfer { .. } => "bank_transfer",
+        SmsKind::QuickPayment { .. } => "quick_payment",
+    }
+}
+
+async fn save_sms_event<C: ConnectionTrait>(
+    db: &C,
+    dek: &crypto::Dek,
+    sms: &PendingSms,
+    plan_id: Option<i64>,
+    status: &str,
+    detail: &str,
+    bill_id: Option<i64>,
+) -> HandlerResult<()> {
+    let existing = investment_sms_event::Entity::find()
+        .filter(investment_sms_event::Column::EventHash.eq(&sms.event_hash))
+        .one(db)
+        .await
+        .map_err(err500)?;
+    let is_existing = existing.is_some();
+    let mut active = existing
+        .map(IntoActiveModel::into_active_model)
+        .unwrap_or_else(|| investment_sms_event::ActiveModel {
+            event_hash: Set(sms.event_hash.clone()),
+            created_at: Set(Utc::now()),
+            ..Default::default()
+        });
+    active.occurred_at = Set(sms.occurred_at);
+    active.kind = Set(sms_kind_name(sms).into());
+    active.status = Set(status.into());
+    active.plan_id = Set(plan_id);
+    active.raw = Set(crypto::encrypt(dek, sms.raw.as_bytes()));
+    active.sender = Set(crypto::encrypt(dek, sms.sender.as_bytes()));
+    active.parsed = Set(match &sms.custom {
+        Some(custom) => crypto::encrypt(dek, &serde_json::to_vec(custom).map_err(err500)?),
+        None => String::new(),
+    });
+    active.detail = Set(crypto::encrypt(dek, detail.as_bytes()));
+    if !is_existing || bill_id.is_some() {
+        active.bill_id = Set(bill_id);
+    }
+    if is_existing {
+        active.update(db).await.map_err(err500)?;
+    } else {
+        active.insert(db).await.map_err(err500)?;
+    }
+    Ok(())
+}
+
 async fn record_sms_event(
     state: &AppState,
     dek: &crypto::Dek,
@@ -1455,49 +1582,7 @@ async fn record_sms_event(
     status: &str,
     detail: &str,
 ) -> HandlerResult<()> {
-    if let Some(existing) = investment_sms_event::Entity::find()
-        .filter(investment_sms_event::Column::EventHash.eq(&sms.event_hash))
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-    {
-        let mut active = existing.into_active_model();
-        active.occurred_at = Set(sms.occurred_at);
-        active.kind = Set(match &sms.kind {
-            SmsKind::Success { .. } => "success",
-            SmsKind::Failure { .. } => "failure",
-            SmsKind::BankTransfer { .. } => "bank_transfer",
-            SmsKind::QuickPayment { .. } => "quick_payment",
-        }
-        .into());
-        active.status = Set(status.into());
-        active.plan_id = Set(plan_id);
-        active.raw = Set(crypto::encrypt(dek, sms.raw.as_bytes()));
-        active.detail = Set(crypto::encrypt(dek, detail.as_bytes()));
-        active.update(&state.db).await.map_err(err500)?;
-        return Ok(());
-    }
-    investment_sms_event::ActiveModel {
-        event_hash: Set(sms.event_hash.clone()),
-        occurred_at: Set(sms.occurred_at),
-        kind: Set(match &sms.kind {
-            SmsKind::Success { .. } => "success",
-            SmsKind::Failure { .. } => "failure",
-            SmsKind::BankTransfer { .. } => "bank_transfer",
-            SmsKind::QuickPayment { .. } => "quick_payment",
-        }
-        .into()),
-        status: Set(status.into()),
-        plan_id: Set(plan_id),
-        raw: Set(crypto::encrypt(dek, sms.raw.as_bytes())),
-        detail: Set(crypto::encrypt(dek, detail.as_bytes())),
-        created_at: Set(Utc::now()),
-        ..Default::default()
-    }
-    .insert(&state.db)
-    .await
-    .map_err(err500)?;
-    Ok(())
+    save_sms_event(&state.db, dek, sms, plan_id, status, detail, None).await
 }
 
 fn normalized_sms_name(value: &str) -> String {
@@ -1514,11 +1599,21 @@ async fn sms_plan_matches(
     plan: &recurring_investment::Model,
     sms: &PendingSms,
 ) -> HandlerResult<bool> {
+    let bound_plan = sms.custom.as_ref().and_then(|custom| custom.plan_id);
+    if bound_plan.is_some_and(|id| id != plan.id) {
+        return Ok(false);
+    }
     let configured = normalized_sms_name(&crypto::decrypt_string(dek, &plan.sms_fund_name));
     let incoming = normalized_sms_name(&sms.fund_name);
-    if configured.is_empty() || !(configured.contains(&incoming) || incoming.contains(&configured))
+    if (!incoming.is_empty() || bound_plan.is_none())
+        && (incoming.is_empty()
+            || configured.is_empty()
+            || !(configured.contains(&incoming) || incoming.contains(&configured)))
     {
         return Ok(false);
+    }
+    if sms.card_last4.is_empty() {
+        return Ok(bound_plan.is_some());
     }
     let detail = account_detail::Entity::find_by_id(plan.from_account_id)
         .one(&state.db)
@@ -1534,10 +1629,130 @@ async fn sms_plan_matches(
     Ok(digits.ends_with(&sms.card_last4))
 }
 
+async fn process_custom_sms(
+    state: &AppState,
+    dek: &crypto::Dek,
+    sms: &PendingSms,
+    custom: &MatchedSms,
+) -> HandlerResult<SmsOutcome> {
+    if custom.action == "audit" {
+        let detail = format!(
+            "模板“{}”已识别：{}；仅保存审计，不生成资金流水",
+            custom.template_name, custom.content
+        );
+        record_sms_event(state, dek, sms, None, "audit", &detail).await?;
+        return Ok(SmsOutcome {
+            ok: true,
+            status: "audit".into(),
+            message: detail,
+        });
+    }
+    let account_id = custom
+        .account_id
+        .ok_or_else(|| bad_request("短信模板未配置账户"))?;
+    let account = account::Entity::find_by_id(account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("短信模板关联的账户已不存在，请修改模板"))?;
+    let amount = custom
+        .amount
+        .ok_or_else(|| bad_request("短信模板未提取金额"))?;
+    if matches!(custom.action.as_str(), "transfer_out" | "transfer_in") {
+        let direction = if custom.action == "transfer_in" {
+            "转入"
+        } else {
+            "转出"
+        };
+        let detail = format!(
+            "模板“{}”识别到账户 {} 的{direction} {}：{}；请选择对方账户并确认后记账",
+            custom.template_name,
+            crypto::decrypt_string(dek, &account.name),
+            crate::currency::format(amount, &account.currency),
+            custom.content
+        );
+        record_sms_event(state, dek, sms, None, "pending", &detail).await?;
+        return Ok(SmsOutcome {
+            ok: true,
+            status: "pending".into(),
+            message: detail,
+        });
+    }
+    if !matches!(custom.action.as_str(), "income" | "expense") {
+        return Err(bad_request("短信模板处理用途无效"));
+    }
+    let category_id = custom
+        .category_id
+        .ok_or_else(|| bad_request("账单模板未配置分类"))?;
+    let category = category::Entity::find_by_id(category_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("短信模板关联的分类已不存在，请修改模板"))?;
+    if category.kind != custom.action {
+        return Err(bad_request("短信模板的分类与收入／支出类型不一致"));
+    }
+    let delta = if custom.action == "income" {
+        amount
+    } else {
+        amount
+            .checked_neg()
+            .ok_or_else(|| bad_request("短信金额超出范围"))?
+    };
+    super::accounts::ensure_balance_delta(state, dek, account.id, delta).await?;
+    let note = format!("短信模板“{}” · {}", custom.template_name, custom.content);
+    let detail = format!(
+        "模板“{}”已生成{}账单 {}：{}",
+        custom.template_name,
+        if custom.action == "income" {
+            "收入"
+        } else {
+            "支出"
+        },
+        crate::currency::format(amount, &account.currency),
+        custom.content
+    );
+    let transaction = state.db.begin().await.map_err(err500)?;
+    let bill = bill::ActiveModel {
+        account_id: Set(account.id),
+        kind: Set(custom.action.clone()),
+        amount: Set(crypto::encrypt_cents(dek, amount)),
+        category: Set(crypto::encrypt(
+            dek,
+            crypto::decrypt_string(dek, &category.name).as_bytes(),
+        )),
+        is_food: Set(custom.action == "expense" && category.is_food),
+        note: Set(crypto::encrypt(dek, note.as_bytes())),
+        happened_at: Set(sms.occurred_at.naive_utc()),
+        created_at: Set(Utc::now()),
+        ..Default::default()
+    }
+    .insert(&transaction)
+    .await
+    .map_err(err500)?;
+    save_sms_event(
+        &transaction,
+        dek,
+        sms,
+        None,
+        "executed",
+        &detail,
+        Some(bill.id),
+    )
+    .await?;
+    transaction.commit().await.map_err(err500)?;
+    Ok(SmsOutcome {
+        ok: true,
+        status: "executed".into(),
+        message: detail,
+    })
+}
+
 async fn process_one_sms(
     state: &AppState,
     dek: &crypto::Dek,
     sms: &PendingSms,
+    templates: &[TemplateConfig],
 ) -> HandlerResult<SmsOutcome> {
     if let Some(existing) = investment_sms_event::Entity::find()
         .filter(investment_sms_event::Column::EventHash.eq(&sms.event_hash))
@@ -1552,6 +1767,44 @@ async fn process_one_sms(
                 message: "这条短信已经处理过，没有重复记账".into(),
             });
         }
+    }
+    let resolved;
+    let sms = if matches!(sms.kind, SmsKind::Unparsed) {
+        resolved = match resolve_sms(sms, templates) {
+            Ok(resolved) => resolved,
+            Err((status, message)) => {
+                if status.is_server_error() {
+                    return Err((status, message));
+                }
+                record_sms_event(state, dek, sms, None, "unmatched", &message).await?;
+                return Ok(SmsOutcome {
+                    ok: false,
+                    status: "unmatched".into(),
+                    message,
+                });
+            }
+        };
+        &resolved
+    } else {
+        sms
+    };
+    if matches!(sms.kind, SmsKind::Custom) {
+        let custom = sms
+            .custom
+            .as_ref()
+            .ok_or_else(|| err500("短信模板解析快照缺失"))?;
+        return match process_custom_sms(state, dek, sms, custom).await {
+            Ok(outcome) => Ok(outcome),
+            Err((status, message)) if !status.is_server_error() => {
+                record_sms_event(state, dek, sms, None, "error", &message).await?;
+                Ok(SmsOutcome {
+                    ok: false,
+                    status: "error".into(),
+                    message,
+                })
+            }
+            Err(error) => Err(error),
+        };
     }
     if let SmsKind::BankTransfer {
         recipient,
@@ -1773,7 +2026,8 @@ pub async fn receive_sms(
     let sms = parse_sms(data)?;
     if let Some(dek) = state.any_session_dek() {
         let _balance_guard = state.balance_writes.lock().await;
-        let outcome = process_one_sms(&state, &dek, &sms).await?;
+        let templates = load_sms_templates(&state, &dek).await?;
+        let outcome = process_one_sms(&state, &dek, &sms, &templates).await?;
         let pending = state.pending_sms.lock().await.len();
         return Ok((
             StatusCode::OK,
@@ -1811,15 +2065,14 @@ pub async fn process_pending_sms(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
 ) -> HandlerResult<Json<SmsProcessResponse>> {
-    let mut items = {
-        let mut pending = state.pending_sms.lock().await;
-        std::mem::take(&mut *pending)
-    };
     let retryable = investment_sms_event::Entity::find()
         .filter(investment_sms_event::Column::Status.is_in(["error", "unmatched"]))
         .all(&state.db)
         .await
         .map_err(err500)?;
+    let templates = load_sms_templates(&state, &dek).await?;
+    let mut items = VecDeque::<PendingSms>::new();
+    let mut failures = Vec::new();
     for event in retryable {
         if items.iter().any(|item| item.event_hash == event.event_hash) {
             continue;
@@ -1827,26 +2080,45 @@ pub async fn process_pending_sms(
         let data = SmsWebhookData {
             time: event.occurred_at.to_rfc3339(),
             raw: crypto::decrypt_string(&dek, &event.raw),
+            sender: crypto::decrypt_string(&dek, &event.sender),
         };
-        if let Ok(mut sms) = parse_sms(data) {
-            sms.event_hash = event.event_hash;
-            items.push_back(sms);
+        match parse_sms(data) {
+            Ok(mut sms) => {
+                sms.event_hash = event.event_hash;
+                items.push_back(sms);
+            }
+            Err((_, error)) => failures.push(format!("短信 #{} 仍保留待重试：{error}", event.id)),
+        }
+    }
+    {
+        let mut pending = state.pending_sms.lock().await;
+        for item in std::mem::take(&mut *pending) {
+            if !items
+                .iter()
+                .any(|existing| existing.event_hash == item.event_hash)
+            {
+                items.push_back(item);
+            }
         }
     }
     if items.is_empty() {
         return Ok(Json(SmsProcessResponse {
-            ok: true,
+            ok: failures.is_empty(),
             processed: 0,
-            failures: Vec::new(),
-            message: "没有待处理的短信".into(),
+            message: if failures.is_empty() {
+                "没有待处理的短信"
+            } else {
+                "部分短信暂时无法解析，已保留待重试"
+            }
+            .into(),
+            failures,
         }));
     }
     let _balance_guard = state.balance_writes.lock().await;
     let mut processed = 0usize;
-    let mut failures = Vec::new();
     let mut retry = Vec::new();
     for item in items {
-        match process_one_sms(&state, &dek, &item).await {
+        match process_one_sms(&state, &dek, &item, &templates).await {
             Ok(outcome) => {
                 processed += 1;
                 if !outcome.ok {
@@ -1865,7 +2137,7 @@ pub async fn process_pending_sms(
     }
     let ok = failures.is_empty();
     let message = if ok {
-        format!("已处理 {processed} 条定投短信")
+        format!("已处理 {processed} 条短信")
     } else {
         format!(
             "已处理 {processed} 条短信，其中 {} 条需要关注",
@@ -1915,6 +2187,262 @@ async fn sms_source_account(
     }
 }
 
+pub async fn sms_list(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Query(mut query): Query<SmsQuery>,
+) -> HandlerResult<Html<String>> {
+    if !matches!(
+        query.status.as_str(),
+        "" | "pending"
+            | "confirmed"
+            | "executed"
+            | "failed"
+            | "unmatched"
+            | "error"
+            | "duplicate"
+            | "audit"
+            | "ignored"
+    ) {
+        query.status.clear();
+    }
+    let accounts = account_options(&state, &dek).await?;
+    let transfer_targets = accounts.iter().cloned().collect();
+    let repayment_targets = accounts
+        .iter()
+        .filter(|account| {
+            account.currency == "CNY"
+                && matches!(account.kind.as_str(), "credit_card" | "credit_service")
+        })
+        .cloned()
+        .collect();
+    let plans = recurring_investment::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|plan| (plan.id, crypto::decrypt_string(&dek, &plan.name)))
+        .collect::<HashMap<_, _>>();
+    let events = investment_sms_event::Entity::find()
+        .order_by_desc(investment_sms_event::Column::OccurredAt)
+        .order_by_desc(investment_sms_event::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let confirmed = events
+        .iter()
+        .any(|event| event.id == query.confirmed && event.status == "confirmed");
+    let ignored = query.ignored > 0
+        && events
+            .iter()
+            .any(|event| event.id == query.ignored && event.status == "ignored");
+    let keyword = query.keyword.trim().to_lowercase();
+    let rows = events
+        .into_iter()
+        .map(|event| {
+            let status_label = match event.status.as_str() {
+                "pending" => "待确认",
+                "confirmed" => "已确认",
+                "ignored" => "已忽略",
+                "executed" => "已记账",
+                "audit" => "仅审计",
+                "failed" => "银行扣款失败",
+                "unmatched" => "未匹配",
+                "error" => "处理失败",
+                "duplicate" => "重复短信",
+                _ => "未知状态",
+            };
+            SmsEventRow {
+                id: event.id,
+                occurred_at: event.occurred_at.format("%Y-%m-%dT%H:%M").to_string(),
+                plan_name: event
+                    .plan_id
+                    .and_then(|id| plans.get(&id).cloned())
+                    .unwrap_or_else(|| match event.kind.as_str() {
+                        "bank_transfer" => "本人账户转账".into(),
+                        "quick_payment" => "信用卡还款".into(),
+                        "transfer_out" => "转出候选".into(),
+                        "transfer_in" => "转入候选".into(),
+                        "expense" => "短信支出".into(),
+                        "income" => "短信收入".into(),
+                        "audit" => "短信审计".into(),
+                        _ => "未匹配计划".into(),
+                    }),
+                detail: crypto::decrypt_string(&dek, &event.detail),
+                raw: crypto::decrypt_string(&dek, &event.raw),
+                danger: matches!(event.status.as_str(), "failed" | "unmatched" | "error"),
+                pending: event.status == "pending",
+                repayment: event.kind == "quick_payment",
+                sender: crypto::decrypt_string(&dek, &event.sender),
+                incoming: event.kind == "transfer_in",
+                custom: !event.parsed.is_empty(),
+                status: event.status,
+                status_label: status_label.into(),
+            }
+        })
+        .filter(|row| {
+            (if query.status.is_empty() {
+                row.status != "ignored"
+            } else {
+                row.status == query.status
+            }) && (keyword.is_empty()
+                || format!(
+                    "{} {} {} {} {}",
+                    row.plan_name, row.status_label, row.detail, row.raw, row.sender
+                )
+                .to_lowercase()
+                .contains(&keyword))
+        })
+        .collect::<Vec<_>>();
+    let total_records = rows.len();
+    let pagination = super::pagination(total_records, query.page, query.per_page);
+    let sms_events = rows
+        .into_iter()
+        .skip(pagination.start)
+        .take(pagination.per_page)
+        .collect();
+    let html = SmsTemplate {
+        sms_events,
+        pending_sms_count: state.pending_sms.lock().await.len(),
+        transfer_targets,
+        repayment_targets,
+        keyword: query.keyword.clone(),
+        status: query.status.clone(),
+        per_page: pagination.per_page,
+        pagination: super::pagination_view(
+            &pagination,
+            total_records,
+            "/sms",
+            "条短信",
+            [("keyword", query.keyword), ("status", query.status)],
+        ),
+        confirmed,
+        ignored,
+    }
+    .render()
+    .map_err(err500)?;
+    Ok(Html(html))
+}
+
+async fn confirm_custom_sms_transfer(
+    state: &AppState,
+    dek: &crypto::Dek,
+    event: investment_sms_event::Model,
+    counterpart_id: i64,
+) -> HandlerResult<()> {
+    let snapshot: MatchedSms = serde_json::from_str(&crypto::decrypt_string(dek, &event.parsed))
+        .map_err(|error| err500(format!("短信解析快照无法读取：{error}")))?;
+    if !matches!(snapshot.action.as_str(), "transfer_in" | "transfer_out") {
+        return Err(bad_request("这条短信不是可确认的转入／转出候选"));
+    }
+    let own_id = snapshot
+        .account_id
+        .ok_or_else(|| err500("短信解析快照缺少本方账户"))?;
+    let amount = snapshot
+        .amount
+        .filter(|amount| *amount > 0)
+        .ok_or_else(|| err500("短信解析快照的金额无效"))?;
+    if own_id == counterpart_id {
+        return Err(bad_request("转出账户和转入账户不能相同"));
+    }
+    let own = account::Entity::find_by_id(own_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("短信关联的账户已不存在"))?;
+    let counterpart = account::Entity::find_by_id(counterpart_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("选择的对方账户不存在"))?;
+    let (from, to) = if snapshot.action == "transfer_in" {
+        (counterpart, own)
+    } else {
+        (own, counterpart)
+    };
+    if from.currency != to.currency {
+        return Err(bad_request(
+            "短信转账的两端账户必须同币种，请按实际金额另行记录跨币种转账",
+        ));
+    }
+    if matches!(from.kind.as_str(), "credit_card" | "credit_service") {
+        let balance = super::accounts::current_balance(state, dek, from.id).await?;
+        if balance <= 0 || amount > balance {
+            return Err(bad_request(
+                "信用账户只能从现有正余额中转出，禁止使用授信额度转账",
+            ));
+        }
+    } else {
+        super::accounts::ensure_balance_delta(
+            state,
+            dek,
+            from.id,
+            amount
+                .checked_neg()
+                .ok_or_else(|| bad_request("短信金额超出范围"))?,
+        )
+        .await?;
+    }
+    super::accounts::ensure_balance_delta(state, dek, to.id, amount).await?;
+    let note = format!(
+        "短信模板“{}”确认 · {}",
+        snapshot.template_name, snapshot.content
+    );
+    let detail = format!(
+        "已确认从 {} 转入 {}，金额 {}",
+        crypto::decrypt_string(dek, &from.name),
+        crypto::decrypt_string(dek, &to.name),
+        crate::currency::format(amount, &from.currency)
+    );
+    let transaction = state.db.begin().await.map_err(err500)?;
+    let transfer = transfer::ActiveModel {
+        from_account_id: Set(from.id),
+        to_account_id: Set(to.id),
+        amount: Set(crypto::encrypt_cents(dek, amount)),
+        to_amount: Set(crypto::encrypt_cents(dek, amount)),
+        note: Set(crypto::encrypt(dek, note.as_bytes())),
+        happened_at: Set(event.occurred_at.naive_utc()),
+        created_at: Set(Utc::now()),
+        ..Default::default()
+    }
+    .insert(&transaction)
+    .await
+    .map_err(err500)?;
+    let mut active = event.into_active_model();
+    active.status = Set("confirmed".into());
+    active.transfer_id = Set(Some(transfer.id));
+    active.detail = Set(crypto::encrypt(dek, detail.as_bytes()));
+    active.update(&transaction).await.map_err(err500)?;
+    transaction.commit().await.map_err(err500)?;
+    Ok(())
+}
+
+pub async fn ignore_sms(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+) -> HandlerResult<Redirect> {
+    // 与确认共用写入锁，避免同一候选同时被忽略和记账。
+    let _balance_guard = state.balance_writes.lock().await;
+    let event = investment_sms_event::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "短信记录不存在".into()))?;
+    if event.status != "pending" {
+        return Err(bad_request("只能忽略待确认短信；这条短信已经处理过"));
+    }
+    let detail = format!(
+        "{}；已忽略，未生成账单或转账",
+        crypto::decrypt_string(&dek, &event.detail)
+    );
+    let mut active = event.into_active_model();
+    active.status = Set("ignored".into());
+    active.detail = Set(crypto::encrypt(&dek, detail.as_bytes()));
+    active.update(&state.db).await.map_err(err500)?;
+    Ok(Redirect::to(&format!("/sms?ignored={id}")))
+}
+
 pub async fn confirm_sms_transfer(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
@@ -1930,10 +2458,16 @@ pub async fn confirm_sms_transfer(
     if event.status != "pending" {
         return Err(bad_request("这条短信当前不需要确认，或已经处理过"));
     }
-    let mut sms = parse_sms(SmsWebhookData {
+    if !event.parsed.is_empty() {
+        confirm_custom_sms_transfer(&state, &dek, event, form.to_account_id).await?;
+        return Ok(Redirect::to(&format!("/sms?confirmed={id}")));
+    }
+    let envelope = parse_sms(SmsWebhookData {
         time: event.occurred_at.to_rfc3339(),
         raw: crypto::decrypt_string(&dek, &event.raw),
+        sender: crypto::decrypt_string(&dek, &event.sender),
     })?;
+    let mut sms = parse_builtin_sms(&envelope)?;
     sms.event_hash = event.event_hash.clone();
     let from_account = sms_source_account(&state, &dek, &sms.card_last4).await?;
     let to_account = account::Entity::find_by_id(form.to_account_id)
@@ -2027,7 +2561,7 @@ pub async fn confirm_sms_transfer(
     active.detail = Set(crypto::encrypt(&dek, detail.as_bytes()));
     active.update(&transaction).await.map_err(err500)?;
     transaction.commit().await.map_err(err500)?;
-    Ok(Redirect::to("/investments"))
+    Ok(Redirect::to(&format!("/sms?confirmed={id}")))
 }
 
 pub async fn run_due(

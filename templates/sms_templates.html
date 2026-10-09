@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}短信模板 - haruka{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3 mb-5">
+  <div><h1 class="text-xl font-bold">短信模板</h1><p class="text-sm text-gray-500 mt-1">配置发送号码、银行标记和命名正则；模板名称、条件与表达式加密保存。</p></div>
+  <div class="flex items-center gap-4"><a href="/sms" class="text-sm text-blue-600 hover:underline">返回短信</a><a href="/sms/templates/new" class="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">新增模板</a></div>
+</div>
+<section class="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-5 text-sm text-blue-900">
+  <p>自定义模板优先匹配；没有匹配时仍使用内置招商银行模板，无需为现有快捷指令重新配置。多个自定义模板同时匹配会报错，请避免条件重叠。</p>
+  <p class="mt-2">转入／转出只生成待确认候选，必须在短信页选择另一账户后记账。只有明确选择“自动生成收入／支出账单”才会自动生成普通账单；审计动作不改变余额。</p>
+  <p class="mt-2">发送号码和【银行标记】同时设置时必须全部满足（AND）。它们不是银行身份认证，短信 API 仍需令牌。本功能仅记录账本，不连接银行、不发起支付。</p>
+</section>
+<form method="get" action="/sms/templates" class="bg-white rounded-lg border border-gray-200 p-4 mb-5 flex flex-wrap items-end gap-3">
+  <div class="min-w-52 flex-1"><label for="template-keyword" class="block text-xs text-gray-500 mb-1">关键词</label><input id="template-keyword" name="keyword" value="{{ keyword }}" placeholder="名称、发送号码、银行标记、表达式或关联项" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>
+  <div><label for="template-status" class="block text-xs text-gray-500 mb-1">状态</label><select id="template-status" name="status" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="">全部</option><option value="enabled" {% if status == "enabled" %}selected{% endif %}>已启用</option><option value="disabled" {% if status == "disabled" %}selected{% endif %}>已停用</option></select></div>
+  <div><label for="template-per-page" class="block text-xs text-gray-500 mb-1">每页</label><select id="template-per-page" name="per_page" onchange="this.form.page.value='1';this.form.requestSubmit()" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="50" {% if per_page == 50 %}selected{% endif %}>50</option><option value="100" {% if per_page == 100 %}selected{% endif %}>100</option><option value="200" {% if per_page == 200 %}selected{% endif %}>200</option></select></div>
+  <input type="hidden" name="page" value="1"><button class="rounded bg-gray-900 px-4 py-1.5 text-sm text-white hover:bg-gray-700">搜索</button>{% if !keyword.is_empty() || !status.is_empty() %}<a href="/sms/templates" class="text-sm text-gray-500">清除</a>{% endif %}
+</form>
+<section class="bg-white rounded-lg border border-gray-200 overflow-hidden">
+  {% if templates.is_empty() %}<p class="p-8 text-center text-sm text-gray-500">{% if keyword.is_empty() && status.is_empty() %}尚无自定义模板。内置招商银行解析仍然可用。{% else %}没有符合筛选条件的模板。{% endif %}</p>{% else %}
+  <div class="divide-y divide-gray-100">
+    {% for item in templates %}
+    <article class="p-4">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div><h2 class="font-medium">{{ item.name }} <span class="text-xs font-normal rounded px-2 py-0.5 {% if item.enabled %}bg-green-50 text-green-700{% else %}bg-gray-100 text-gray-500{% endif %}">{% if item.enabled %}已启用{% else %}已停用{% endif %}</span></h2><p class="text-sm text-gray-600 mt-2">{{ item.action_label }}</p></div>
+        <div class="flex items-center gap-3 text-sm"><a href="/sms/templates/{{ item.id }}/edit" class="text-blue-600 hover:underline">编辑与预览</a><form method="post" action="/sms/templates/{{ item.id }}/toggle"><button class="text-amber-700 hover:underline">{% if item.enabled %}停用{% else %}启用{% endif %}</button></form><form method="post" action="/sms/templates/{{ item.id }}/delete" hx-confirm="确认删除此短信模板？既有审计记录和待确认候选不会删除。"><button class="text-red-600 hover:underline">删除</button></form></div>
+      </div>
+      <p class="text-xs text-gray-500 mt-3">发送号码：{% if item.sender.is_empty() %}不限{% else %}{{ item.sender }}{% endif %} · 银行标记：{% if item.bank_tag.is_empty() %}不限{% else %}【{{ item.bank_tag }}】{% endif %} · 全部条件同时满足</p>
+      {% if !item.references.is_empty() %}<p class="text-xs text-gray-600 mt-2">{{ item.references }}</p>{% endif %}
+      <details class="mt-3 text-xs text-gray-500"><summary class="cursor-pointer">查看命名正则</summary><pre class="mt-2 whitespace-pre-wrap break-words">{{ item.pattern }}</pre></details>
+    </article>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+{% include "pagination.html" %}
+{% endblock %}

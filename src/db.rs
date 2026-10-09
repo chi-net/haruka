@@ -4,7 +4,7 @@ use crate::entity::{
     account, account_detail, balance_adjustment, bill, bill_share, budget, category, debt_person,
     debt_record, debt_request, exchange_rate, installment_item, installment_plan,
     investment_execution, investment_sms_event, market_closed_day, market_index_quote, meta,
-    passkey, preference, recovery, recurring_investment, subscription, transfer,
+    passkey, preference, recovery, recurring_investment, sms_template, subscription, transfer,
 };
 
 pub async fn init() -> DatabaseConnection {
@@ -235,6 +235,25 @@ pub async fn init() -> DatabaseConnection {
         .await
         .expect("建定投短信事件表失败");
     ensure_column(&db, "investment_sms_events", "transfer_id", "INTEGER").await;
+    ensure_column(&db, "investment_sms_events", "bill_id", "INTEGER").await;
+    ensure_column(
+        &db,
+        "investment_sms_events",
+        "sender",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "investment_sms_events",
+        "parsed",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    let mut create_sms_templates = schema.create_table_from_entity(sms_template::Entity);
+    db.execute(builder.build(create_sms_templates.if_not_exists()))
+        .await
+        .expect("建短信模板表失败");
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_investment_sms_event_hash ON investment_sms_events (event_hash)".to_string(),

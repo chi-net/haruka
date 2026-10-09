@@ -20,5 +20,6 @@ pub mod passkey;
 pub mod preference;
 pub mod recovery;
 pub mod recurring_investment;
+pub mod sms_template;
 pub mod subscription;
 pub mod transfer;
