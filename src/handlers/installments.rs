@@ -952,22 +952,38 @@ pub async fn set_paid(
         if item.paid_at.is_none() {
             return Err(bad_request("该期尚未还款"));
         }
+        let mut balance_changes: HashMap<i64, i64> = HashMap::new();
         if let Some(transfer_id) = item.principal_transfer_id {
             if let Some(principal_transfer) = transfer::Entity::find_by_id(transfer_id)
                 .one(&state.db)
                 .await
                 .map_err(err500)?
             {
-                super::accounts::ensure_balance_delta(
-                    &state,
-                    &dek,
-                    principal_transfer.to_account_id,
-                    super::transfer_to_cents(&dek, &principal_transfer)
-                        .checked_neg()
-                        .ok_or_else(|| bad_request("还款金额超出范围"))?,
-                )
-                .await?;
+                balance_changes.insert(
+                    principal_transfer.from_account_id,
+                    crypto::decrypt_cents(&dek, &principal_transfer.amount),
+                );
+                let to_change = super::transfer_to_cents(&dek, &principal_transfer)
+                    .checked_neg()
+                    .ok_or_else(|| bad_request("还款金额超出范围"))?;
+                let change = balance_changes
+                    .entry(principal_transfer.to_account_id)
+                    .or_default();
+                *change = checked_add(*change, to_change)?;
             }
+        }
+        if let Some(bill_id) = item.charge_bill_id {
+            if let Some(charge_bill) = bill::Entity::find_by_id(bill_id)
+                .one(&state.db)
+                .await
+                .map_err(err500)?
+            {
+                let change = balance_changes.entry(charge_bill.account_id).or_default();
+                *change = checked_add(*change, crypto::decrypt_cents(&dek, &charge_bill.amount))?;
+            }
+        }
+        for (account_id, change) in balance_changes {
+            super::accounts::ensure_balance_delta(&state, &dek, account_id, change).await?;
         }
         let transaction = state.db.begin().await.map_err(err500)?;
         if let Some(transfer_id) = item.principal_transfer_id {
