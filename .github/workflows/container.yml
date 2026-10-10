@@ -22,16 +22,48 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/haruka
 
 jobs:
-  container:
-    name: Linux container
+  metadata:
+    name: Prepare image metadata
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      image: ${{ steps.image.outputs.name }}
+      labels: ${{ steps.meta.outputs.labels }}
+      json: ${{ steps.meta.outputs.json }}
+    steps:
+      - name: Normalize image name
+        id: image
+        run: echo "name=${REGISTRY}/${IMAGE_NAME,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+  container:
+    name: Linux container (${{ matrix.arch }})
+    needs: metadata
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -44,41 +76,87 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate image metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha
-
       - name: Build and cache Rust dependencies
         uses: docker/build-push-action@v7
         with:
           context: .
           target: dependencies
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           outputs: type=cacheonly
-          cache-from: type=gha,scope=haruka-rust-deps
-          cache-to: type=gha,mode=max,scope=haruka-rust-deps
+          cache-from: type=gha,scope=haruka-rust-deps-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=haruka-rust-deps-${{ matrix.arch }}
           provenance: false
 
-      - name: Build and publish image
+      - name: Build image and publish by digest
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: ${{ github.event_name == 'pull_request' && 'type=cacheonly' || format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', needs.metadata.outputs.image) }}
+          labels: ${{ needs.metadata.outputs.labels }}
           cache-from: |
-            type=gha,scope=haruka-container
-            type=gha,scope=haruka-rust-deps
-          cache-to: type=gha,mode=max,scope=haruka-container
-          provenance: mode=max
-          sbom: true
+            type=gha,scope=haruka-container-${{ matrix.arch }}
+            type=gha,scope=haruka-rust-deps-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=haruka-container-${{ matrix.arch }}
+          provenance: ${{ github.event_name != 'pull_request' && 'mode=max' || 'false' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
+
+      - name: Save image digest
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/digests"
+          printf '%s\n' "$DIGEST" > "$RUNNER_TEMP/digests/$ARCH"
+
+      - name: Upload image digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish multi-platform image
+    needs: [metadata, container]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download image digests
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and inspect multi-platform image
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          IMAGE: ${{ needs.metadata.outputs.image }}
+          METADATA: ${{ needs.metadata.outputs.json }}
+        run: |
+          amd64=$(cat amd64)
+          arm64=$(cat arm64)
+          mapfile -t tags < <(jq -r '.tags[]' <<< "$METADATA")
+          tag_args=()
+          for tag in "${tags[@]}"; do
+            tag_args+=(--tag "$tag")
+          done
+          docker buildx imagetools create "${tag_args[@]}" \
+            "$IMAGE@$amd64" "$IMAGE@$arm64"
+          docker buildx imagetools inspect "${tags[0]}"

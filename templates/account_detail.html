@@ -5,27 +5,26 @@
   <div>
     <div class="flex flex-wrap items-center gap-2"><h1 class="text-xl font-bold">账户详情</h1><span class="text-xs rounded-full bg-gray-100 text-gray-600 px-2 py-0.5">{{ kind_label }}</span><span class="text-xs rounded-full bg-blue-50 text-blue-700 px-2 py-0.5">{{ currency }}</span></div>
     <p class="text-sm text-gray-500 mt-1">创建于 <time data-utc-time="{{ created_at }}">{{ created_at }}</time></p>
-    <p class="text-xs text-gray-500 mt-1" data-business-time-zone="{{ time_zone }}">本月汇总和时间显示口径：{{ time_zone }}（未提供浏览器时区时使用 UTC）</p>
   </div>
-  <div class="flex items-center gap-3 text-sm"><a href="/accounts/{{ id }}/balance" class="text-blue-600 hover:underline">{% if is_investment %}校准持仓价值{% else %}设置余额{% endif %}</a><a href="/accounts/{{ id }}/edit" class="text-blue-600 hover:underline">编辑</a><a href="/accounts" class="text-gray-600 hover:underline">返回账户</a></div>
+  <div class="flex items-center gap-3 text-sm"><a href="/accounts/{{ id }}/balance" class="text-blue-600 hover:underline">{% if is_investment %}校准持仓价值{% else %}设置余额{% endif %}</a><a href="/accounts/{{ id }}/edit" class="text-blue-600 hover:underline">编辑</a><a href="/accounts" class="text-gray-600 hover:underline">返回</a></div>
 </div>
 
-{% if is_investment %}<div class="rounded-lg border border-blue-200 bg-blue-50 p-4 mb-5 text-sm text-blue-800">此账户为具体基金。请按月至少每 30 天核对持仓价值；校准入口进入所属分组的逐基金估值页，差额只记估值审计，不计普通收支。</div>{% endif %}
+{% if is_investment %}<div class="rounded-lg border border-blue-200 bg-blue-50 p-4 mb-5 text-sm text-blue-800">基金记得至少每 30 天核对持仓价值哦</div>{% endif %}
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium mb-3">账户信息</h2>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
     <button type="button" data-copy-row data-copy-label="账户名" class="text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
-      <span class="block text-xs text-gray-500">账户名（点击复制）</span><span data-copy-value class="block mt-1 font-medium break-all">{{ name }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制账户名</span>
+      <span class="block text-xs text-gray-500">账户名</span><span data-copy-value class="block mt-1 font-medium break-all">{{ name }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制账户名</span>
     </button>
     {% if !card_number_masked.is_empty() %}
     <button type="button" data-copy-row data-copy-label="卡号" data-copy-card-url="/accounts/{{ id }}/card-number" class="text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
-      <span class="block text-xs text-gray-500">银行卡号（默认隐藏）</span><span class="block mt-1 font-mono break-all">{{ card_number_masked }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">点击复制完整卡号</span>
+      <span class="block text-xs text-gray-500">银行卡号</span><span class="block mt-1 font-mono break-all">{{ card_number_masked }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">点击复制完整卡号</span>
     </button>
     {% endif %}
     {% if !account_username.is_empty() %}
     <button type="button" data-copy-row data-copy-label="用户名" class="text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
-      <span class="block text-xs text-gray-500">完整用户名（点击复制）</span><span data-copy-value class="block mt-1 break-all">{{ account_username }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制用户名</span>
+      <span class="block text-xs text-gray-500">完整用户名</span><span data-copy-value class="block mt-1 break-all">{{ account_username }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制用户名</span>
     </button>
     {% endif %}
     {% if !credit_summary.is_empty() %}<div class="rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">授信设置</div><div class="mt-1">{{ credit_summary }}</div></div>{% endif %}

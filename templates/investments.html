@@ -8,7 +8,7 @@
 
 <section id="investment-runner" data-auto-run="{% if calendar_warning %}false{% else if automatic_due_count > 0 %}true{% else %}false{% endif %}" class="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-5">
   <div class="flex flex-wrap items-center justify-between gap-3">
-    <div><p class="text-sm font-medium text-blue-900">解锁后自动补执行</p><p class="text-xs text-blue-700 mt-1">今天（北京时间 {{ today }}）有 {{ automatic_due_count }} 个固定或聪明定投待自动执行。手动计划在下方确认，短信计划等待银行短信；所有模式都按计划和日期幂等去重。</p></div>
+    <div><p class="text-sm font-medium text-blue-900">解锁后自动补执行</p><p class="text-xs text-blue-700 mt-1">今天（北京时间 {{ today }}）有 {{ automatic_due_count }} 个固定或聪明定投待自动执行。手动计划在下方确认，短信计划等待银行短信。</p></div>
     <button id="investment-run-button" type="button" class="shrink-0 rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">检查并执行</button>
   </div>
   <div id="investment-run-status" class="hidden mt-3 rounded border px-3 py-2 text-sm" role="status" aria-live="polite"></div>

@@ -4,7 +4,6 @@
 <div class="max-w-md">
   <h1 class="text-xl font-bold mb-2">{{ heading }}</h1>
   <p class="text-sm text-gray-500 mb-4">{{ account_name }} 当前余额：<span class="font-mono text-gray-900">{{ current_balance }}</span></p>
-  <p class="text-xs text-gray-500 mb-3">投资基金使用所属分组的批量估值页，不通过此处设置分组总余额。</p>
   <form method="post" action="{{ action }}" hx-confirm="{{ confirm_message }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
     <div>
       <label class="block text-sm text-gray-600 mb-1">目标余额</label>

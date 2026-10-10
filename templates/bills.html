@@ -4,7 +4,6 @@
 <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
   <div>
     <h1 class="text-xl font-bold">{{ page_heading }}</h1>
-    <p class="text-xs text-gray-500 mt-1" data-business-time-zone="{{ time_zone }}">日期筛选、汇总和时间显示口径：{{ time_zone }}（未提供浏览器时区时使用 UTC）</p>
   </div>
   <div class="flex flex-wrap items-center justify-end gap-2">
     <form method="get" action="{{ export_action }}" hx-boost="false">

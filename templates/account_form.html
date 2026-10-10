@@ -19,7 +19,7 @@
       <option value="investment" {% if account_kind == "investment" %}selected{% endif %}>投资账户（基金分组）</option>
       <option value="other" {% if account_kind == "other" %}selected{% endif %}>其他</option>
     </select>
-    <p class="text-xs text-gray-500 mt-1">新建投资账户会自动创建“默认基金”。投资分组只管理基金，不直接收付款；建立后类型和货币不可更改。</p>
+    <p class="text-xs text-gray-500 mt-1">需要注意的是，投资账户是一个基金分组大类，请在创建后在分组下创建实际的基金；建立后类型和货币不可更改。</p>
   </div>
   <div>
     <label class="block text-sm text-gray-600 mb-1">账户货币</label>
@@ -38,7 +38,7 @@
   </div>
   <div id="credit-settings-field" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
     <div>
-      <label class="block text-sm text-gray-600 mb-1">授信额</label>
+      <label class="block text-sm text-gray-600 mb-1">额度</label>
       <input id="credit-limit" name="credit_limit" type="number" step="0.01" min="0" value="{{ credit_limit }}" placeholder="10000.00" class="w-full border border-gray-300 rounded px-3 py-1.5 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
     </div>
     <div>
@@ -48,10 +48,10 @@
     <div>
       <label class="block text-sm text-gray-600 mb-1">还款日（可选）</label>
       <input id="repayment-day" name="repayment_day" type="number" min="1" max="31" value="{{ repayment_day }}" placeholder="留空跟随账单日" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-      <p class="mt-1 text-xs text-gray-400">当月没有该日期时按月末计算。</p>
+      <p class="mt-1 text-xs text-gray-400">当月没有该日期时按月末日计算。</p>
     </div>
   </div>
-  <p id="credit-balance-help" class="text-xs text-gray-500">信用卡允许正余额；信贷服务余额最高为 0。信用账户只有现有余额为正时才能转出，且不得使用授信额度转账。</p>
+  <p id="credit-balance-help" class="text-xs text-gray-500">需要注意的是：信用卡允许正余额（溢缴款）；信贷服务余额最高为 0（已还清）。信用账户只有现有余额为正时才能转出，且不得使用授信额度转账（即使你可以这么做，但是不推荐这么做）。</p>
   <div>
     <label class="block text-sm text-gray-600 mb-1">备注</label>
     <input name="note" value="{{ note }}" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">

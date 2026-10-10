@@ -7,10 +7,9 @@
     <a href="/settings" class="text-sm text-blue-600 hover:underline">返回设置</a>
   </div>
   <section class="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-5">
-    <h2 class="text-sm font-medium text-blue-900">支出次数上限是软提醒，不会阻止记账</h2>
     <p class="text-sm text-blue-800 mt-1">已用达到 80% 或剩余不超过 1 次时，这里和仪表板会提醒；达到上限与超过上限会分别标记，仍可正常记录实际支出。</p>
     <p class="text-xs text-blue-800 mt-2">只统计该分类当前周期截至今天的支出账单，每笔账单计 1 次，不受账户或货币影响。重命名不会重置次数；未来日期的账单暂不计入。上限留空即停用，收入分类不设置次数上限。</p>
-    <p class="text-xs text-gray-600 mt-2" data-business-time-zone="{{ time_zone }}">自然日、周一至周日及自然月口径：{{ time_zone }}（未提供浏览器时区时使用 UTC）。删除分类不会改变已有账单；重新创建同名分类也不会继承被删除分类的次数。</p>
+    <p class="text-xs text-gray-600 mt-2" data-business-time-zone="{{ time_zone }}">删除分类不会改变已有账单；重新创建同名分类也不会继承被删除分类的次数。</p>
   </section>
 
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">

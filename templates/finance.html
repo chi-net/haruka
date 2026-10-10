@@ -17,12 +17,12 @@
 </style>
 <div id="finance-page" class="space-y-5" hx-history="false">
   <header class="flex flex-wrap items-start justify-between gap-3">
-    <div><h1 class="text-xl font-bold">理财规划</h1><p class="text-sm text-gray-500 mt-1">先编辑预算与资产配置，保存查看服务器预览，再明确确认生成实际定投计划。</p></div>
+    <div><h1 class="text-xl font-bold">理财规划</h1></div>
     <div class="flex gap-3 text-sm"><a href="/investments" class="text-blue-600 hover:underline">管理定投</a><a href="/accounts" class="text-blue-600 hover:underline">管理账户与基金</a></div>
   </header>
   <section class="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
-    <p>参考 <a href="https://blog.chihuo2104.dev/posts/how-i-do-financial-management/" target="_blank" rel="noopener noreferrer" class="underline">《我怎么开始多多理财》</a> 的预算、应急金与资产配置思路。模板只是可编辑的起点，不是投资建议、产品推荐或收益承诺。</p>
-    <p class="mt-2">Haruka 生成的是内部记账定投计划，不会向银行或基金平台下单。生成时不会产生账单或转账；启用后的计划可能在解锁后按交易日自动执行内部记账，请自行核对真实交易。</p>
+    <p>理财内容参考 <a href="https://blog.chihuo2104.dev/posts/how-i-do-financial-management/" target="_blank" rel="noopener noreferrer" class="underline">《我怎么开始多多理财》</a> 的预算、应急金与资产配置思路。模板只是可编辑的起点。请注意，这不是投资建议、产品推荐或收益承诺。</p>
+    <p class="mt-2">Haruka 生成的是内部记账定投计划，仅供参考。不会向银行或基金平台下单，生成时不会产生账单或转账；启用后的计划可能在解锁后按交易日自动执行内部记账，请自行核对真实交易。</p>
   </section>
   <noscript><section class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">理财编辑器需要 JavaScript 才能读取配置、保存和确认生成。请启用 JavaScript 后重新打开本页；也可前往“管理定投”或“管理账户与基金”。下方表单在此状态下不可提交。</section></noscript>
   <p id="finance-status" role="status" aria-live="polite" class="text-sm whitespace-pre-wrap">正在加载理财配置…</p>
