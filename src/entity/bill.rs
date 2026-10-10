@@ -11,6 +11,8 @@ pub struct Model {
     /// 金额（整数分）的密文，base64 编码
     pub amount: String,
     pub category: String,
+    /// 稳定分类身份，删除分类后仍保留；NULL 仅用于待迁移旧账单，0 表示无法关联
+    pub category_id: Option<i64>,
     /// 创建或修改账单时记录的食品类标记
     pub is_food: bool,
     pub note: String,

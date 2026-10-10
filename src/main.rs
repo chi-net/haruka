@@ -1,3 +1,4 @@
+mod category_limits;
 mod crypto;
 mod currency;
 mod db;
@@ -573,16 +574,16 @@ async fn main() {
         .route("/statistics", get(handlers::statistics::show))
         .route("/currency-converter", get(handlers::currencies::converter))
         .route(
-            "/settings/categories",
-            post(handlers::settings::create_category),
+            "/categories",
+            get(handlers::categories::show).post(handlers::categories::create),
         )
         .route(
-            "/settings/categories/{id}/edit",
-            get(handlers::settings::edit_category_form).post(handlers::settings::update_category),
+            "/categories/{id}/edit",
+            get(handlers::categories::edit_form).post(handlers::categories::update),
         )
         .route(
-            "/settings/categories/{id}/delete",
-            post(handlers::settings::delete_category),
+            "/categories/{id}/delete",
+            post(handlers::categories::delete),
         )
         .route(
             "/settings/recovery",

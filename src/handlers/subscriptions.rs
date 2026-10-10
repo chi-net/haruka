@@ -591,7 +591,7 @@ pub async fn create(
     Form(form): Form<SubscriptionFormData>,
 ) -> HandlerResult<Redirect> {
     let parsed = parse_form(form)?;
-    super::bills::ensure_category_exists(&state, &dek, "expense", &parsed.category).await?;
+    super::bills::selected_category(&state, &dek, "expense", &parsed.category).await?;
     validate_auto_debit_account(&state, parsed.auto_debit_account_id, &parsed.currency).await?;
     subscription::ActiveModel {
         name: Set(crypto::encrypt(&dek, parsed.name.as_bytes())),
@@ -651,7 +651,7 @@ pub async fn update(
     Form(form): Form<SubscriptionFormData>,
 ) -> HandlerResult<Redirect> {
     let parsed = parse_form(form)?;
-    super::bills::ensure_category_exists(&state, &dek, "expense", &parsed.category).await?;
+    super::bills::selected_category(&state, &dek, "expense", &parsed.category).await?;
     validate_auto_debit_account(&state, parsed.auto_debit_account_id, &parsed.currency).await?;
     let subscription = subscription::Entity::find_by_id(id)
         .one(&state.db)
@@ -715,7 +715,8 @@ async fn execute_expense(
     .await
     .map_err(err500)?;
     let category = crypto::decrypt_string(dek, &subscription.category);
-    let is_food = super::bills::category_is_food(state, dek, "expense", &category).await?;
+    let selected_category =
+        super::bills::selected_category(state, dek, "expense", &category).await?;
     super::accounts::ensure_balance_delta(
         state,
         dek,
@@ -748,7 +749,8 @@ async fn execute_expense(
         kind: Set("expense".into()),
         amount: Set(crypto::encrypt_cents(dek, amount)),
         category: Set(crypto::encrypt(dek, category.as_bytes())),
-        is_food: Set(is_food),
+        category_id: Set(Some(selected_category.id)),
+        is_food: Set(selected_category.is_food),
         note: Set(crypto::encrypt(dek, note.as_bytes())),
         happened_at: Set(now),
         created_at: Set(chrono::Utc::now()),

@@ -112,6 +112,7 @@ pub async fn init() -> DatabaseConnection {
         .await
         .expect("建表失败");
     ensure_column(&db, "bills", "is_food", "BOOLEAN NOT NULL DEFAULT 0").await;
+    ensure_column(&db, "bills", "category_id", "INTEGER DEFAULT NULL").await;
     let mut create_bill_shares = schema.create_table_from_entity(bill_share::Entity);
     db.execute(builder.build(create_bill_shares.if_not_exists()))
         .await
@@ -324,6 +325,14 @@ pub async fn init() -> DatabaseConnection {
         .await
         .expect("建表失败");
     ensure_column(&db, "categories", "is_food", "BOOLEAN NOT NULL DEFAULT 0").await;
+    ensure_column(&db, "categories", "count_limit", "TEXT NOT NULL DEFAULT ''").await;
+    ensure_column(
+        &db,
+        "categories",
+        "count_limit_period",
+        "TEXT NOT NULL DEFAULT 'month'",
+    )
+    .await;
     let mut create_subscriptions = schema.create_table_from_entity(subscription::Entity);
     db.execute(builder.build(create_subscriptions.if_not_exists()))
         .await

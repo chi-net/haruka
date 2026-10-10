@@ -1220,28 +1220,30 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> Handl
     Ok(Redirect::to("/investments"))
 }
 
-async fn ensure_fee_category(state: &AppState, dek: &crypto::Dek) -> HandlerResult<()> {
-    let exists = category::Entity::find()
+async fn ensure_fee_category(state: &AppState, dek: &crypto::Dek) -> HandlerResult<i64> {
+    if let Some(category) = category::Entity::find()
+        .filter(category::Column::Kind.eq("expense"))
         .all(&state.db)
         .await
         .map_err(err500)?
         .into_iter()
-        .any(|item| {
-            item.kind == "expense" && crypto::decrypt_string(dek, &item.name) == "投资手续费"
-        });
-    if !exists {
-        category::ActiveModel {
-            kind: Set("expense".into()),
-            name: Set(crypto::encrypt(dek, "投资手续费".as_bytes())),
-            is_food: Set(false),
-            created_at: Set(chrono::Utc::now()),
-            ..Default::default()
-        }
-        .insert(&state.db)
-        .await
-        .map_err(err500)?;
+        .find(|item| crypto::decrypt_string(dek, &item.name) == "投资手续费")
+    {
+        return Ok(category.id);
     }
-    Ok(())
+    Ok(category::ActiveModel {
+        kind: Set("expense".into()),
+        name: Set(crypto::encrypt(dek, "投资手续费".as_bytes())),
+        is_food: Set(false),
+        count_limit: Set(String::new()),
+        count_limit_period: Set("month".into()),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    }
+    .insert(&state.db)
+    .await
+    .map_err(err500)?
+    .id)
 }
 
 async fn execute_plan_day(
@@ -1331,9 +1333,11 @@ async fn execute_plan_day(
     )
     .await?;
     super::accounts::ensure_balance_delta(state, dek, fund_account.id, amount).await?;
-    if fee > 0 {
-        ensure_fee_category(state, dek).await?;
-    }
+    let fee_category_id = if fee > 0 {
+        Some(ensure_fee_category(state, dek).await?)
+    } else {
+        None
+    };
     let next_start = trade_date
         .succ_opt()
         .ok_or_else(|| bad_request("下一日期超出范围"))?;
@@ -1377,13 +1381,14 @@ async fn execute_plan_day(
     .insert(&transaction)
     .await
     .map_err(err500)?;
-    let fee_bill_id = if fee > 0 {
+    let fee_bill_id = if let Some(category_id) = fee_category_id {
         Some(
             bill::ActiveModel {
                 account_id: Set(plan.from_account_id),
                 kind: Set("expense".into()),
                 amount: Set(crypto::encrypt_cents(dek, fee)),
                 category: Set(crypto::encrypt(dek, "投资手续费".as_bytes())),
+                category_id: Set(Some(category_id)),
                 is_food: Set(false),
                 note: Set(crypto::encrypt(
                     dek,
@@ -1750,10 +1755,8 @@ async fn process_custom_sms(
         account_id: Set(account.id),
         kind: Set(custom.action.clone()),
         amount: Set(crypto::encrypt_cents(dek, amount)),
-        category: Set(crypto::encrypt(
-            dek,
-            crypto::decrypt_string(dek, &category.name).as_bytes(),
-        )),
+        category: Set(category.name),
+        category_id: Set(Some(category.id)),
         is_food: Set(custom.action == "expense" && category.is_food),
         note: Set(crypto::encrypt(dek, note.as_bytes())),
         happened_at: Set(sms.occurred_at.naive_utc()),

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}收支分类 - Haruka{% endblock %}
+{% block content %}
+<div hx-history="false">
+  <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+    <div><h1 class="text-xl font-bold">收支分类</h1><p class="text-sm text-gray-500 mt-1">收入与支出分别管理；同类型下分类名称不能重复。</p></div>
+    <a href="/settings" class="text-sm text-blue-600 hover:underline">返回设置</a>
+  </div>
+  <section class="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-5">
+    <h2 class="text-sm font-medium text-blue-900">支出次数上限是软提醒，不会阻止记账</h2>
+    <p class="text-sm text-blue-800 mt-1">已用达到 80% 或剩余不超过 1 次时，这里和仪表板会提醒；达到上限与超过上限会分别标记，仍可正常记录实际支出。</p>
+    <p class="text-xs text-blue-800 mt-2">只统计该分类当前周期截至今天的支出账单，每笔账单计 1 次，不受账户或货币影响。重命名不会重置次数；未来日期的账单暂不计入。上限留空即停用，收入分类不设置次数上限。</p>
+    <p class="text-xs text-gray-600 mt-2" data-business-time-zone="{{ time_zone }}">自然日、周一至周日及自然月口径：{{ time_zone }}（未提供浏览器时区时使用 UTC）。删除分类不会改变已有账单；重新创建同名分类也不会继承被删除分类的次数。</p>
+  </section>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+    <section class="bg-white rounded-lg border border-gray-200 p-4 min-w-0">
+      <h2 class="font-medium mb-3">支出分类</h2>
+      <form method="post" action="/categories" class="space-y-3 border-b border-gray-100 pb-4 mb-4">
+        <input type="hidden" name="kind" value="expense">
+        <div><label for="expense-category-name" class="block text-sm text-gray-600 mb-1">分类名称</label><input id="expense-category-name" name="name" required placeholder="例如：餐饮" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></div>
+        <label class="flex items-center gap-2 text-sm text-gray-600"><input type="checkbox" name="is_food" value="true"> 计入恩格尔系数的食品支出</label>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div><label for="expense-count-period" class="block text-sm text-gray-600 mb-1">次数上限周期</label><select id="expense-count-period" name="count_limit_period" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white"><option value="day">每日</option><option value="week">每周（周一至周日）</option><option value="month" selected>每月（默认）</option></select></div>
+          <div><label for="expense-count-limit" class="block text-sm text-gray-600 mb-1">最多支出次数</label><input id="expense-count-limit" name="count_limit" inputmode="numeric" pattern="[0-9]*[1-9][0-9]*" title="请输入正整数；留空停用" placeholder="留空停用，例如 10" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></div>
+        </div>
+        <p class="text-xs text-gray-500">填写正整数启用软上限，留空则停用；不限制支出金额。</p>
+        <button class="bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700">新增支出分类</button>
+      </form>
+      <ul class="space-y-3">
+        {% for c in expense_categories %}
+        <li class="border border-gray-200 rounded-lg p-3">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="min-w-0 break-words"><span class="font-medium text-sm">{{ c.name }}</span>{% if c.is_food %} <span class="text-xs text-amber-700 bg-amber-50 rounded px-1.5 py-0.5">食品类</span>{% endif %}</div>
+            <div class="flex items-center gap-3 text-sm shrink-0"><a href="/categories/{{ c.id }}/edit" class="text-blue-600 hover:underline">编辑</a><form method="post" action="/categories/{{ c.id }}/delete" hx-confirm="确认删除该分类？已有账单不会受影响，重新创建同名分类也不会继承历史次数。"><button class="text-red-600 hover:underline">删除</button></form></div>
+          </div>
+          {% match c.status %}
+          {% when Some with (status) %}
+          <div class="mt-3 rounded-lg p-3 {% if status.over_limit %}bg-red-50{% else if status.at_limit %}bg-red-50{% else if status.near_limit %}bg-amber-50{% else %}bg-gray-50{% endif %}">
+            <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span class="text-gray-600">{{ status.period_label }} · {{ status.period_range }}</span>
+              {% if status.over_limit %}<span class="rounded-full px-2 py-0.5 bg-red-600 text-white font-medium">已超过上限</span>{% else if status.at_limit %}<span class="rounded-full px-2 py-0.5 bg-red-100 text-red-800 font-medium">已达到上限</span>{% else if status.near_limit %}<span class="rounded-full px-2 py-0.5 bg-amber-200 text-amber-900 font-medium">接近上限</span>{% else %}<span class="rounded-full px-2 py-0.5 bg-blue-50 text-blue-700">正常</span>{% endif %}
+            </div>
+            <div class="flex flex-wrap items-center justify-between gap-2 text-sm mt-2"><span>已用 <strong class="font-mono">{{ status.used }}</strong> / 上限 <strong class="font-mono">{{ status.limit }}</strong> 次</span><span>剩余 <strong class="font-mono">{{ status.remaining }}</strong> 次</span></div>
+            <div class="h-2 overflow-hidden rounded-full bg-gray-200 mt-2" role="progressbar" aria-label="支出次数使用比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ status.bar_percent }}"><div class="h-full rounded-full {% if status.over_limit %}bg-red-500{% else if status.at_limit %}bg-red-500{% else if status.near_limit %}bg-amber-500{% else %}bg-blue-500{% endif %}" style="width: {{ status.bar_percent }}%"></div></div>
+            <p class="text-xs text-gray-500 mt-1">已用 {{ status.percent }}%{% if status.at_limit %} · 仍可正常记账{% else if status.over_limit %} · 仍可正常记账{% endif %}</p>
+          </div>
+          {% when None %}
+          <p class="text-xs text-gray-500 mt-2">次数上限未启用 · 编辑分类可设置每日、每周或每月的正整数上限。</p>
+          {% endmatch %}
+        </li>
+        {% endfor %}
+        {% if expense_categories.is_empty() %}<li class="text-sm text-gray-400 border border-dashed border-gray-200 rounded-lg p-4">暂无支出分类，可在上方新增。</li>{% endif %}
+      </ul>
+    </section>
+
+    <section class="bg-white rounded-lg border border-gray-200 p-4 min-w-0">
+      <h2 class="font-medium mb-3">收入分类</h2>
+      <p class="text-xs text-gray-500 mb-3">收入分类不计入食品支出，也不设置次数上限。</p>
+      <form method="post" action="/categories" class="space-y-3 border-b border-gray-100 pb-4 mb-4">
+        <input type="hidden" name="kind" value="income">
+        <div><label for="income-category-name" class="block text-sm text-gray-600 mb-1">分类名称</label><input id="income-category-name" name="name" required placeholder="例如：工资" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></div>
+        <button class="bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700">新增收入分类</button>
+      </form>
+      <ul class="divide-y divide-gray-100 border border-gray-100 rounded-lg">
+        {% for c in income_categories %}
+        <li class="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"><span class="min-w-0 break-words">{{ c.name }}</span><div class="flex items-center gap-3 shrink-0"><a href="/categories/{{ c.id }}/edit" class="text-blue-600 hover:underline">编辑</a><form method="post" action="/categories/{{ c.id }}/delete" hx-confirm="确认删除该分类？已有账单不会受影响。"><button class="text-red-600 hover:underline">删除</button></form></div></li>
+        {% endfor %}
+        {% if income_categories.is_empty() %}<li class="p-4 text-sm text-gray-400">暂无收入分类，可在上方新增。</li>{% endif %}
+      </ul>
+    </section>
+  </div>
+</div>
+{% endblock %}

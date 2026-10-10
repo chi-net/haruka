@@ -793,31 +793,20 @@ async fn category_options(
         .collect())
 }
 
-pub(crate) async fn ensure_category_exists(
+pub(crate) async fn selected_category(
     state: &AppState,
     dek: &crypto::Dek,
     kind: &str,
     name: &str,
-) -> HandlerResult<()> {
-    category_is_food(state, dek, kind, name).await.map(|_| ())
-}
-
-pub(crate) async fn category_is_food(
-    state: &AppState,
-    dek: &crypto::Dek,
-    kind: &str,
-    name: &str,
-) -> HandlerResult<bool> {
+) -> HandlerResult<category::Model> {
     category::Entity::find()
+        .filter(category::Column::Kind.eq(kind))
         .all(&state.db)
         .await
         .map_err(err500)?
         .into_iter()
-        .find(|category| {
-            category.kind == kind && crypto::decrypt_string(dek, &category.name) == name
-        })
-        .map(|category| category.is_food)
-        .ok_or_else(|| bad_request("请选择设置中已有的对应收支分类"))
+        .find(|category| crypto::decrypt_string(dek, &category.name) == name)
+        .ok_or_else(|| bad_request("请选择分类页面中已有的对应收支分类"))
 }
 
 pub async fn list(
@@ -1116,7 +1105,7 @@ pub async fn create(
     {
         return Err(bad_request("只有信用卡或信贷服务的支出可以设置分期"));
     }
-    let is_food = category_is_food(&state, &dek, &parsed.kind, &parsed.category).await?;
+    let category = selected_category(&state, &dek, &parsed.kind, &parsed.category).await?;
     super::accounts::ensure_balance_delta(
         &state,
         &dek,
@@ -1130,7 +1119,8 @@ pub async fn create(
         kind: Set(parsed.kind.clone()),
         amount: Set(crypto::encrypt_cents(&dek, parsed.amount)),
         category: Set(crypto::encrypt(&dek, parsed.category.as_bytes())),
-        is_food: Set(is_food),
+        category_id: Set(Some(category.id)),
+        is_food: Set(category.is_food),
         note: Set(crypto::encrypt(&dek, parsed.note.as_bytes())),
         happened_at: Set(parsed.happened_at),
         created_at: Set(chrono::Utc::now()),
@@ -1191,18 +1181,17 @@ pub async fn create_batch(
         .into_iter()
         .map(|account| (account.id, account))
         .collect::<HashMap<_, _>>();
-    let categories = category::Entity::find()
+    let mut categories = HashMap::<String, HashMap<String, (i64, bool)>>::new();
+    for category in category::Entity::find()
         .all(&state.db)
         .await
         .map_err(err500)?
-        .into_iter()
-        .map(|category| {
-            (
-                (category.kind, crypto::decrypt_string(&dek, &category.name)),
-                category.is_food,
-            )
-        })
-        .collect::<HashMap<_, _>>();
+    {
+        categories.entry(category.kind).or_default().insert(
+            crypto::decrypt_string(&dek, &category.name),
+            (category.id, category.is_food),
+        );
+    }
 
     let mut parsed_entries = Vec::with_capacity(form.entries.len());
     let mut account_deltas = HashMap::<i64, i64>::new();
@@ -1225,8 +1214,9 @@ pub async fn create_batch(
         if !accounts.contains_key(&parsed.account_id) {
             return Err(bad_request("批量记录中包含不存在的账户"));
         }
-        let is_food = categories
-            .get(&(parsed.kind.clone(), parsed.category.clone()))
+        let (category_id, is_food) = categories
+            .get(parsed.kind.as_str())
+            .and_then(|names| names.get(parsed.category.as_str()))
             .copied()
             .ok_or_else(|| bad_request("批量记录中包含无效的收支分类"))?;
         let delta = signed_amount(&parsed.kind, parsed.amount)?;
@@ -1237,7 +1227,7 @@ pub async fn create_batch(
             .checked_add(delta)
             .ok_or_else(|| bad_request("批量记录金额超出范围"))?;
         account_deltas.insert(parsed.account_id, total_delta);
-        parsed_entries.push((parsed, is_food));
+        parsed_entries.push((parsed, category_id, is_food));
     }
 
     for (account_id, delta) in account_deltas {
@@ -1246,12 +1236,13 @@ pub async fn create_batch(
 
     let count = parsed_entries.len();
     let transaction = state.db.begin().await.map_err(err500)?;
-    for (parsed, is_food) in parsed_entries {
+    for (parsed, category_id, is_food) in parsed_entries {
         bill::ActiveModel {
             account_id: Set(parsed.account_id),
             kind: Set(parsed.kind),
             amount: Set(crypto::encrypt_cents(&dek, parsed.amount)),
             category: Set(crypto::encrypt(&dek, parsed.category.as_bytes())),
+            category_id: Set(Some(category_id)),
             is_food: Set(is_food),
             note: Set(crypto::encrypt(&dek, parsed.note.as_bytes())),
             happened_at: Set(parsed.happened_at),
@@ -1374,7 +1365,7 @@ pub async fn update(
         ));
     }
     let parsed = parse_form(form)?;
-    let is_food = category_is_food(&state, &dek, &parsed.kind, &parsed.category).await?;
+    let category = selected_category(&state, &dek, &parsed.kind, &parsed.category).await?;
     let b = bill::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -1405,7 +1396,8 @@ pub async fn update(
     active.kind = Set(parsed.kind);
     active.amount = Set(crypto::encrypt_cents(&dek, parsed.amount));
     active.category = Set(crypto::encrypt(&dek, parsed.category.as_bytes()));
-    active.is_food = Set(is_food);
+    active.category_id = Set(Some(category.id));
+    active.is_food = Set(category.is_food);
     active.note = Set(crypto::encrypt(&dek, parsed.note.as_bytes()));
     active.happened_at = Set(parsed.happened_at);
     active.update(&state.db).await.map_err(err500)?;

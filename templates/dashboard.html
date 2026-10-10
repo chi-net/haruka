@@ -16,6 +16,29 @@
 </section>
 {% endif %}
 
+{% if !category_count_statuses.is_empty() %}
+<section class="mb-5 rounded-xl border-2 border-amber-400 bg-amber-50 p-5" aria-label="分类笔数限额提醒">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div><h2 class="font-semibold text-amber-950">支出分类笔数提醒</h2><p class="mt-1 text-sm text-amber-800">达到 80% 或仅剩一笔时提醒；按 {{ time_zone }} 自然周期统计，不阻止真实支出记账。</p></div>
+    <a href="/categories" class="rounded border border-amber-400 bg-white px-3 py-2 text-sm text-amber-900">管理分类与限额</a>
+  </div>
+  <div class="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+    {% for status in category_count_statuses %}
+    <article data-category-id="{{ status.id }}" class="rounded-lg border-2 p-4 {% if status.at_limit || status.over_limit %}border-red-400 bg-red-50{% else %}border-amber-300 bg-white{% endif %}">
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <div class="min-w-0 break-words"><h3 class="font-semibold">{{ status.name }}</h3><p class="mt-1 text-xs text-gray-500">{{ status.period_label }} · {{ status.period_range }}</p></div>
+        <span class="text-sm font-bold {% if status.at_limit || status.over_limit %}text-red-700{% else %}text-amber-700{% endif %}">{% if status.over_limit %}已超出限额{% else if status.at_limit %}已达限额{% else %}即将达到限额{% endif %}</span>
+      </div>
+      <p class="mt-3 font-mono text-lg">已用 {{ status.used }} / {{ status.limit }} 笔</p>
+      <p class="mt-1 text-sm {% if status.at_limit || status.over_limit %}text-red-700{% else %}text-amber-800{% endif %}">{% if status.over_limit %}已超出 {{ status.over_by }} 笔{% else %}本周期还可 {{ status.remaining }} 笔{% endif %} · 已用 {{ status.percent }}%</p>
+      <div class="mt-3 h-2 overflow-hidden rounded bg-gray-200" aria-hidden="true"><div class="h-full {% if status.at_limit || status.over_limit %}bg-red-500{% else %}bg-amber-500{% endif %}" style="width: {{ status.bar_percent }}%"></div></div>
+      <a href="/categories/{{ status.id }}/edit" class="mt-3 inline-block text-sm text-blue-600 hover:underline">调整限额</a>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
 {% if !valuation_reminders.is_empty() %}
 <section class="mb-5 rounded-xl border-2 border-amber-400 bg-amber-50 p-5" aria-label="基金价值校准提醒">
   <div class="flex flex-wrap items-start justify-between gap-3">

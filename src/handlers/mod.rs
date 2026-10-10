@@ -2,6 +2,7 @@ pub mod accounts;
 pub mod auth;
 pub mod bills;
 pub mod budgets;
+pub mod categories;
 pub mod currencies;
 pub mod dashboard;
 pub mod debt_requests;

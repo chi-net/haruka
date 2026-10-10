@@ -784,28 +784,30 @@ pub async fn detail(
     ))
 }
 
-async fn ensure_fee_category(state: &AppState, dek: &crypto::Dek) -> HandlerResult<()> {
-    let exists = category::Entity::find()
+async fn ensure_fee_category(state: &AppState, dek: &crypto::Dek) -> HandlerResult<i64> {
+    if let Some(category) = category::Entity::find()
+        .filter(category::Column::Kind.eq("expense"))
         .all(&state.db)
         .await
         .map_err(err500)?
         .into_iter()
-        .any(|item| {
-            item.kind == "expense" && crypto::decrypt_string(dek, &item.name) == "分期费用"
-        });
-    if !exists {
-        category::ActiveModel {
-            kind: Set("expense".into()),
-            name: Set(crypto::encrypt(dek, "分期费用".as_bytes())),
-            is_food: Set(false),
-            created_at: Set(chrono::Utc::now()),
-            ..Default::default()
-        }
-        .insert(&state.db)
-        .await
-        .map_err(err500)?;
+        .find(|item| crypto::decrypt_string(dek, &item.name) == "分期费用")
+    {
+        return Ok(category.id);
     }
-    Ok(())
+    Ok(category::ActiveModel {
+        kind: Set("expense".into()),
+        name: Set(crypto::encrypt(dek, "分期费用".as_bytes())),
+        is_food: Set(false),
+        count_limit: Set(String::new()),
+        count_limit_period: Set("month".into()),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    }
+    .insert(&state.db)
+    .await
+    .map_err(err500)?
+    .id)
 }
 
 pub async fn set_paid(
@@ -870,9 +872,11 @@ pub async fn set_paid(
         )
         .await?;
         super::accounts::ensure_balance_delta(&state, &dek, plan.account_id, principal).await?;
-        if charges > 0 {
-            ensure_fee_category(&state, &dek).await?;
-        }
+        let fee_category_id = if charges > 0 {
+            Some(ensure_fee_category(&state, &dek).await?)
+        } else {
+            None
+        };
 
         let original_bill = bill::Entity::find_by_id(plan.bill_id)
             .one(&state.db)
@@ -904,13 +908,14 @@ pub async fn set_paid(
         .insert(&transaction)
         .await
         .map_err(err500)?;
-        let charge_bill_id = if charges > 0 {
+        let charge_bill_id = if let Some(category_id) = fee_category_id {
             Some(
                 bill::ActiveModel {
                     account_id: Set(repayment_account_id),
                     kind: Set("expense".into()),
                     amount: Set(crypto::encrypt_cents(&dek, charges)),
                     category: Set(crypto::encrypt(&dek, "分期费用".as_bytes())),
+                    category_id: Set(Some(category_id)),
                     is_food: Set(false),
                     note: Set(crypto::encrypt(
                         &dek,

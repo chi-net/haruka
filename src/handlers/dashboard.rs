@@ -139,6 +139,7 @@ struct DashboardTemplate {
     subscription_reminder_count: usize,
     installment_reminder_count: usize,
     budget_statuses: Vec<super::budgets::BudgetStatus>,
+    category_count_statuses: Vec<crate::category_limits::CountStatus>,
     valuation_reminders: Vec<FundValuationReminder>,
     valuation_reminder_count: usize,
 }
@@ -523,11 +524,29 @@ pub async fn show(
             name: crypto::decrypt_string(&dek, &person.name),
         })
         .collect::<Vec<_>>();
-    let categories = category::Entity::find()
+    let category_models = category::Entity::find()
         .order_by_asc(category::Column::Id)
         .all(&state.db)
         .await
-        .map_err(err500)?
+        .map_err(err500)?;
+    let mut category_count_statuses = crate::category_limits::statuses(
+        &dek,
+        time_zone,
+        today,
+        &category_models,
+        reminder_bills.values(),
+    )
+    .map_err(err500)?;
+    category_count_statuses.retain(|status| status.near_limit);
+    category_count_statuses.sort_by_key(|status| {
+        (
+            !status.over_limit,
+            !status.at_limit,
+            status.remaining,
+            status.id,
+        )
+    });
+    let categories = category_models
         .into_iter()
         .map(|category| CategoryOption {
             kind: category.kind,
@@ -575,11 +594,8 @@ pub async fn show(
         }
     }
 
-    let bill_values = bill::Entity::find()
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-        .into_iter()
+    let bill_values = reminder_bills
+        .into_values()
         .map(|bill| {
             let native_amount = crypto::decrypt_cents(&dek, &bill.amount);
             let bill_currency = account_currencies
@@ -661,6 +677,7 @@ pub async fn show(
         valuation_reminders,
         valuation_reminder_count,
         budget_statuses,
+        category_count_statuses,
     }
     .render()
     .map_err(err500)?;

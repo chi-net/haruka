@@ -1,11 +1,35 @@
 {% extends "base.html" %}
 {% block title %}编辑分类 - Haruka{% endblock %}
 {% block content %}
+<section hx-history="false">
 <h1 class="text-xl font-bold mb-4">编辑分类</h1>
-<form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-md">
-  <div><label class="block text-sm text-gray-600 mb-1">类型</label><select name="kind" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="expense" {% if kind == "expense" %}selected{% endif %}>支出</option><option value="income" {% if kind == "income" %}selected{% endif %}>收入</option></select></div>
-  <div><label class="block text-sm text-gray-600 mb-1">分类名称</label><input name="name" value="{{ name }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>
-  <label class="flex items-center gap-2 text-sm text-gray-600"><input type="checkbox" name="is_food" value="true" {% if is_food %}checked{% endif %}> 计入恩格尔系数的食品支出</label>
-  <div class="flex gap-3"><button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded">保存</button><a href="/settings" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300">取消</a></div>
+<p class="text-sm text-gray-500 mb-4">名称、类型和食品标记的修改不会改写已有账单。次数上限以该分类当前周期的现有支出实时计算，重命名不会重置次数。</p>
+<form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-lg">
+  <div><label for="category-kind" class="block text-sm text-gray-600 mb-1">类型</label><select id="category-kind" name="kind" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="expense" {% if kind == "expense" %}selected{% endif %}>支出</option><option value="income" {% if kind == "income" %}selected{% endif %}>收入</option></select></div>
+  <div><label for="category-name" class="block text-sm text-gray-600 mb-1">分类名称</label><input id="category-name" name="name" value="{{ name }}" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>
+  <fieldset id="category-expense-fields" class="space-y-3 border-t border-gray-100 pt-4">
+    <legend class="text-sm font-medium text-gray-700">支出专用设置</legend>
+    <p class="text-xs text-gray-500">选择收入时，以下食品标记和次数上限会自动清除。</p>
+    <label class="flex items-center gap-2 text-sm text-gray-600"><input type="checkbox" name="is_food" value="true" {% if is_food %}checked{% endif %}> 计入恩格尔系数的食品支出</label>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div><label for="category-count-period" class="block text-sm text-gray-600 mb-1">次数上限周期</label><select id="category-count-period" name="count_limit_period" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm bg-white"><option value="day" {% if count_limit_period == "day" %}selected{% endif %}>每日</option><option value="week" {% if count_limit_period == "week" %}selected{% endif %}>每周（周一至周日）</option><option value="month" {% if count_limit_period == "month" %}selected{% endif %}>每月（默认）</option></select></div>
+      <div><label for="category-count-limit" class="block text-sm text-gray-600 mb-1">最多支出次数</label><input id="category-count-limit" name="count_limit" value="{{ count_limit }}" inputmode="numeric" pattern="[0-9]*[1-9][0-9]*" title="请输入正整数；留空停用" placeholder="留空停用，例如 10" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm"></div>
+    </div>
+    <p class="text-xs text-gray-500">次数上限是软提醒：已用达到 80% 或剩余不超过 1 次时会提醒；达到或超过上限仍可正常记账。只统计该分类在当前周期截至今天的支出账单，不受账户或货币影响。</p>
+    <p class="text-xs text-gray-500" data-business-time-zone="{{ time_zone }}">自然日、周一至周日及自然月按 {{ time_zone }} 计算（未提供浏览器时区时使用 UTC）。</p>
+  </fieldset>
+  <div class="flex flex-wrap gap-3"><button class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">保存</button><a href="/categories" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300">取消</a></div>
 </form>
+</section>
+<script>
+(() => {
+  const kind = document.getElementById('category-kind');
+  const expenseFields = document.getElementById('category-expense-fields');
+  const updateExpenseFields = () => {
+    expenseFields.disabled = kind.value === 'income';
+  };
+  kind.addEventListener('change', updateExpenseFields);
+  updateExpenseFields();
+})();
+</script>
 {% endblock %}

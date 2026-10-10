@@ -359,6 +359,7 @@ pub(crate) async fn ensure_default_account(
     state: &AppState,
     dek: &crypto::Dek,
 ) -> HandlerResult<()> {
+    crate::category_limits::backfill_category_ids(state, dek).await?;
     if account::Entity::find()
         .count(&state.db)
         .await
@@ -405,6 +406,8 @@ async fn ensure_default_categories(state: &AppState, dek: &crypto::Dek) -> Handl
             kind: Set(kind.into()),
             name: Set(crypto::encrypt(dek, name.as_bytes())),
             is_food: Set(is_food),
+            count_limit: Set(String::new()),
+            count_limit_period: Set("month".into()),
             created_at: Set(chrono::Utc::now()),
             ..Default::default()
         }
