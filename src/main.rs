@@ -2,6 +2,7 @@ mod crypto;
 mod currency;
 mod db;
 mod entity;
+mod financial_planning;
 mod handlers;
 mod investment_funds;
 mod market_data;
@@ -427,6 +428,9 @@ async fn main() {
             "/subscriptions/run-due",
             post(handlers::subscriptions::run_due),
         )
+        .route("/finance", get(handlers::finance::show))
+        .route("/finance/save", post(handlers::finance::save))
+        .route("/finance/generate", post(handlers::finance::generate))
         .route(
             "/investments",
             get(handlers::investments::list).post(handlers::investments::create),

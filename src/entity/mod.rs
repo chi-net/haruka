@@ -9,6 +9,7 @@ pub mod debt_person;
 pub mod debt_record;
 pub mod debt_request;
 pub mod exchange_rate;
+pub mod financial_plan;
 pub mod installment_item;
 pub mod installment_plan;
 pub mod investment_execution;

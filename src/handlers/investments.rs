@@ -286,7 +286,7 @@ fn parse_builtin_sms(sms: &PendingSms) -> HandlerResult<PendingSms> {
     })
 }
 
-fn china_today() -> NaiveDate {
+pub(crate) fn china_today() -> NaiveDate {
     (chrono::Utc::now().naive_utc() + Duration::hours(8)).date()
 }
 
@@ -321,7 +321,7 @@ fn format_fee_rate(bps: i64) -> String {
     format!("{}%", Decimal::new(bps, 2).normalize())
 }
 
-fn calculate_fee(amount: i64, fee_rate_bps: i64) -> HandlerResult<i64> {
+pub(crate) fn calculate_fee(amount: i64, fee_rate_bps: i64) -> HandlerResult<i64> {
     let numerator = i128::from(amount)
         .checked_mul(i128::from(fee_rate_bps))
         .ok_or_else(|| bad_request("手续费计算超出范围"))?;
@@ -343,7 +343,10 @@ async fn is_trading_day(state: &AppState, date: NaiveDate) -> HandlerResult<bool
         .is_none())
 }
 
-async fn next_trading_day(state: &AppState, mut date: NaiveDate) -> HandlerResult<NaiveDate> {
+pub(crate) async fn next_trading_day(
+    state: &AppState,
+    mut date: NaiveDate,
+) -> HandlerResult<NaiveDate> {
     for _ in 0..=370 {
         if is_trading_day(state, date).await? {
             return Ok(date);

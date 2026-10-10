@@ -1,0 +1,476 @@
+{% extends "base.html" %}
+{% block title %}理财规划 - haruka{% endblock %}
+{% block content %}
+<style>
+  #finance-page .finance-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+  #finance-page .finance-input { width: 100%; min-width: 0; border: 1px solid #9ca3af; border-radius: .25rem; padding: .4rem .65rem; background: transparent; font-size: .875rem; }
+  #finance-page label.finance-label { display: block; font-size: .875rem; margin-bottom: .3rem; }
+  #finance-page .finance-help { font-size: .75rem; color: #6b7280; margin-top: .35rem; }
+  #finance-page button:disabled { opacity: .5; cursor: not-allowed; }
+  #finance-page [hidden] { display: none !important; }
+  #finance-page table { min-width: 44rem; }
+  #finance-page th, #finance-page td { padding: .6rem .75rem; text-align: left; vertical-align: top; }
+  #finance-confirm-dialog { color: inherit; background: var(--finance-dialog-bg, #fff); width: min(34rem, calc(100vw - 2rem)); max-height: calc(100dvh - 2rem); overflow-y: auto; margin: auto; border: 1px solid #9ca3af; border-radius: .5rem; padding: 1.25rem; }
+  #finance-confirm-dialog::backdrop { background: rgba(0, 0, 0, .5); }
+  @media (prefers-color-scheme: dark) { #finance-confirm-dialog { --finance-dialog-bg: #111827; } }
+  @media (max-width: 640px) { #finance-page .finance-grid { grid-template-columns: minmax(0, 1fr); } }
+</style>
+<div id="finance-page" class="space-y-5" hx-history="false">
+  <header class="flex flex-wrap items-start justify-between gap-3">
+    <div><h1 class="text-xl font-bold">理财规划</h1><p class="text-sm text-gray-500 mt-1">先编辑预算与资产配置，保存查看服务器预览，再明确确认生成实际定投计划。</p></div>
+    <div class="flex gap-3 text-sm"><a href="/investments" class="text-blue-600 hover:underline">管理定投</a><a href="/accounts" class="text-blue-600 hover:underline">管理账户与基金</a></div>
+  </header>
+  <section class="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
+    <p>参考 <a href="https://blog.chihuo2104.dev/posts/how-i-do-financial-management/" target="_blank" rel="noopener noreferrer" class="underline">《我怎么开始多多理财》</a> 的预算、应急金与资产配置思路。模板只是可编辑的起点，不是投资建议、产品推荐或收益承诺。</p>
+    <p class="mt-2">Haruka 生成的是内部记账定投计划，不会向银行或基金平台下单。生成时不会产生账单或转账；启用后的计划可能在解锁后按交易日自动执行内部记账，请自行核对真实交易。</p>
+  </section>
+  <noscript><section class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">理财编辑器需要 JavaScript 才能读取配置、保存和确认生成。请启用 JavaScript 后重新打开本页；也可前往“管理定投”或“管理账户与基金”。下方表单在此状态下不可提交。</section></noscript>
+  <p id="finance-status" role="status" aria-live="polite" class="text-sm whitespace-pre-wrap">正在加载理财配置…</p>
+  <form id="finance-form" hx-boost="false">
+    <fieldset id="finance-editor" disabled class="space-y-5">
+      <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
+        <h2 class="font-medium">1. 选择起点 / 自定义方案</h2>
+        <div class="flex flex-wrap items-end gap-3">
+          <div class="flex-1"><label for="finance-preset" class="finance-label">参考模板</label><select id="finance-preset" class="finance-input"><option value="beginner">入门：收入的 10%，两类股票各 50%</option><option value="balanced">均衡参考：收入的 30%，股票 / 债券 / 黄金四份各 25%</option><option value="custom">完全自定义：一项资产，100%</option></select></div>
+          <button id="finance-apply-preset" type="button" class="rounded border border-gray-300 px-3 py-1.5 text-sm">应用到草稿</button>
+        </div>
+        <p class="finance-help">应用模板会替换下方资产行及投资比例，保留收入、账户、应急金、货币与开始日期设置。不会立即更改定投，仍需保存并确认同步。</p>
+        <div class="finance-grid">
+          <div><label for="finance-name" class="finance-label">方案名称</label><input id="finance-name" class="finance-input" maxlength="200" required></div>
+          <div><label for="finance-currency" class="finance-label">方案货币（固定）</label><input id="finance-currency" class="finance-input" readonly><p class="finance-help">方案货币不会随默认货币改变；金额按服务器参考汇率换算，不代表银行成交汇率。</p></div>
+        </div>
+      </section>
+      <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
+        <h2 class="font-medium">2. 月收入、投资预算与生活费参考</h2>
+        <div class="finance-grid">
+          <div><label for="finance-income-months" class="finance-label">完整月份回看数</label><input id="finance-income-months" type="number" min="1" max="12" step="1" required class="finance-input"><p class="finance-help">保存后重新计算。只统计普通收入；当前未完整月份不参与，窗口内零收入 / 缺失月份按零纳入。</p></div>
+          <div><label for="finance-income-average" class="finance-label">服务器推算月均收入</label><input id="finance-income-average" readonly class="finance-input"><p id="finance-income-explanation" class="finance-help"></p></div>
+          <div><label for="finance-manual-income" class="finance-label">手动月收入 / 生活费基数</label><input id="finance-manual-income" type="text" inputmode="decimal" autocomplete="off" placeholder="留空使用月均收入，例如 10000.00" class="finance-input"><p class="finance-help">金额最多两位小数。没有收入记录也可手动填写；填写后优先使用此值。收入不等于可支配结余，请按实际生活开支调整基数及投资比例。</p></div>
+          <div><label for="finance-investment-percent" class="finance-label">投资比例（占月收入 / 手动基数的 %）</label><input id="finance-investment-percent" type="text" inputmode="decimal" required class="finance-input" data-percent><p class="finance-help">0.00–100.00%。剩余金额仅作生活费参考，不会自动分配或转账。</p></div>
+          <div><label for="finance-trading-days" class="finance-label">每月预计交易日</label><input id="finance-trading-days" type="number" min="1" max="31" step="1" required class="finance-input"><p class="finance-help">每日基准由月目标除以预计交易日向下取整到分；实际中国交易日数量不同，会有差额。聪明定投按基准的 0.5–1.5 倍变动，手续费另计。</p></div>
+        </div>
+        <details><summary class="cursor-pointer text-sm">查看已保存窗口的逐月收入</summary><div class="overflow-x-auto mt-3"><table class="w-full text-sm"><thead class="bg-gray-50 text-gray-500"><tr><th scope="col">完整月份</th><th scope="col">普通收入合计</th><th scope="col">收入笔数</th></tr></thead><tbody id="finance-income-rows"></tbody></table></div></details>
+      </section>
+      <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
+        <h2 class="font-medium">3. 应急金与账户绑定</h2>
+        <div class="finance-grid">
+          <div><label for="finance-emergency-months" class="finance-label">应急金目标（月数）</label><input id="finance-emergency-months" type="number" min="0" max="60" step="1" required class="finance-input"><p class="finance-help">按预览中的月剩余金额估算；0 表示关闭目标。应急金不足仅提示，不会阻止定投，不会自动搬运资金。</p></div>
+          <div><label for="finance-from-account" class="finance-label">定投扣款账户</label><select id="finance-from-account" class="finance-input"></select><p class="finance-help">只可选非信用的资金账户。币种不同会换算，每日金额及手续费以扣款账户货币显示。</p></div>
+          <div><label for="finance-parent-account" class="finance-label">新建基金归属的投资分组</label><select id="finance-parent-account" class="finance-input"></select><p class="finance-help">未绑定的正比例资产在确认生成时创建零余额基金；选择“新建分组”时才自动创建零余额分组。已绑定基金不迁移分组。</p></div>
+          <div><label for="finance-start-date" class="finance-label">新计划开始日期</label><input id="finance-start-date" type="date" required class="finance-input"><p class="finance-help">新计划须不早于今天；已有计划保留原开始日期及下一交易日，不重置历史。</p></div>
+        </div>
+        <fieldset><legend class="text-sm mb-2">纳入应急金的资金账户（可多选）</legend><div id="finance-reserve-accounts" class="flex flex-wrap gap-3 text-sm"></div><p class="finance-help">仅统计勾选的非信用资金账户，不含投资分组或基金，避免分组与子基金重复计算。未选择时当前应急金为零。</p></fieldset>
+      </section>
+      <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
+        <div class="flex flex-wrap justify-between items-center gap-3"><h2 class="font-medium">4. 资产配置（占投资预算的比例）</h2><button id="finance-add-row" type="button" class="rounded border border-gray-300 px-3 py-1.5 text-sm">添加资产</button></div>
+        <p class="finance-help">所有资产比例必须精确合计 100.00%，不会自动归一化。零比例可保存，确认同步时暂停对应的已跟踪计划；同一基金不可重复绑定。最多 20 项。</p>
+        <p id="finance-share-total" role="status" aria-live="polite" class="text-sm"></p>
+        <div id="finance-allocations" class="space-y-4"></div>
+      </section>
+      <div class="flex flex-wrap gap-3 items-center"><button id="finance-save" type="submit" class="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">保存并更新预览</button><button id="finance-generate" type="button" disabled class="rounded border border-blue-300 px-4 py-2 text-sm text-blue-700">确认生成 / 同步定投</button></div>
+    </fieldset>
+  </form>
+  <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-4" aria-labelledby="finance-preview-heading">
+    <div><h2 id="finance-preview-heading" class="font-medium">服务器预览（已保存配置）</h2><p id="finance-preview-state" class="finance-help">保存只更新预览，不会创建或修改实际定投。</p></div>
+    <ul id="finance-warnings" class="text-sm text-amber-700 space-y-2"></ul>
+    <p id="finance-no-preview" class="text-sm text-gray-500"></p>
+    <div id="finance-preview" hidden class="space-y-4">
+      <p id="finance-preview-source" class="text-sm text-gray-500"></p>
+      <dl id="finance-preview-summary" class="finance-grid text-sm"></dl>
+      <p id="finance-exchange-info" class="text-sm text-gray-500"></p>
+      <div class="overflow-x-auto"><table class="w-full text-sm"><caption class="text-left text-gray-500 mb-2">月配置、每个交易日基准与持仓差距（仅参考，不自动再平衡）</caption><thead class="bg-gray-50 text-gray-500"><tr><th scope="col">资产 / 比例</th><th scope="col">月目标</th><th scope="col">每日基准 / 手续费</th><th scope="col">预计月本金</th><th scope="col">基金 / 策略</th><th scope="col">当前 / 目标持仓 / 差距</th><th scope="col">已关联定投</th></tr></thead><tbody id="finance-preview-rows"></tbody></table></div>
+      <p id="finance-generation-error" class="text-sm text-amber-700"></p>
+    </div>
+  </section>
+  <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-3"><h2 class="font-medium">已关联的实际定投</h2><p class="finance-help">下列链接是已生成的计划，不是预览。同步只管理本方案跟踪的计划，不影响其他计划；移除 / 零比例项会暂停，已有交易进度与历史保留。</p><ul id="finance-linked-plans" class="text-sm space-y-2"></ul><div class="flex gap-3 text-sm"><a href="/investments" class="text-blue-600 hover:underline">查看所有定投与流水</a><a href="/accounts" class="text-blue-600 hover:underline">查看基金余额与账户</a></div></section>
+  <dialog id="finance-confirm-dialog" aria-labelledby="finance-confirm-title" aria-describedby="finance-confirm-details">
+    <h2 id="finance-confirm-title" class="font-bold">确认生成 / 同步实际定投？</h2>
+    <div id="finance-confirm-details" class="text-sm space-y-3 mt-3"><p>将依据当前已保存的服务器预览创建或更新本方案跟踪的定投，启用正比例项，暂停被移除或零比例项；已有进度与历史保留，其他计划不变。</p><p>未绑定的正比例资产会创建零余额基金（及必要的投资分组）。本次生成不产生账单或转账，也不向银行 / 基金平台发送申购指令。后续到期执行可能自动生成内部记账流水。</p><p id="finance-confirm-summary" class="font-medium"></p><p>请确认你已核对投资预算、扣款账户、具体基金、策略与手续费。</p></div>
+    <div class="flex flex-wrap gap-3 mt-4"><button id="finance-confirm-generate" type="button" class="rounded bg-blue-600 px-4 py-2 text-sm text-white">已核对，确认同步</button><button id="finance-cancel-generate" type="button" class="rounded border border-gray-300 px-4 py-2 text-sm">取消</button></div>
+  </dialog>
+</div>
+<template id="finance-allocation-template">
+  <fieldset class="rounded-lg border border-gray-200 p-4 space-y-3" data-allocation-key>
+    <legend class="text-sm font-medium" data-row-title></legend>
+    <div class="finance-grid">
+      <div><label class="finance-label" data-label="name">资产名称</label><input data-field="name" class="finance-input" maxlength="200" required></div>
+      <div><label class="finance-label" data-label="asset_class">资产类别</label><select data-field="asset_class" class="finance-input"><option value="equity">股票</option><option value="bond">债券</option><option value="gold">黄金</option><option value="cash">现金</option><option value="other">其他</option></select></div>
+      <div><label class="finance-label" data-label="share_bps">配置比例（占投资预算的 %）</label><input data-field="share_bps" type="text" inputmode="decimal" data-percent required class="finance-input"></div>
+      <div><label class="finance-label" data-label="fund_account_id">绑定具体基金</label><select data-field="fund_account_id" class="finance-input"></select></div>
+      <div><label class="finance-label" data-label="strategy">定投策略</label><select data-field="strategy" class="finance-input"><option value="fixed">固定金额</option><option value="smart">聪明定投（均线偏离）</option></select></div>
+      <div><label class="finance-label" data-label="fee_rate_bps">手续费率（%）</label><input data-field="fee_rate_bps" type="text" inputmode="decimal" data-percent required class="finance-input"></div>
+    </div>
+    <div data-smart-fields class="finance-grid" hidden>
+      <div><label class="finance-label" data-label="index_code">跟踪指数</label><select data-field="index_code" class="finance-input"></select></div>
+      <div><label class="finance-label" data-label="moving_average_days">均线周期</label><select data-field="moving_average_days" class="finance-input"></select></div>
+    </div>
+    <p data-smart-help hidden class="finance-help">跟踪指数仅用于确定每期记账本金的 0.5–1.5 倍档位，不保证收益；行情缺失或日历不可用等错误由实际定投执行页提示。</p>
+    <button type="button" data-remove-row class="text-sm text-red-600 hover:underline">移除此资产</button>
+  </fieldset>
+</template>
+<script id="finance-data" type="application/json">{{ data_json|safe }}</script>
+<script>
+(() => {
+  const page = document.getElementById('finance-page');
+  if (!page || page.dataset.ready === 'true') return;
+  page.dataset.ready = 'true';
+  const byId = id => document.getElementById(id);
+  const form = byId('finance-form');
+  const editor = byId('finance-editor');
+  const rows = byId('finance-allocations');
+  const status = byId('finance-status');
+  const dialog = byId('finance-confirm-dialog');
+  const saveButton = byId('finance-save');
+  const generateButton = byId('finance-generate');
+  const rowTemplate = byId('finance-allocation-template');
+  let data;
+  let baseline = '';
+  let busy = false;
+  let dirty = false;
+  let keySequence = 0;
+  let rowSequence = 0;
+  let confirmedRevision = null;
+  const inputIds = {
+    name: 'finance-name', manual_monthly_income: 'finance-manual-income',
+    income_months: 'finance-income-months', investment_bps: 'finance-investment-percent',
+    emergency_months: 'finance-emergency-months', trading_days: 'finance-trading-days',
+    from_account_id: 'finance-from-account', parent_account_id: 'finance-parent-account',
+    start_date: 'finance-start-date'
+  };
+  const moneyKinds = new Set(['payment', 'bank', 'stored_value', 'other']);
+  const percentText = bps => `${Math.floor(bps / 100)}.${String(bps % 100).padStart(2, '0')}`;
+  function parsePercent(value, label) {
+    const text = value.trim();
+    if (!/^\d+(?:\.\d{1,2})?$/.test(text)) throw new Error(`${label}须为 0.00–100.00 的百分比，最多两位小数。`);
+    const [whole, fraction = ''] = text.split('.');
+    const normalized = whole.replace(/^0+(?=\d)/, '');
+    if (normalized.length > 3) throw new Error(`${label}不能超过 100.00%。`);
+    const bps = Number(normalized) * 100 + Number(fraction.padEnd(2, '0'));
+    if (bps > 10000) throw new Error(`${label}不能超过 100.00%。`);
+    return bps;
+  }
+  function integerValue(value, min, max, label) {
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < min || Number(value) > max) throw new Error(`${label}须为 ${min}–${max} 的整数。`);
+    return Number(value);
+  }
+  function accountId(value) {
+    return value === '' ? null : integerValue(value, 1, Number.MAX_SAFE_INTEGER, '账户编号');
+  }
+  function node(tag, text, className) {
+    const element = document.createElement(tag);
+    if (text !== undefined) element.textContent = String(text);
+    if (className) element.className = className;
+    return element;
+  }
+  function option(select, value, label) {
+    const element = node('option', label);
+    element.value = String(value);
+    select.appendChild(element);
+  }
+  function accountOptions(select, accounts, emptyLabel, selected) {
+    select.replaceChildren();
+    option(select, '', emptyLabel);
+    accounts.forEach(account => option(select, account.id, `${account.name} · ${account.currency}`));
+    if (selected != null && !accounts.some(account => account.id === selected)) {
+      option(select, selected, `已不可用的账户 #${selected}（请重新选择）`);
+    }
+    select.value = selected == null ? '' : String(selected);
+  }
+  function newKey() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') return `custom-${window.crypto.randomUUID()}`;
+    keySequence += 1;
+    return `custom-${Date.now()}-${keySequence}`;
+  }
+  function allocation(key, name, assetClass, share) {
+    return { key, name, asset_class: assetClass, share_bps: share, fund_account_id: null, strategy: 'fixed', index_code: '', moving_average_days: 180, fee_rate_bps: 0 };
+  }
+  function syncStrategy(row) {
+    const smart = row.querySelector('[data-field="strategy"]').value === 'smart';
+    row.querySelector('[data-smart-fields]').hidden = !smart;
+    row.querySelector('[data-smart-help]').hidden = !smart;
+    row.querySelector('[data-field="index_code"]').required = smart;
+  }
+  function addRow(config) {
+    const row = rowTemplate.content.firstElementChild.cloneNode(true);
+    row.dataset.allocationKey = config.key;
+    rowSequence += 1;
+    row.querySelectorAll('[data-field]').forEach(field => {
+      field.id = `finance-row-${rowSequence}-${field.dataset.field}`;
+      row.querySelector(`[data-label="${field.dataset.field}"]`).htmlFor = field.id;
+    });
+    const fund = row.querySelector('[data-field="fund_account_id"]');
+    accountOptions(fund, data.accounts.filter(account => account.kind === 'investment_fund'), '确认时新建零余额基金', config.fund_account_id);
+    const index = row.querySelector('[data-field="index_code"]');
+    option(index, '', '请选择跟踪指数');
+    data.index_options.forEach(item => option(index, item.code, `${item.name}（${item.code}）`));
+    const average = row.querySelector('[data-field="moving_average_days"]');
+    data.moving_average_options.forEach(days => option(average, days, `${days} 日均线`));
+    ['name', 'asset_class', 'strategy', 'index_code', 'moving_average_days'].forEach(key => { row.querySelector(`[data-field="${key}"]`).value = config[key]; });
+    ['share_bps', 'fee_rate_bps'].forEach(key => { row.querySelector(`[data-field="${key}"]`).value = percentText(config[key]); });
+    syncStrategy(row);
+    rows.appendChild(row);
+  }
+  function readConfig() {
+    const config = { ...data.config };
+    Object.entries(inputIds).forEach(([key, id]) => { config[key] = byId(id).value; });
+    config.name = config.name.trim();
+    if (!config.name) throw new Error('请填写方案名称。');
+    config.manual_monthly_income = config.manual_monthly_income.trim();
+    if (config.manual_monthly_income && !/^\d+(?:\.\d{1,2})?$/.test(config.manual_monthly_income)) throw new Error('手动金额须为正数，最多两位小数，不支持千位逗号或科学计数法。');
+    if (config.manual_monthly_income && !/[1-9]/.test(config.manual_monthly_income)) throw new Error('手动金额须大于零；使用自动均值请留空。');
+    config.income_months = integerValue(config.income_months, 1, 12, '完整月份回看数');
+    config.investment_bps = parsePercent(config.investment_bps, '投资比例');
+    config.emergency_months = integerValue(config.emergency_months, 0, 60, '应急金目标月数');
+    config.trading_days = integerValue(config.trading_days, 1, 31, '预计交易日');
+    config.from_account_id = accountId(config.from_account_id);
+    config.parent_account_id = accountId(config.parent_account_id);
+    config.reserve_account_ids = Array.from(byId('finance-reserve-accounts').querySelectorAll('input:checked')).map(input => accountId(input.value));
+    config.allocations = Array.from(rows.children).map((row, index) => {
+      const value = key => row.querySelector(`[data-field="${key}"]`).value;
+      const name = value('name').trim();
+      if (!name) throw new Error(`第 ${index + 1} 项资产需要名称。`);
+      const smart = value('strategy') === 'smart';
+      return {
+        key: row.dataset.allocationKey, name, asset_class: value('asset_class'),
+        share_bps: parsePercent(value('share_bps'), `第 ${index + 1} 项配置比例`),
+        fund_account_id: accountId(value('fund_account_id')), strategy: value('strategy'),
+        index_code: smart ? value('index_code') : '',
+        moving_average_days: smart ? integerValue(value('moving_average_days'), 1, 1000, '均线周期') : 180,
+        fee_rate_bps: parsePercent(value('fee_rate_bps'), `第 ${index + 1} 项手续费率`)
+      };
+    });
+    if (!config.allocations.length || config.allocations.length > 20) throw new Error('资产数量须为 1–20 项。');
+    if (config.allocations.reduce((sum, row) => sum + row.share_bps, 0) !== 10000) throw new Error('资产比例须精确合计 100.00%，请手动调整；不会自动归一化。');
+    const funds = config.allocations.map(row => row.fund_account_id).filter(id => id !== null);
+    if (new Set(funds).size !== funds.length) throw new Error('同一个具体基金不能在资产行中重复绑定。');
+    return config;
+  }
+  function updateState() {
+    let total = 0;
+    let validShares = true;
+    Array.from(rows.children).forEach((row, index) => {
+      const name = row.querySelector('[data-field="name"]').value.trim();
+      row.querySelector('[data-row-title]').textContent = `${index + 1}. ${name || '未命名资产'}`;
+      const remove = row.querySelector('[data-remove-row]');
+      remove.disabled = rows.children.length <= 1;
+      remove.setAttribute('aria-label', `移除第 ${index + 1} 项资产：${name || '未命名资产'}`);
+      try { total += parsePercent(row.querySelector('[data-field="share_bps"]').value, '配置比例'); } catch (_) { validShares = false; }
+    });
+    const totalElement = byId('finance-share-total');
+    totalElement.textContent = validShares ? `配置比例合计：${percentText(total)}%${total === 10000 ? '（符合 100.00%）' : '（必须调整至 100.00%）'}` : '配置比例格式有误：请输入 0.00–100.00%，最多两位小数。';
+    totalElement.className = validShares && total === 10000 ? 'text-sm text-green-700' : 'text-sm text-amber-700';
+    try { dirty = JSON.stringify(readConfig()) !== baseline; } catch (_) { dirty = true; }
+    generateButton.disabled = busy || dirty || data.revision <= 0 || !data.preview || !data.preview.can_generate || !data.generation_token;
+    saveButton.disabled = busy;
+    byId('finance-add-row').disabled = rows.children.length >= 20;
+    byId('finance-preview-state').textContent = dirty ? '有未保存修改：下方仍为上次服务器预览，不代表当前草稿；请先保存。' : '下方为服务器当前预览。保存不改实际定投，确认同步才创建或更新计划。';
+    if (!busy) status.textContent = dirty ? '草稿有未保存修改。保存后再核对预览并确认同步。' : data.notice || (data.revision > 0 ? '配置已保存。核对服务器预览后可确认生成 / 同步定投。' : '尚未保存方案。可先编辑并保存预览，未记录收入时请填写手动基数。');
+  }
+  function link(href, text) {
+    const anchor = node('a', text, 'text-blue-600 hover:underline');
+    anchor.href = href;
+    return anchor;
+  }
+  function cell(row, text) {
+    const element = node('td', text);
+    row.appendChild(element);
+    return element;
+  }
+  function renderPreview() {
+    byId('finance-income-average').value = data.income.has_estimate ? data.income.average : '暂无可用收入均值，请填写手动基数';
+    byId('finance-income-explanation').textContent = `${data.income.explanation} 统计时区：${data.income.time_zone}。`;
+    const incomeRows = byId('finance-income-rows');
+    incomeRows.replaceChildren();
+    data.income.months.forEach(month => {
+      const row = node('tr');
+      cell(row, month.label); cell(row, month.total); cell(row, month.count);
+      incomeRows.appendChild(row);
+    });
+    const warnings = byId('finance-warnings');
+    warnings.replaceChildren();
+    data.warnings.forEach(warning => warnings.appendChild(node('li', warning)));
+    const preview = data.preview;
+    byId('finance-preview').hidden = !preview;
+    byId('finance-no-preview').hidden = Boolean(preview);
+    byId('finance-no-preview').textContent = '暂无金额预览，请先处理上方收入或账户配置提示后保存。若没有可推算的收入，可手动填写月收入 / 生活费基数；其他配置仍可编辑。';
+    if (preview) {
+      byId('finance-preview-source').textContent = `收入依据：${preview.income_source}；方案货币 ${preview.currency}；每日扣款货币 ${preview.from_currency}；股票占投资配置 ${preview.equity_percent}。`;
+      const summary = byId('finance-preview-summary');
+      summary.replaceChildren();
+      [
+        ['采用月收入 / 基数', preview.income], ['每月投资预算', preview.monthly_investment],
+        ['每月生活费 / 剩余参考', preview.monthly_remaining], ['应急金目标', preview.emergency_target],
+        ['当前应急金', preview.reserve_current], ['应急金缺口', preview.reserve_gap],
+        ['当前应急金可覆盖月数', preview.reserve_months], ['已绑定基金当前总持仓', preview.portfolio_total]
+      ].forEach(([label, value]) => { const item = node('div'); item.append(node('dt', label, 'text-gray-500'), node('dd', value, 'font-mono mt-1')); summary.appendChild(item); });
+      byId('finance-exchange-info').textContent = preview.exchange_info;
+      const previewRows = byId('finance-preview-rows');
+      previewRows.replaceChildren();
+      preview.rows.forEach(item => {
+        const row = node('tr');
+        cell(row, `${item.name} · ${item.share}`);
+        cell(row, item.monthly_target);
+        cell(row, `${item.daily_amount} / 手续费 ${item.fee_per_day}`);
+        cell(row, item.estimated_monthly);
+        cell(row, `${item.fund_label} · ${item.strategy_label}`);
+        cell(row, `当前 ${item.current_value} / 目标 ${item.target_value} / 差距 ${item.rebalance_gap}`);
+        const planCell = cell(row);
+        if (item.plan_id != null) planCell.appendChild(link(`/investments/${item.plan_id}/edit`, `计划 #${item.plan_id}`));
+        else planCell.textContent = '仅预览，尚未关联';
+        previewRows.appendChild(row);
+      });
+      byId('finance-generation-error').textContent = preview.generation_error || (preview.can_generate ? '可确认同步。月目标和持仓差距仅供参考，生成不会自动再平衡。' : '当前配置不能生成实际定投，请处理提示后保存。');
+    }
+    const linked = byId('finance-linked-plans');
+    linked.replaceChildren();
+    if (!data.linked_plans.length) linked.appendChild(node('li', '尚未关联任何实际定投计划。', 'text-gray-500'));
+    data.linked_plans.forEach(item => {
+      const allocation = data.config.allocations.find(row => row.key === item.key);
+      const li = node('li');
+      li.append(link(`/investments/${item.plan_id}/edit`, `${allocation ? allocation.name : '已移除资产'} · 计划 #${item.plan_id}`), document.createTextNode(' · '), link(`/accounts/${item.fund_account_id}`, `基金账户 #${item.fund_account_id}`));
+      linked.appendChild(li);
+    });
+  }
+  function renderData(next) {
+    data = next;
+    Object.entries(inputIds).forEach(([key, id]) => {
+      if (key === 'from_account_id' || key === 'parent_account_id') return;
+      byId(id).value = key === 'investment_bps' ? percentText(data.config[key]) : data.config[key];
+    });
+    byId('finance-currency').value = data.config.currency;
+    const moneyAccounts = data.accounts.filter(account => moneyKinds.has(account.kind));
+    accountOptions(byId('finance-from-account'), moneyAccounts, '请选择扣款账户（预览可暂不绑定）', data.config.from_account_id);
+    accountOptions(byId('finance-parent-account'), data.accounts.filter(account => account.kind === 'investment'), '确认时新建投资分组', data.config.parent_account_id);
+    const reserveAccounts = byId('finance-reserve-accounts');
+    reserveAccounts.replaceChildren();
+    const unavailableReserveIds = data.config.reserve_account_ids.filter(id => !moneyAccounts.some(account => account.id === id));
+    unavailableReserveIds.forEach(id => {
+      const label = node('label', undefined, 'inline-flex items-center gap-2 text-amber-700');
+      const checkbox = node('input');
+      checkbox.type = 'checkbox'; checkbox.id = `finance-reserve-${id}`; checkbox.value = String(id); checkbox.checked = true;
+      label.htmlFor = checkbox.id;
+      label.append(checkbox, node('span', `已不可用的应急金账户 #${id}（请取消勾选）`));
+      reserveAccounts.appendChild(label);
+    });
+    moneyAccounts.forEach(account => {
+      const label = node('label', undefined, 'inline-flex items-center gap-2');
+      const checkbox = node('input');
+      checkbox.type = 'checkbox'; checkbox.id = `finance-reserve-${account.id}`; checkbox.value = String(account.id);
+      checkbox.checked = data.config.reserve_account_ids.includes(account.id);
+      label.htmlFor = checkbox.id;
+      label.append(checkbox, node('span', `${account.name} · ${account.currency}`));
+      reserveAccounts.appendChild(label);
+    });
+    if (!moneyAccounts.length) reserveAccounts.appendChild(node('p', '没有可用的非信用资金账户，请先前往账户页添加。', 'text-gray-500'));
+    rows.replaceChildren();
+    data.config.allocations.forEach(addRow);
+    baseline = JSON.stringify(readConfig());
+    renderPreview();
+    updateState();
+  }
+  function showError(error, prefix) {
+    const message = `${prefix}：${error.message || error}`;
+    status.textContent = message;
+    window.harukaShowError(message, error.status);
+  }
+  async function request(url, body) {
+    const response = await fetch(url, { method: 'POST', headers: { Accept: 'application/json' }, body, credentials: 'same-origin' });
+    if (!response.ok) {
+      const error = new Error(await window.harukaReadErrorResponse(response));
+      error.status = response.status;
+      throw error;
+    }
+    const result = await response.json();
+    if (!result.config || !Number.isSafeInteger(result.revision) || !Array.isArray(result.accounts)) throw new Error('服务器返回的理财数据不完整，请重新打开本页。');
+    return result;
+  }
+  function setBusy(value, message) {
+    busy = value;
+    editor.disabled = value;
+    form.setAttribute('aria-busy', String(value));
+    byId('finance-confirm-generate').disabled = value;
+    if (value) { generateButton.disabled = true; saveButton.disabled = true; status.textContent = message; }
+    else updateState();
+  }
+  form.addEventListener('input', updateState);
+  form.addEventListener('change', event => {
+    const row = event.target.closest('[data-allocation-key]');
+    if (row && event.target.dataset.field === 'strategy') syncStrategy(row);
+    updateState();
+  });
+  form.addEventListener('focusout', event => {
+    if (!event.target.hasAttribute('data-percent')) return;
+    try { event.target.value = percentText(parsePercent(event.target.value, '比例')); } catch (_) { return; }
+    updateState();
+  });
+  rows.addEventListener('click', event => {
+    const button = event.target.closest('[data-remove-row]');
+    if (!button || busy || rows.children.length <= 1) return;
+    button.closest('[data-allocation-key]').remove();
+    updateState();
+  });
+  byId('finance-add-row').addEventListener('click', () => {
+    if (busy || rows.children.length >= 20) return;
+    addRow(allocation(newKey(), '自定义资产', 'other', 0));
+    updateState();
+    rows.lastElementChild.querySelector('[data-field="name"]').focus();
+  });
+  byId('finance-apply-preset').addEventListener('click', () => {
+    if (busy) return;
+    const preset = byId('finance-preset').value;
+    let allocations;
+    if (preset === 'beginner') {
+      byId('finance-investment-percent').value = '10.00';
+      allocations = [allocation('overseas', '纳斯达克 100', 'equity', 5000), allocation('domestic', '沪港深 500', 'equity', 5000)];
+    } else if (preset === 'balanced') {
+      byId('finance-investment-percent').value = '30.00';
+      allocations = [allocation('overseas', '纳斯达克 100', 'equity', 2500), allocation('domestic', '沪港深 500（H30455）', 'equity', 2500), allocation('bond', '债券', 'bond', 2500), allocation('gold', '黄金', 'gold', 2500)];
+    } else {
+      allocations = [allocation(newKey(), '自定义资产', 'other', 10000)];
+    }
+    rows.replaceChildren(); allocations.forEach(addRow);
+    updateState();
+  });
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (busy) return;
+    let config;
+    try { config = readConfig(); } catch (error) { showError(error, '无法保存'); return; }
+    if (!form.reportValidity()) return;
+    setBusy(true, '正在保存并重新计算收入与预览…');
+    let failure;
+    try { renderData(await request('/finance/save', new URLSearchParams({ config_json: JSON.stringify(config), revision: String(data.revision) }))); }
+    catch (error) { failure = error; }
+    finally { setBusy(false); }
+    if (failure) showError(failure, '保存失败，输入已保留');
+  });
+  generateButton.addEventListener('click', () => {
+    updateState();
+    if (generateButton.disabled) return;
+    confirmedRevision = data.revision;
+    byId('finance-confirm-summary').textContent = `已保存方案「${data.config.name}」：每月投资预算 ${data.preview.monthly_investment}；${data.preview.rows.length} 项资产。`;
+    dialog.showModal();
+  });
+  byId('finance-cancel-generate').addEventListener('click', () => dialog.close());
+  byId('finance-confirm-generate').addEventListener('click', async () => {
+    if (busy) return;
+    updateState();
+    if (generateButton.disabled || confirmedRevision !== data.revision) { dialog.close(); showError(new Error('配置已改变，请先保存并重新核对预览。'), '无法同步'); return; }
+    dialog.close();
+    setBusy(true, '正在按已确认的服务器预览生成 / 同步实际定投…');
+    let failure;
+    try { renderData(await request('/finance/generate', new URLSearchParams({ revision: String(data.revision), generation_token: data.generation_token }))); }
+    catch (error) { failure = error; }
+    finally { confirmedRevision = null; setBusy(false); }
+    if (failure) showError(failure, '同步失败，配置与输入已保留；如预览已变动，请重新保存并确认');
+  });
+  try {
+    renderData(JSON.parse(byId('finance-data').textContent));
+    editor.disabled = false;
+  } catch (error) {
+    editor.disabled = true;
+    showError(error, '无法载入理财配置');
+  }
+})();
+</script>
+{% endblock %}

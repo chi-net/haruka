@@ -2,7 +2,7 @@ use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema, 
 
 use crate::entity::{
     account, account_detail, balance_adjustment, bill, bill_share, budget, category, debt_person,
-    debt_record, debt_request, exchange_rate, installment_item, installment_plan,
+    debt_record, debt_request, exchange_rate, financial_plan, installment_item, installment_plan,
     investment_execution, investment_sms_event, market_closed_day, market_index_quote, meta,
     passkey, preference, recovery, recurring_investment, sms_template, subscription, transfer,
 };
@@ -256,6 +256,10 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_sms_templates.if_not_exists()))
         .await
         .expect("建短信模板表失败");
+    let mut create_financial_plans = schema.create_table_from_entity(financial_plan::Entity);
+    db.execute(builder.build(create_financial_plans.if_not_exists()))
+        .await
+        .expect("建理财配置表失败");
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_investment_sms_event_hash ON investment_sms_events (event_hash)".to_string(),
