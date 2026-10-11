@@ -1,0 +1,64 @@
+<div data-nav-section>
+  <a data-nav-link data-nav-primary href="/dashboard" class="inline-flex h-10 items-center rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">仪表板</a>
+</div>
+<div data-nav-section class="relative lg:w-20">
+  <a data-nav-link data-nav-primary href="/bills" class="absolute left-0 top-0 z-10 inline-flex h-10 items-center rounded-md px-3 text-sm text-gray-600 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">账单</a>
+  <details data-nav-group name="haruka-navigation">
+    <summary id="{{ nav_prefix }}-bills-toggle" aria-label="展开账单相关功能" aria-controls="{{ nav_prefix }}-bills-panel" class="flex h-10 cursor-pointer list-none items-center justify-end rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"><span aria-hidden="true">▾</span></summary>
+    <div id="{{ nav_prefix }}-bills-panel" class="mt-1 space-y-1 rounded-lg border border-gray-200 bg-white p-1 lg:absolute lg:left-0 lg:top-full lg:z-40 lg:mt-2 lg:w-56 lg:shadow-lg">
+      <a data-nav-link href="/bills/new" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">记一笔</a>
+      <a data-nav-link href="/bills/search" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">高级搜索</a>
+      <a data-nav-link href="/categories" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">分类</a>
+      <a data-nav-link href="/shares" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">分享管理</a>
+    </div>
+  </details>
+</div>
+<div data-nav-section class="relative lg:w-20">
+  <a data-nav-link data-nav-primary href="/accounts" class="absolute left-0 top-0 z-10 inline-flex h-10 items-center rounded-md px-3 text-sm text-gray-600 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">账户</a>
+  <details data-nav-group name="haruka-navigation">
+    <summary id="{{ nav_prefix }}-accounts-toggle" aria-label="展开账户相关功能" aria-controls="{{ nav_prefix }}-accounts-panel" class="flex h-10 cursor-pointer list-none items-center justify-end rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"><span aria-hidden="true">▾</span></summary>
+    <div id="{{ nav_prefix }}-accounts-panel" class="mt-1 space-y-1 rounded-lg border border-gray-200 bg-white p-1 lg:absolute lg:left-0 lg:top-full lg:z-40 lg:mt-2 lg:w-56 lg:shadow-lg">
+      <a data-nav-link href="/funds/valuation-reminders" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">基金校准</a>
+    </div>
+  </details>
+</div>
+<div data-nav-section class="relative">
+  <details data-nav-group name="haruka-navigation">
+    <summary data-nav-primary id="{{ nav_prefix }}-plans-toggle" aria-controls="{{ nav_prefix }}-plans-panel" class="flex h-10 cursor-pointer list-none items-center justify-between gap-2 rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">计划<span aria-hidden="true">▾</span></summary>
+    <div id="{{ nav_prefix }}-plans-panel" class="mt-1 space-y-1 rounded-lg border border-gray-200 bg-white p-1 lg:absolute lg:left-0 lg:top-full lg:z-40 lg:mt-2 lg:w-56 lg:shadow-lg">
+      <a data-nav-link href="/subscriptions" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">订阅</a>
+      <a data-nav-link href="/installments" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">分期</a>
+      <a data-nav-link href="/investments" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">定投</a>
+      <a data-nav-link href="/finance" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">理财方案</a>
+    </div>
+  </details>
+</div>
+<div data-nav-section class="relative">
+  <details data-nav-group name="haruka-navigation">
+    <summary data-nav-primary id="{{ nav_prefix }}-debts-toggle" aria-controls="{{ nav_prefix }}-debts-panel" class="flex h-10 cursor-pointer list-none items-center justify-between gap-2 rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">借贷<span aria-hidden="true">▾</span></summary>
+    <div id="{{ nav_prefix }}-debts-panel" class="mt-1 space-y-1 rounded-lg border border-gray-200 bg-white p-1 lg:absolute lg:left-0 lg:top-full lg:z-40 lg:mt-2 lg:w-56 lg:shadow-lg">
+      <a data-nav-link href="/debt-people" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">借贷对象</a>
+      <a data-nav-link href="/debt-requests" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">借还请求与证明</a>
+    </div>
+  </details>
+</div>
+<div data-nav-section class="relative">
+  <details data-nav-group name="haruka-navigation">
+    <summary data-nav-primary id="{{ nav_prefix }}-analysis-toggle" aria-controls="{{ nav_prefix }}-analysis-panel" class="flex h-10 cursor-pointer list-none items-center justify-between gap-2 rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">分析<span aria-hidden="true">▾</span></summary>
+    <div id="{{ nav_prefix }}-analysis-panel" class="mt-1 space-y-1 rounded-lg border border-gray-200 bg-white p-1 lg:absolute lg:left-0 lg:top-full lg:z-40 lg:mt-2 lg:w-56 lg:shadow-lg">
+      <a data-nav-link href="/statistics" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">收支统计</a>
+      <a data-nav-link href="/budgets" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">预算</a>
+    </div>
+  </details>
+</div>
+<div data-nav-section class="relative">
+  <details data-nav-group name="haruka-navigation">
+    <summary data-nav-primary id="{{ nav_prefix }}-tools-toggle" aria-controls="{{ nav_prefix }}-tools-panel" class="flex h-10 cursor-pointer list-none items-center justify-between gap-2 rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">工具<span aria-hidden="true">▾</span></summary>
+    <div id="{{ nav_prefix }}-tools-panel" class="mt-1 space-y-1 rounded-lg border border-gray-200 bg-white p-1 lg:absolute lg:left-0 lg:top-full lg:z-40 lg:mt-2 lg:w-56 lg:shadow-lg">
+      <a data-nav-link href="/sms" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">银行短信</a>
+      <a data-nav-link href="/sms/templates" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">短信模板</a>
+      <a data-nav-link href="/currency-converter" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">货币换算</a>
+      <a data-nav-link href="/settings" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">设置</a>
+    </div>
+  </details>
+</div>

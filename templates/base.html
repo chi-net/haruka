@@ -7,7 +7,7 @@
 <meta name="theme-color" content="#f9fafb" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b1120" media="(prefers-color-scheme: dark)">
 <title>{% block title %}haruka{% endblock %}</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v={{ crate::handlers::stylesheet_version() }}">
 <script src="/static/vendor/htmx.min.js"></script>
 <script src="/static/vendor/chart.umd.min.js"></script>
 <script>
@@ -55,28 +55,22 @@ document.addEventListener('htmx:beforeCleanupElement', event => {
 </head>
 <body class="bg-gray-50 text-gray-900 min-h-screen" hx-boost="true">
 {% block navigation %}
-<nav class="bg-white border-b border-gray-200">
-  <div class="max-w-6xl mx-auto px-4 h-12 flex items-center gap-4 overflow-x-auto whitespace-nowrap">
-    <a href="/" class="font-bold shrink-0">Haruka</a>
-    <a href="/dashboard" class="text-sm text-gray-600 hover:text-blue-600">仪表板</a>
-    <a href="/bills" class="text-sm text-gray-600 hover:text-blue-600">账单</a>
-    <a href="/subscriptions" class="text-sm text-gray-600 hover:text-blue-600">订阅</a>
-    <a href="/investments" class="text-sm text-gray-600 hover:text-blue-600">定投</a>
-    <a href="/finance" class="text-sm text-gray-600 hover:text-blue-600">理财</a>
-    <a href="/sms" class="text-sm text-gray-600 hover:text-blue-600">短信</a>
-    <a href="/installments" class="text-sm text-gray-600 hover:text-blue-600">分期</a>
-    <a href="/accounts" class="text-sm text-gray-600 hover:text-blue-600">账户</a>
-    <a href="/funds/valuation-reminders" class="text-sm text-gray-600 hover:text-blue-600">基金校准</a>
-    <a href="/budgets" class="text-sm text-gray-600 hover:text-blue-600">预算</a>
-    <a href="/categories" class="text-sm text-gray-600 hover:text-blue-600">分类</a>
-    <a href="/statistics" class="text-sm text-gray-600 hover:text-blue-600">统计</a>
-    <a href="/shares" class="text-sm text-gray-600 hover:text-blue-600">分享</a>
-    <a href="/currency-converter" class="text-sm text-gray-600 hover:text-blue-600">货币换算</a>
-    <a href="/debt-people" class="text-sm text-gray-600 hover:text-blue-600">借贷对象</a>
-    <a href="/debt-requests" class="text-sm text-gray-600 hover:text-blue-600">借还请求与证明</a>
-    <a href="/settings" class="text-sm text-gray-600 hover:text-blue-600">设置</a>
-    <form method="post" action="/lock" class="ml-auto shrink-0">
-      <button type="submit" class="text-sm text-gray-500 hover:text-blue-600">锁定</button>
+<nav data-site-nav aria-label="主导航" class="sticky top-0 z-30 border-b border-gray-200 bg-white">
+  <div class="relative mx-auto flex min-h-14 max-w-6xl items-center gap-3 px-4">
+    <a href="/" class="shrink-0 rounded font-bold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">Haruka</a>
+    <div data-nav-desktop class="hidden min-w-0 flex-1 items-center gap-1 lg:flex">
+      {% let nav_prefix = "desktop" %}
+      {% include "navigation_groups.html" %}
+    </div>
+    <details data-nav-mobile class="ml-auto lg:hidden">
+      <summary id="mobile-navigation-toggle" aria-controls="mobile-navigation-panel" class="flex h-10 cursor-pointer list-none items-center gap-2 rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">菜单<span aria-hidden="true">▾</span></summary>
+      <div id="mobile-navigation-panel" class="absolute inset-x-4 top-full z-40 mt-2 max-h-[80vh] space-y-1 overflow-y-auto rounded-lg border border-gray-200 bg-white p-2 shadow-lg">
+        {% let nav_prefix = "mobile" %}
+        {% include "navigation_groups.html" %}
+      </div>
+    </details>
+    <form method="post" action="/lock" hx-boost="false" class="shrink-0">
+      <button type="submit" class="h-10 rounded-md border border-gray-200 px-3 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">锁定</button>
     </form>
   </div>
 </nav>
@@ -85,6 +79,66 @@ document.addEventListener('htmx:beforeCleanupElement', event => {
 {% block content %}{% endblock %}
 </main>
 <script>
+(() => {
+  const currentNav = () => document.querySelector('[data-site-nav]');
+  const closeNavigation = nav => nav?.querySelectorAll('details[open]').forEach(details => { details.open = false; });
+  const updateNavigation = () => {
+    const nav = currentNav();
+    if (!nav) return;
+    const path = window.location.pathname.replace(/\/$/, '') || '/';
+    const links = [...nav.querySelectorAll('[data-nav-link]')];
+    let activeHref = '';
+    links.forEach(link => {
+      const href = link.getAttribute('href');
+      if ((path === href || path.startsWith(`${href}/`)) && href.length > activeHref.length) activeHref = href;
+    });
+    links.forEach(link => {
+      const active = link.getAttribute('href') === activeHref;
+      if (active) link.setAttribute('aria-current', path === activeHref ? 'page' : 'location');
+      else link.removeAttribute('aria-current');
+      link.classList.toggle('bg-blue-50', active);
+    });
+    nav.querySelectorAll('[data-nav-section]').forEach(section => {
+      const active = !!section.querySelector('[aria-current]');
+      const primary = section.querySelector('[data-nav-primary]');
+      primary.classList.toggle('text-blue-600', active);
+      primary.classList.toggle('text-gray-600', !active);
+      primary.classList.toggle('font-semibold', active);
+    });
+  };
+  if (!window.harukaNavigationBound) {
+    window.harukaNavigationBound = true;
+    document.addEventListener('click', event => {
+      const nav = currentNav();
+      if (nav && (!nav.contains(event.target) || event.target.closest('a'))) closeNavigation(nav);
+    }, true);
+    document.addEventListener('focusin', event => {
+      const nav = currentNav();
+      if (nav && !nav.contains(event.target)) closeNavigation(nav);
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      const nav = currentNav();
+      const open = nav?.querySelector('[data-nav-group][open]') || nav?.querySelector('[data-nav-mobile][open]');
+      if (!open) return;
+      event.preventDefault();
+      open.open = false;
+      open.querySelector('summary').focus();
+    });
+    document.addEventListener('toggle', event => {
+      const details = event.target;
+      if (!details.matches('[data-nav-group]') || !details.open) return;
+      currentNav()?.querySelectorAll('[data-nav-group]').forEach(other => {
+        if (other !== details) other.open = false;
+      });
+    }, true);
+    window.matchMedia('(min-width: 64rem)').addEventListener('change', () => closeNavigation(currentNav()));
+    document.addEventListener('htmx:afterSettle', updateNavigation);
+    document.addEventListener('htmx:historyRestore', updateNavigation);
+  }
+  updateNavigation();
+})();
+
 window.harukaErrorMessage = function(raw, contentType, status) {
   const fallback = `请求失败（HTTP ${status || '未知'}）`;
   if (!raw) return fallback;

@@ -208,6 +208,17 @@ pub async fn render_error_response(request: Request, next: Next) -> Response {
     Response::from_parts(parts, body)
 }
 
+pub(crate) fn stylesheet_version() -> u64 {
+    use std::hash::{DefaultHasher, Hasher};
+
+    static VERSION: std::sync::LazyLock<u64> = std::sync::LazyLock::new(|| {
+        let mut hasher = DefaultHasher::new();
+        hasher.write(include_bytes!("../../static/app.css"));
+        hasher.finish()
+    });
+    *VERSION
+}
+
 pub async fn stylesheet() -> impl IntoResponse {
     (
         [
