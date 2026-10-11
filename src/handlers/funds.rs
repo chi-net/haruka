@@ -153,6 +153,7 @@ struct FundFormTemplate {
     currency: String,
     name: String,
     aliases: String,
+    transfer_fee_rate: String,
     note: String,
 }
 #[derive(Deserialize)]
@@ -162,6 +163,8 @@ pub struct FundFormData {
     aliases: String,
     #[serde(default)]
     note: String,
+    #[serde(default)]
+    transfer_fee_rate: String,
 }
 fn encrypted_aliases(dek: &crypto::Dek, text: &str) -> HandlerResult<String> {
     let mut aliases = Vec::new();
@@ -192,6 +195,7 @@ pub async fn new_form(
             currency: root.currency,
             name: String::new(),
             aliases: String::new(),
+            transfer_fee_rate: "0".into(),
             note: String::new(),
         }
         .render()
@@ -207,6 +211,7 @@ pub async fn create(
     if form.name.trim().is_empty() {
         return Err(bad("基金名称不能为空"));
     }
+    let transfer_fee_rate = super::fees::parse_rate(&form.transfer_fee_rate)?;
     let _guard = state.balance_writes.lock().await;
     let root = group(&state, id).await?;
     account::ActiveModel {
@@ -215,6 +220,7 @@ pub async fn create(
         currency: Set(root.currency),
         parent_id: Set(Some(id)),
         balance_offset: Set(crypto::encrypt_cents(&dek, 0)),
+        transfer_fee_rate_bps: Set(crypto::encrypt_cents(&dek, transfer_fee_rate)),
         sms_names: Set(encrypted_aliases(&dek, &form.aliases)?),
         note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
         created_at: Set(chrono::Utc::now()),
@@ -243,6 +249,10 @@ pub async fn edit_form(
             currency: root.currency,
             name: crypto::decrypt_string(&dek, &a.name),
             aliases: aliases.join("\n"),
+            transfer_fee_rate: super::fees::format_rate(crypto::decrypt_cents(
+                &dek,
+                &a.transfer_fee_rate_bps,
+            )),
             note: crypto::decrypt_string(&dek, &a.note),
         }
         .render()
@@ -258,12 +268,14 @@ pub async fn update(
     if form.name.trim().is_empty() {
         return Err(bad("基金名称不能为空"));
     }
+    let transfer_fee_rate = super::fees::parse_rate(&form.transfer_fee_rate)?;
     let _guard = state.balance_writes.lock().await;
     let a = fund(&state, id).await?;
     let parent_id = a.parent_id.unwrap();
     let mut active = a.into_active_model();
     active.name = Set(crypto::encrypt(&dek, form.name.trim().as_bytes()));
     active.sms_names = Set(encrypted_aliases(&dek, &form.aliases)?);
+    active.transfer_fee_rate_bps = Set(crypto::encrypt_cents(&dek, transfer_fee_rate));
     active.note = Set(crypto::encrypt(&dek, form.note.trim().as_bytes()));
     active.update(&state.db).await.map_err(err500)?;
     Ok(Redirect::to(&format!("/accounts/{parent_id}/funds")))

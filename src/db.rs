@@ -77,6 +77,13 @@ pub async fn init() -> DatabaseConnection {
     .await;
     ensure_column(&db, "accounts", "last_calibrated_at", "TEXT DEFAULT NULL").await;
     ensure_column(&db, "accounts", "sms_names", "TEXT NOT NULL DEFAULT ''").await;
+    ensure_column(
+        &db,
+        "accounts",
+        "transfer_fee_rate_bps",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
     let mut create_account_details = schema.create_table_from_entity(account_detail::Entity);
     db.execute(builder.build(create_account_details.if_not_exists()))
         .await
@@ -93,6 +100,20 @@ pub async fn init() -> DatabaseConnection {
         "account_details",
         "billing_day",
         "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "account_details",
+        "pending_billing_day",
+        "INTEGER DEFAULT NULL",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "account_details",
+        "billing_day_effective_on",
+        "DATE DEFAULT NULL",
     )
     .await;
     ensure_column(
@@ -137,6 +158,9 @@ pub async fn init() -> DatabaseConnection {
         .await
         .expect("建表失败");
     ensure_column(&db, "transfers", "to_amount", "TEXT NOT NULL DEFAULT ''").await;
+    ensure_column(&db, "transfers", "fee_rate_bps", "TEXT NOT NULL DEFAULT ''").await;
+    ensure_column(&db, "transfers", "fee_amount", "TEXT NOT NULL DEFAULT ''").await;
+    ensure_column(&db, "transfers", "fee_bill_id", "INTEGER DEFAULT NULL").await;
     let mut create_recurring_investments =
         schema.create_table_from_entity(recurring_investment::Entity);
     db.execute(builder.build(create_recurring_investments.if_not_exists()))

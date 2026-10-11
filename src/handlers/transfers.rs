@@ -6,13 +6,15 @@ use axum::{
 };
 use chrono::NaiveDateTime;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set, TransactionTrait,
+};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 use crate::{
     crypto, currency,
-    entity::{account, installment_item, investment_execution, transfer},
+    entity::{account, bill, category, installment_item, investment_execution, transfer},
     AppState, SessionDek,
 };
 
@@ -34,6 +36,10 @@ pub struct TransferFormData {
     amount: String,
     #[serde(default)]
     to_amount: String,
+    #[serde(default)]
+    fee_rate: String,
+    #[serde(default)]
+    fee_amount: String,
     note: String,
     happened_at: String,
     #[serde(default)]
@@ -75,9 +81,38 @@ fn parse_amount(value: &str) -> HandlerResult<i64> {
     if decimal <= Decimal::ZERO {
         return Err(bad_request("金额必须大于 0"));
     }
-    (decimal * Decimal::from(100))
-        .to_i64()
+    decimal
+        .checked_mul(Decimal::from(100))
+        .and_then(|value| value.to_i64())
         .ok_or_else(|| bad_request("金额超出范围"))
+}
+
+async fn fee_category<C: ConnectionTrait>(
+    db: &C,
+    dek: &crypto::Dek,
+) -> HandlerResult<category::Model> {
+    if let Some(category) = category::Entity::find()
+        .filter(category::Column::Kind.eq("expense"))
+        .all(db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .find(|item| crypto::decrypt_string(dek, &item.name) == "转账手续费")
+    {
+        return Ok(category);
+    }
+    category::ActiveModel {
+        kind: Set("expense".into()),
+        name: Set(crypto::encrypt(dek, "转账手续费".as_bytes())),
+        is_food: Set(false),
+        count_limit: Set(String::new()),
+        count_limit_period: Set("month".into()),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .map_err(err500)
 }
 
 fn accepts_json(headers: &HeaderMap) -> bool {
@@ -148,6 +183,15 @@ pub async fn create(
     crate::investment_funds::validate_money_account(&state, &from_account).await?;
     crate::investment_funds::validate_money_account(&state, &to_account).await?;
     let amount = parse_amount(&form.amount)?;
+    let (fee_rate_bps, fee_amount) = super::fees::resolve(
+        amount,
+        crypto::decrypt_cents(&dek, &from_account.transfer_fee_rate_bps),
+        &form.fee_rate,
+        &form.fee_amount,
+    )?;
+    let total_debit = amount
+        .checked_add(fee_amount)
+        .ok_or_else(|| bad_request("转账本金和手续费合计超出范围"))?;
     let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确"))?;
     let to_amount = if from_account.currency == to_account.currency {
@@ -170,7 +214,7 @@ pub async fn create(
         if balance <= 0 {
             return Err(bad_request("信用账户只有在余额为正时才允许转出"));
         }
-        if amount > balance {
+        if total_debit > balance {
             return Err(bad_request("信用账户转出后余额不能低于 0"));
         }
     } else {
@@ -178,26 +222,62 @@ pub async fn create(
             &state,
             &dek,
             form.from_account_id,
-            amount
+            total_debit
                 .checked_neg()
                 .ok_or_else(|| bad_request("金额超出范围"))?,
         )
         .await?;
     }
     super::accounts::ensure_balance_delta(&state, &dek, form.to_account_id, to_amount).await?;
+    let transaction = state.db.begin().await.map_err(err500)?;
+    let fee_bill_id = if fee_amount > 0 {
+        let category = fee_category(&transaction, &dek).await?;
+        let note_text = form.note.trim();
+        let note = format!(
+            "转账手续费 · {} → {}{}{}",
+            crypto::decrypt_string(&dek, &from_account.name),
+            crypto::decrypt_string(&dek, &to_account.name),
+            if note_text.is_empty() { "" } else { " · " },
+            note_text,
+        );
+        Some(
+            bill::ActiveModel {
+                account_id: Set(form.from_account_id),
+                kind: Set("expense".into()),
+                amount: Set(crypto::encrypt_cents(&dek, fee_amount)),
+                category: Set(crypto::encrypt(&dek, "转账手续费".as_bytes())),
+                category_id: Set(Some(category.id)),
+                is_food: Set(category.is_food),
+                note: Set(crypto::encrypt(&dek, note.as_bytes())),
+                happened_at: Set(happened_at),
+                created_at: Set(chrono::Utc::now()),
+                ..Default::default()
+            }
+            .insert(&transaction)
+            .await
+            .map_err(err500)?
+            .id,
+        )
+    } else {
+        None
+    };
     transfer::ActiveModel {
         from_account_id: Set(form.from_account_id),
         to_account_id: Set(form.to_account_id),
         amount: Set(crypto::encrypt_cents(&dek, amount)),
         to_amount: Set(crypto::encrypt_cents(&dek, to_amount)),
+        fee_rate_bps: Set(crypto::encrypt_cents(&dek, fee_rate_bps)),
+        fee_amount: Set(crypto::encrypt_cents(&dek, fee_amount)),
+        fee_bill_id: Set(fee_bill_id),
         note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
         happened_at: Set(happened_at),
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
     }
-    .insert(&state.db)
+    .insert(&transaction)
     .await
     .map_err(err500)?;
+    transaction.commit().await.map_err(err500)?;
     let redirect = match form.redirect_to.as_deref() {
         Some("/bills/new") => "/bills/new",
         Some("/bills") => "/bills",
@@ -206,7 +286,14 @@ pub async fn create(
     if accepts_json(&headers) {
         Ok(Json(TransferCreateResponse {
             ok: true,
-            message: "转账已记录".into(),
+            message: if fee_amount > 0 {
+                format!(
+                    "转账已记录，手续费 {}",
+                    currency::format(fee_amount, &from_account.currency)
+                )
+            } else {
+                "转账已记录".into()
+            },
             redirect: redirect.into(),
         })
         .into_response())
@@ -250,8 +337,11 @@ pub async fn delete(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "转账不存在".into()))?;
     let from_amount = crypto::decrypt_cents(&dek, &transfer.amount);
+    let from_refund = from_amount
+        .checked_add(crypto::decrypt_cents(&dek, &transfer.fee_amount))
+        .ok_or_else(|| bad_request("转账本金和手续费合计超出范围"))?;
     let amount = super::transfer_to_cents(&dek, &transfer);
-    super::accounts::ensure_balance_delta(&state, &dek, transfer.from_account_id, from_amount)
+    super::accounts::ensure_balance_delta(&state, &dek, transfer.from_account_id, from_refund)
         .await?;
     super::accounts::ensure_balance_delta(
         &state,
@@ -262,10 +352,18 @@ pub async fn delete(
             .ok_or_else(|| bad_request("金额超出范围"))?,
     )
     .await?;
+    let transaction = state.db.begin().await.map_err(err500)?;
+    if let Some(fee_bill_id) = transfer.fee_bill_id {
+        bill::Entity::delete_by_id(fee_bill_id)
+            .exec(&transaction)
+            .await
+            .map_err(err500)?;
+    }
     transfer::Entity::delete_by_id(id)
-        .exec(&state.db)
+        .exec(&transaction)
         .await
         .map_err(err500)?;
+    transaction.commit().await.map_err(err500)?;
     Ok(Redirect::to(
         if form.redirect_to.as_deref() == Some("/bills") {
             "/bills"

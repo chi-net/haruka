@@ -11,6 +11,12 @@ pub struct Model {
     pub amount: String,
     /// 转入账户实际收到的金额（整数分密文）；跨币种转账与 amount 不同。
     pub to_amount: String,
+    /// Immutable fee rate and amount snapshots; the linked expense bill affects balance.
+    #[sea_orm(default_value = "")]
+    pub fee_rate_bps: String,
+    #[sea_orm(default_value = "")]
+    pub fee_amount: String,
+    pub fee_bill_id: Option<i64>,
     pub note: String,
     pub happened_at: DateTime,
     pub created_at: DateTimeUtc,

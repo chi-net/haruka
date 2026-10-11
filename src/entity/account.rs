@@ -19,6 +19,9 @@ pub struct Model {
     /// Encrypted JSON array of bank SMS aliases; empty on ordinary accounts.
     #[sea_orm(default_value = "")]
     pub sms_names: String,
+    /// Default outgoing transfer fee in integer basis points, encrypted with the DEK.
+    #[sea_orm(default_value = "")]
+    pub transfer_fee_rate_bps: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

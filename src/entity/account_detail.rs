@@ -11,6 +11,10 @@ pub struct Model {
     pub credit_limit: String,
     /// 账单日 1..=31，非信用类账户为 0
     pub billing_day: i32,
+    /// 下次生效的账单日；已有账单日仍作为当前基准
+    pub pending_billing_day: Option<i32>,
+    /// 按客户端时区的日历日期生效，无需后台任务
+    pub billing_day_effective_on: Option<Date>,
     /// 还款日 1..=31；0 表示跟随账单日，非信用类账户也为 0
     pub repayment_day: i32,
 }

@@ -93,7 +93,7 @@
     {% for record in records %}
     <tr>
       <td class="px-4 py-2 text-gray-500 whitespace-nowrap"><time data-utc-time="{{ record.happened_at }}">{{ record.happened_at }}</time></td>
-      <td class="px-4 py-2 whitespace-nowrap">{{ record.record_type }}</td>
+      <td class="px-4 py-2 whitespace-nowrap">{{ record.record_type }}{% if record.record_type == "支出 · 转账手续费（自动）" %}<p class="text-xs text-gray-500 mt-1">随对应转账一并撤销</p>{% endif %}</td>
       <td class="px-4 py-2">{{ record.account_name }}</td>
       <td class="px-4 py-2">{{ record.subject }}</td>
       <td class="px-4 py-2 text-gray-500">{{ record.note }}</td>

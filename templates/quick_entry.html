@@ -1,21 +1,74 @@
-<section id="quick-entry" class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
-  <div class="mb-4"><h2 class="font-medium">{{ quick_entry_heading }}</h2></div>
-  <noscript>
-    <style>
-      #quick-entry [data-quick-entry-panel] { display: block !important; margin-top: 1rem; }
-      #quick-entry .quick-entry-tab, #receipt-scanner, #quick-batch-add,
-      #quick-entry [data-account-balance-for], #quick-entry [data-quick-status] { display: none !important; }
-      #quick-transfer-to-amount-field { display: block !important; }
-    </style>
-    <p class="mb-3 text-sm text-amber-800">JavaScript 未启用：下方分别填写收支、转账或借还；时间请按 UTC 输入，保存后返回当前页面。跨币转账可填写实际到账金额，同币转账请留空。</p>
-  </noscript>
-  <div class="flex rounded border border-gray-200 overflow-hidden w-fit mb-4">
-    <button type="button" data-panel="bill" class="quick-entry-tab bg-blue-600 text-white text-sm px-4 py-1.5">收支</button>
-    <button type="button" data-panel="transfer" class="quick-entry-tab text-gray-600 text-sm px-4 py-1.5">转账</button>
-    <button type="button" data-panel="debt" class="quick-entry-tab text-gray-600 text-sm px-4 py-1.5">借还</button>
-  </div>
-
-  <div data-quick-entry-panel="bill">
+<section id="quick-entry" class="mb-5 rounded-xl border border-gray-200 bg-white p-4 sm:p-5">
+  <h2 class="mb-4 text-lg font-semibold">{{ quick_entry_heading }}</h2>
+  <noscript>{% include "quick_entry_fallback.html" %}</noscript>
+  <div id="quick-entry-enhanced" hidden>
+    <div class="mb-5 grid grid-cols-4 gap-2" role="group" aria-label="记账类型">
+      <button type="button" data-quick-mode="expense" aria-pressed="true" class="rounded-lg border border-blue-600 bg-blue-50 px-2 py-2 text-sm font-medium text-blue-700">支出</button>
+      <button type="button" data-quick-mode="income" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">收入</button>
+      <button type="button" data-quick-mode="transfer" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">转账</button>
+      <button type="button" data-quick-mode="debt" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">借还</button>
+    </div>
+    <form id="quick-form" method="post" action="/bills" data-quick-form="bill" hx-boost="false" class="space-y-4">
+      <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
+      <fieldset data-quick-fields="bill" class="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <select id="quick-bill-kind" name="kind" class="hidden" aria-label="收支类型"><option value="expense">支出</option><option value="income">收入</option></select>
+        <div><label for="quick-bill-account" class="mb-1 block text-xs text-gray-500">账户</label><select id="quick-bill-account" name="account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-bill-account" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
+        <div><label for="quick-bill-category" class="mb-1 block text-xs text-gray-500">分类</label><select id="quick-bill-category" name="category" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for c in categories %}<option value="{{ c.name }}" data-kind="{{ c.kind }}">{{ c.name }}</option>{% endfor %}</select><p class="mt-1 text-xs text-gray-400">只显示当前收支类型的分类。</p></div>
+      </fieldset>
+      <fieldset data-quick-fields="transfer" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <div><label for="quick-transfer-from" class="mb-1 block text-xs text-gray-500">转出账户</label><select id="quick-transfer-from" name="from_account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in transfer_sources %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}" data-transfer-fee-rate="{{ a.transfer_fee_rate }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-from" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
+        <div><label for="quick-transfer-to" class="mb-1 block text-xs text-gray-500">转入账户</label><select id="quick-transfer-to" name="to_account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-to" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
+      </fieldset>
+      <fieldset data-quick-fields="debt" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <div><label for="quick-debt-account" class="mb-1 block text-xs text-gray-500">资金账户</label><select id="quick-debt-account" name="account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-debt-account" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
+        <div><div class="grid grid-cols-2 gap-2"><div><label for="quick-debt-person" class="mb-1 block text-xs text-gray-500">借贷对象</label><select id="quick-debt-person" name="person_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for p in people %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div><div><label for="quick-debt-kind" class="mb-1 block text-xs text-gray-500">操作</label><select id="quick-debt-kind" name="kind" class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"><option value="lend">借给对方</option><option value="borrow">向对方借入</option><option value="repayment_received">对方还我</option><option value="repayment_paid">我还对方</option></select></div></div><p class="mt-1 text-xs"><a href="/debt-people" class="text-blue-600 hover:underline">管理借贷对象</a></p></div>
+      </fieldset>
+      <p id="quick-entry-unavailable" class="hidden text-sm text-amber-700" role="status"></p>
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div><label id="quick-transfer-amount-label" for="quick-transfer-amount" class="mb-1 block text-xs text-gray-500">金额</label><input id="quick-transfer-amount" name="amount" type="number" step="0.01" min="0.01" required placeholder="输入金额" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-base font-mono"></div>
+        <div data-utc-field><label for="quick-transfer-time" class="mb-1 block text-xs text-gray-500">时间</label><input id="quick-transfer-time" data-utc-picker data-utc-value="{{ happened_at }}" name="happened_at" value="{{ happened_at }}" type="datetime-local" required class="min-w-0 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"><input id="quick-transfer-time-utc" data-utc-target type="hidden" value="{{ happened_at }}"></div>
+      </div>
+      <fieldset data-quick-fields="transfer" disabled class="hidden min-w-0">
+        <details id="quick-transfer-settings" class="rounded-lg border border-gray-200">
+          <summary class="cursor-pointer px-3 py-2 text-sm text-blue-700">手续费与实际到账金额</summary>
+          <div class="grid grid-cols-1 gap-3 border-t border-gray-100 p-3 sm:grid-cols-2">
+            <div><label for="quick-transfer-fee-rate" class="mb-1 block text-xs text-gray-500">转账费率（%）</label><input id="quick-transfer-fee-rate" name="fee_rate" type="number" min="0" max="100" step="0.01" placeholder="来源账户默认费率" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"><p class="mt-1 text-xs text-gray-400">留空使用来源默认，填 0 覆盖默认。</p></div>
+            <div><label id="quick-transfer-fee-amount-label" for="quick-transfer-fee-amount" class="mb-1 block text-xs text-gray-500">手续费金额（转出账户原币）</label><input id="quick-transfer-fee-amount" name="fee_amount" type="number" min="0" step="0.01" placeholder="留空按费率计算" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"><p class="mt-1 text-xs text-gray-400">手填金额优先，填 0 免手续费。</p></div>
+            <div id="quick-transfer-to-amount-field" class="hidden sm:col-span-2"><label id="quick-transfer-to-amount-label" for="quick-transfer-to-amount" class="mb-1 block text-xs text-gray-500">实际转入金额</label><input id="quick-transfer-to-amount" name="to_amount" type="number" step="0.01" min="0.01" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"></div>
+            <p class="text-xs text-gray-500 sm:col-span-2">手续费在本金之外扣除，计入支出及预算；信用账户仅能转出正余额。</p>
+          </div>
+        </details>
+        <div class="mt-3 rounded-lg bg-blue-50 p-3 text-xs text-blue-900">
+          <p id="quick-transfer-fee-preview" aria-live="polite">手续费以来源原币在本金之外额外扣除。</p>
+          <p id="quick-transfer-quote-status" class="mt-1 hidden" aria-live="polite"></p>
+        </div>
+      </fieldset>
+      <fieldset data-quick-fields="bill" class="min-w-0">
+        <details id="quick-installment-toggle-field" class="hidden rounded-lg border border-gray-200">
+          <summary class="cursor-pointer px-3 py-2 text-sm text-blue-700">支出分期（可选）</summary>
+          <div class="border-t border-gray-100 p-3">
+            <label class="inline-flex items-center gap-2 text-sm"><input id="quick-use-installment" type="checkbox" name="use_installment" value="true"> 将这笔支出设置为分期</label>
+            <fieldset id="quick-installment-settings" disabled class="hidden mt-3 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+              <div><label class="mb-1 block text-xs text-gray-500">期限</label><select id="quick-installment-term" name="installment_term" class="w-full rounded-lg border px-3 py-2 text-sm"><option value="3">3 期</option><option value="6">6 期</option><option value="9">9 期</option><option value="12" selected>12 期</option><option value="24">24 期</option><option value="36">3 年（36 期）</option><option value="60">5 年（60 期）</option><option value="120">10 年（120 期）</option><option value="180">15 年（180 期）</option><option value="240">20 年（240 期）</option><option value="360">30 年（360 期）</option></select></div>
+              <div><label class="mb-1 block text-xs text-gray-500">还款方式</label><select name="installment_method" class="w-full rounded-lg border px-3 py-2 text-sm"><option value="equal_payment">等额本息</option><option value="equal_principal">等额本金</option><option value="flat">等本等息</option></select></div>
+              <div><label class="mb-1 block text-xs text-gray-500">年利率（%）</label><input id="quick-installment-rate" name="installment_annual_rate" type="number" min="0" max="100" step="0.01" value="13.03" class="w-full rounded-lg border px-3 py-2 text-sm font-mono"></div>
+              <div><label class="mb-1 block text-xs text-gray-500">总手续费</label><input name="installment_fee" type="number" min="0" step="0.01" value="0.00" class="w-full rounded-lg border px-3 py-2 text-sm font-mono"></div>
+              <div class="sm:col-span-2"><label class="mb-1 block text-xs text-gray-500">首期还款日</label><input id="quick-installment-first-due" name="installment_first_due_date" type="date" value="{{ first_due_date }}" class="min-w-0 w-full rounded-lg border px-3 py-2 text-sm"></div>
+            </fieldset>
+          </div>
+        </details>
+      </fieldset>
+      <details id="quick-note-details" class="rounded-lg border border-gray-200">
+        <summary class="cursor-pointer px-3 py-2 text-sm text-gray-600">添加备注（可选）</summary>
+        <div class="border-t border-gray-100 p-3"><label for="quick-note" class="sr-only">备注</label><input id="quick-note" name="note" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></div>
+      </details>
+      <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4">
+        <button id="quick-batch-add" type="button" class="rounded-lg border border-blue-200 px-3 py-2 text-sm text-blue-700">加入批量列表</button>
+        <button data-quick-submit class="ml-auto rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">保存支出</button>
+        <p data-quick-status class="w-full text-sm text-gray-500" aria-live="polite"></p>
+      </div>
+    </form>
+    <div id="quick-bill-tools" class="mt-4">
     <details id="receipt-scanner" class="mb-4 rounded-lg border border-violet-200 bg-violet-50">
       <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-violet-900">扫描票据</summary>
       <div class="border-t border-violet-200 p-3 space-y-3">
@@ -40,86 +93,87 @@
         </details>
       </div>
     </details>
-    <form method="post" action="/bills" data-quick-form="bill" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-      <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
-      <div><label class="block text-xs text-gray-500 mb-1">类型</label><select id="quick-bill-kind" name="kind" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="expense">支出</option><option value="income">收入</option></select></div>
-      <div><label class="block text-xs text-gray-500 mb-1">金额</label><input name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">账户</label><select id="quick-bill-account" name="account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-bill-account" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p></div>
-      <div><label class="block text-xs text-gray-500 mb-1">分类</label><select id="quick-bill-category" name="category" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for c in categories %}<option value="{{ c.name }}" data-kind="{{ c.kind }}">{{ c.name }}</option>{% endfor %}</select></div>
-      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间</label><input data-utc-picker data-utc-value="{{ happened_at }}" name="happened_at" value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input data-utc-target type="hidden" value="{{ happened_at }}"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
-      <div id="quick-installment-toggle-field" class="hidden lg:col-span-6 border-t border-gray-100 pt-3">
-        <label class="inline-flex items-center gap-2 text-sm"><input id="quick-use-installment" type="checkbox" name="use_installment" value="true"> 将这笔支出设置为分期</label>
+      <div id="quick-batch-panel" class="hidden mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3">
+        <div class="flex flex-wrap items-center justify-between gap-3"><div><h3 class="text-sm font-medium text-blue-900">待批量提交 <span id="quick-batch-count">0</span> 条</h3><p class="mt-1 text-xs text-blue-700">最多 100 条；整批校验通过后一次写入。</p></div><div class="flex gap-2"><button id="quick-batch-clear" type="button" class="rounded border border-blue-300 bg-white px-3 py-1.5 text-sm text-blue-700">清空</button><button id="quick-batch-submit" type="button" class="rounded bg-blue-600 px-3 py-1.5 text-sm text-white disabled:opacity-50">提交全部</button></div></div>
+        <div id="quick-batch-list" class="mt-3 space-y-2"></div>
+        <p id="quick-batch-status" class="mt-3 text-sm text-blue-800" aria-live="polite"></p>
       </div>
-      <div id="quick-installment-settings" class="hidden lg:col-span-6 bg-blue-50 border border-blue-200 rounded-lg p-3">
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-          <div><label class="block text-xs text-blue-800 mb-1">期限</label><select id="quick-installment-term" name="installment_term" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm bg-white"><option value="3">3 期</option><option value="6">6 期</option><option value="9">9 期</option><option value="12" selected>12 期</option><option value="24">24 期</option><option value="36">3 年（36 期月供）</option><option value="60">5 年（60 期月供）</option><option value="120">10 年（120 期月供）</option><option value="180">15 年（180 期月供）</option><option value="240">20 年（240 期月供）</option><option value="360">30 年（360 期月供）</option></select></div>
-          <div><label class="block text-xs text-blue-800 mb-1">还款方式</label><select name="installment_method" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm bg-white"><option value="equal_payment">等额本息（月供基本固定）</option><option value="equal_principal">等额本金（月供逐月减少）</option><option value="flat">等本等息（固定本金和利息）</option></select></div>
-          <div><label class="block text-xs text-blue-800 mb-1">年利率（%）</label><input id="quick-installment-rate" name="installment_annual_rate" type="number" min="0" max="100" step="0.01" value="13.03" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm font-mono"></div>
-          <div><label class="block text-xs text-blue-800 mb-1">总手续费</label><input name="installment_fee" type="number" min="0" step="0.01" value="0.00" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm font-mono"><p class="text-xs text-blue-600 mt-1">按期均摊</p></div>
-          <div><label class="block text-xs text-blue-800 mb-1">首期还款日</label><input id="quick-installment-first-due" name="installment_first_due_date" type="date" value="{{ first_due_date }}" class="w-full border border-blue-200 rounded px-2 py-1.5 text-sm"></div>
-        </div>
-        <p class="text-xs text-blue-700 mt-3">参考：信用卡 12 期近似年化常见约 13%；截至 2026-08-20，LPR 为 1 年期 3.0%、5 年期以上 3.5%。请优先填写合同显示的年化利率和实际总手续费。</p>
-      </div>
-      <div class="lg:col-span-6 flex flex-wrap items-center gap-3"><button data-quick-submit class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">保存收支</button><button id="quick-batch-add" type="button" class="border border-blue-300 text-blue-700 text-sm px-4 py-1.5 rounded hover:bg-blue-50">加入批量列表</button><span data-quick-status class="text-sm text-gray-500" aria-live="polite"></span></div>
-    </form>
-    <div id="quick-batch-panel" class="hidden mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3">
-      <div class="flex flex-wrap items-center justify-between gap-3"><div><h3 class="text-sm font-medium text-blue-900">待批量提交 <span id="quick-batch-count">0</span> 条</h3><p class="text-xs text-blue-700 mt-1">最多 100 条；整批校验通过后一次写入，失败时不会写入其中任何一条。</p></div><div class="flex gap-2"><button id="quick-batch-clear" type="button" class="border border-blue-300 bg-white text-blue-700 text-sm px-3 py-1.5 rounded">清空</button><button id="quick-batch-submit" type="button" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50">提交全部</button></div></div>
-      <div id="quick-batch-list" class="mt-3 space-y-2"></div>
-      <p id="quick-batch-status" class="text-sm text-blue-800 mt-3" aria-live="polite"></p>
     </div>
-  </div>
-
-  <div data-quick-entry-panel="transfer" class="hidden">
-    {% if accounts.len() < 2 || transfer_sources.is_empty() %}
-    <p class="text-sm text-amber-700">至少需要两个账户和一个可用的转出账户。</p>
-    {% else %}
-    <form method="post" action="/transfers" data-quick-form="transfer" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-      <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
-      <div><label class="block text-xs text-gray-500 mb-1">转出账户</label><select id="quick-transfer-from" name="from_account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in transfer_sources %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-from" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p><p class="text-xs text-gray-400 mt-1">信用账户仅能转出正余额，且转出后不得低于 0。</p></div>
-      <div><label class="block text-xs text-gray-500 mb-1">转入账户</label><select id="quick-transfer-to" name="to_account_id" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-to" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p></div>
-      <div><label id="quick-transfer-amount-label" class="block text-xs text-gray-500 mb-1">转出金额</label><input id="quick-transfer-amount" name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
-      <div id="quick-transfer-to-amount-field" class="hidden"><label id="quick-transfer-to-amount-label" class="block text-xs text-gray-500 mb-1">实际转入金额</label><input id="quick-transfer-to-amount" name="to_amount" type="number" step="0.01" min="0.01" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"><p id="quick-transfer-quote-status" class="text-xs text-gray-400 mt-1">按当前可用汇率自动填写，可手动修改。</p></div>
-      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间</label><input id="quick-transfer-time" data-utc-picker data-utc-value="{{ happened_at }}" name="happened_at" value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input id="quick-transfer-time-utc" data-utc-target type="hidden" value="{{ happened_at }}"></div>
-      <div class="sm:col-span-2 lg:col-span-5"><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
-      <div class="sm:col-span-2 lg:col-span-5 flex items-center gap-3"><button data-quick-submit class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">确认转账</button><span data-quick-status class="text-sm text-gray-500" aria-live="polite"></span></div>
-    </form>
-    {% endif %}
-  </div>
-
-  <div data-quick-entry-panel="debt" class="hidden">
-    <div class="flex justify-end mb-3"><a href="/debt-people" class="text-sm text-blue-600 hover:underline">管理借贷对象</a></div>
-    {% if people.is_empty() %}
-    <p class="text-sm text-amber-700">空空如也呢，如果要开始使用，请先添加借款人或出借人。</p>
-    {% else %}
-    <form method="post" action="/debts" data-quick-form="debt" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
-      <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
-      <div><label class="block text-xs text-gray-500 mb-1">操作</label><select name="kind" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="lend">我借给对方</option><option value="borrow">我向对方借入</option><option value="repayment_received">对方还给我</option><option value="repayment_paid">我还给对方</option></select></div>
-      <div><label class="block text-xs text-gray-500 mb-1">借贷对象</label><select name="person_id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for p in people %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div>
-      <div><label class="block text-xs text-gray-500 mb-1">资金账户</label><select id="quick-debt-account" name="account_id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-debt-account" class="text-xs text-gray-400 mt-1" aria-live="polite">正在读取余额…</p></div>
-      <div><label class="block text-xs text-gray-500 mb-1">金额</label><input name="amount" type="number" step="0.01" min="0.01" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono"></div>
-      <div data-utc-field><label class="block text-xs text-gray-500 mb-1">时间</label><input data-utc-picker data-utc-value="{{ happened_at }}" name="happened_at" value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"><input data-utc-target type="hidden" value="{{ happened_at }}"></div>
-      <div><label class="block text-xs text-gray-500 mb-1">备注</label><input name="note" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
-      <div class="lg:col-span-6 flex items-center gap-3"><button data-quick-submit class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">保存借还记录</button><span data-quick-status class="text-sm text-gray-500" aria-live="polite"></span></div>
-    </form>
-    {% endif %}
   </div>
 </section>
 
 <script>
 (() => {
-  const tabs = document.querySelectorAll('.quick-entry-tab');
-  const panels = document.querySelectorAll('[data-quick-entry-panel]');
-  tabs.forEach(tab => tab.addEventListener('click', () => {
-    const activePanel = tab.dataset.panel;
-    tabs.forEach(button => {
-      const active = button.dataset.panel === activePanel;
-      button.classList.toggle('bg-blue-600', active);
-      button.classList.toggle('text-white', active);
+  const root = document.getElementById('quick-entry');
+  const form = document.getElementById('quick-form');
+  if (!root || !form || root.dataset.modeReady === 'true') return;
+  root.dataset.modeReady = 'true';
+  const buttons = Array.from(root.querySelectorAll('[data-quick-mode]'));
+  const kind = document.getElementById('quick-bill-kind');
+  const amountLabel = document.getElementById('quick-transfer-amount-label');
+  const submit = form.querySelector('[data-quick-submit]');
+  const batch = document.getElementById('quick-batch-add');
+  const unavailable = document.getElementById('quick-entry-unavailable');
+  const updateAvailable = () => {
+    const family = form.dataset.quickForm;
+    const account = document.getElementById(family === 'transfer' ? 'quick-transfer-from' : family === 'debt' ? 'quick-debt-account' : 'quick-bill-account');
+    let message = account.options.length ? '' : '请先创建可用的资金账户。';
+    if (family === 'transfer' && document.getElementById('quick-transfer-to').options.length < 2) message = '转账至少需要两个账户。';
+    if (family === 'debt' && !document.getElementById('quick-debt-person').options.length) message = '请先通过“管理借贷对象”添加借款人或出借人。';
+    if (family === 'bill' && !Array.from(document.getElementById('quick-bill-category').options).some(option => !option.disabled)) message = '请先在“分类”页面添加对应的收支分类。';
+    unavailable.textContent = message;
+    unavailable.classList.toggle('hidden', !message);
+    const busy = root.dataset.submitting === 'true';
+    submit.disabled = busy || !!message;
+    batch.disabled = busy || !!message;
+    buttons.forEach(button => button.disabled = busy);
+    const currency = account.selectedOptions[0]?.dataset.currency || '';
+    amountLabel.textContent = `${family === 'transfer' ? '转出金额' : '金额'}${currency ? `（${currency}）` : ''}`;
+  };
+  const selectMode = mode => {
+    if (root.dataset.submitting === 'true' || !['expense', 'income', 'transfer', 'debt'].includes(mode)) return;
+    const family = mode === 'expense' || mode === 'income' ? 'bill' : mode;
+    root.dataset.mode = mode;
+    form.dataset.quickForm = family;
+    form.action = family === 'bill' ? '/bills' : family === 'transfer' ? '/transfers' : '/debts';
+    root.querySelectorAll('[data-quick-fields]').forEach(fieldset => {
+      const active = fieldset.dataset.quickFields === family;
+      fieldset.disabled = !active;
+      fieldset.classList.toggle('hidden', !active);
+    });
+    buttons.forEach(button => {
+      const active = button.dataset.quickMode === mode;
+      button.setAttribute('aria-pressed', String(active));
+      button.classList.toggle('border-blue-600', active);
+      button.classList.toggle('bg-blue-50', active);
+      button.classList.toggle('text-blue-700', active);
+      button.classList.toggle('font-medium', active);
+      button.classList.toggle('border-gray-200', !active);
       button.classList.toggle('text-gray-600', !active);
     });
-    panels.forEach(panel => panel.classList.toggle('hidden', panel.dataset.quickEntryPanel !== activePanel));
-  }));
+    document.getElementById('quick-bill-tools').classList.toggle('hidden', family !== 'bill');
+    batch.classList.toggle('hidden', family !== 'bill');
+    submit.textContent = ({ expense: '保存支出', income: '保存收入', transfer: '确认转账', debt: '保存借还记录' })[mode];
+    if (family === 'bill') {
+      kind.value = mode;
+      kind.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const status = form.querySelector('[data-quick-status]');
+    status.textContent = '';
+    root.dispatchEvent(new Event('quick-mode-updated'));
+    updateAvailable();
+  };
+  buttons.forEach(button => button.addEventListener('click', () => selectMode(button.dataset.quickMode)));
+  root.addEventListener('quick-mode-request', event => selectMode(event.detail));
+  root.addEventListener('quick-entry-check', updateAvailable);
+  root.addEventListener('change', updateAvailable);
+  form.addEventListener('invalid', event => {
+    for (let parent = event.target.parentElement; parent && parent !== form; parent = parent.parentElement) {
+      if (parent.tagName === 'DETAILS') parent.open = true;
+    }
+  }, true);
+  selectMode('expense');
+  document.getElementById('quick-entry-enhanced').hidden = false;
 })();
 (() => {
   const kind = document.getElementById('quick-bill-kind');
@@ -136,6 +190,7 @@
       if (visible && option.selected) selectedVisible = true;
     }
     if (!selectedVisible && first) first.selected = true;
+    document.getElementById('quick-entry').dispatchEvent(new Event('quick-entry-check'));
   };
   kind.addEventListener('change', update);
   update();
@@ -153,14 +208,18 @@
   const selectedAccount = () => account.selectedOptions[0];
   const update = () => {
     const option = selectedAccount();
-    const eligible = kind.value === 'expense' && (option?.dataset.kind === 'credit_card' || option?.dataset.kind === 'credit_service');
+    const eligible = document.getElementById('quick-form').dataset.quickForm === 'bill' && kind.value === 'expense' && (option?.dataset.kind === 'credit_card' || option?.dataset.kind === 'credit_service');
     toggleField.classList.toggle('hidden', !eligible);
+    toggleField.parentElement.classList.toggle('hidden', !eligible);
     if (!eligible) checkbox.checked = false;
+    checkbox.disabled = !eligible;
+    settings.disabled = !eligible || !checkbox.checked;
     settings.classList.toggle('hidden', !eligible || !checkbox.checked);
     settings.querySelectorAll('input, select').forEach(field => field.required = eligible && checkbox.checked);
   };
   account.addEventListener('change', update);
   kind.addEventListener('change', update);
+  document.getElementById('quick-entry').addEventListener('quick-mode-updated', update);
   checkbox.addEventListener('change', update);
   rate.addEventListener('input', () => rate.dataset.touched = 'true');
   term.addEventListener('change', () => {
@@ -186,12 +245,15 @@
   const updateQuote = () => {
     clearTimeout(timer);
     const currentRequest = ++requestNumber;
+    if (document.getElementById('quick-form').dataset.quickForm !== 'transfer') return;
     const fromCurrency = selectedCurrency(from);
     const toCurrency = selectedCurrency(to);
     amountLabel.textContent = `转出金额（${fromCurrency}）`;
     toAmountLabel.textContent = `实际转入金额（${toCurrency}）`;
     const crossCurrency = fromCurrency && toCurrency && fromCurrency !== toCurrency;
     toAmountField.classList.toggle('hidden', !crossCurrency);
+    status.classList.toggle('hidden', !crossCurrency);
+    toAmount.disabled = !crossCurrency;
     toAmount.required = crossCurrency;
     if (!crossCurrency) {
       toAmount.value = '';
@@ -221,7 +283,7 @@
         const quote = await response.json();
         if (currentRequest !== requestNumber) return;
         toAmount.value = quote.to_amount;
-        status.textContent = `已按当前可用汇率换算，可按实际到账金额修改。`;
+        status.textContent = `预计到账 ${quote.to_amount} ${toCurrency}；可展开设置按实际到账金额修改。`;
       } catch (error) {
         if (currentRequest !== requestNumber) return;
         toAmount.value = '';
@@ -230,7 +292,61 @@
     }, 250);
   };
   [from, to, amount, time].forEach(element => element.addEventListener(element === amount ? 'input' : 'change', updateQuote));
+  document.getElementById('quick-entry').addEventListener('quick-mode-updated', updateQuote);
+  toAmount.addEventListener('input', () => {
+    clearTimeout(timer);
+    ++requestNumber;
+    status.textContent = toAmount.value ? `实际到账 ${toAmount.value} ${selectedCurrency(to)}（手动填写）。` : '请填写实际到账金额。';
+  });
   updateQuote();
+})();
+(() => {
+  const from = document.getElementById('quick-transfer-from');
+  const amount = document.getElementById('quick-transfer-amount');
+  const rate = document.getElementById('quick-transfer-fee-rate');
+  const fee = document.getElementById('quick-transfer-fee-amount');
+  const feeLabel = document.getElementById('quick-transfer-fee-amount-label');
+  const preview = document.getElementById('quick-transfer-fee-preview');
+  if (!from || !amount || !rate || !fee || !feeLabel || !preview) return;
+  const maxCents = 9223372036854775807n;
+  const parseHundredths = value => {
+    const text = value.trim();
+    if (!/^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(text)) return null;
+    const [whole, fraction = ''] = text.split('.');
+    const cents = BigInt(whole || '0') * 100n + BigInt(fraction.padEnd(2, '0'));
+    return cents <= maxCents ? cents : null;
+  };
+  const formatCents = cents => `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`;
+  const explanation = '手续费以来源原币在本金之外额外扣除，计入支出及预算，不减少实际转入本金。';
+  const updatePreview = () => {
+    const option = from.selectedOptions[0];
+    const currency = option?.dataset.currency || '';
+    feeLabel.textContent = `手续费金额（${currency}）`;
+    const principal = parseHundredths(amount.value);
+    const bps = parseHundredths(rate.value.trim() || option?.dataset.transferFeeRate || '0');
+    const automatic = principal !== null && bps !== null && bps <= 10000n
+      ? (principal * bps + 5000n) / 10000n : null;
+    fee.placeholder = automatic !== null ? `按费率：${formatCents(automatic)} ${currency}` : '留空按费率计算';
+    const overridden = fee.value.trim() !== '';
+    const effective = overridden ? parseHundredths(fee.value) : automatic;
+    if (effective === null || principal === null || principal + effective > maxCents) {
+      preview.textContent = `请输入有效本金${overridden ? '和手续费金额' : '和费率'}以预览。${explanation}`;
+      return;
+    }
+    preview.textContent = `${overridden ? '手填手续费（优先）' : '按费率计算手续费'}：${formatCents(effective)} ${currency}；来源合计扣除：${formatCents(principal + effective)} ${currency}。${explanation}`;
+  };
+  const restoreDefaultRate = () => {
+    rate.value = from.selectedOptions[0]?.dataset.transferFeeRate || '0';
+    updatePreview();
+  };
+  from.addEventListener('change', restoreDefaultRate);
+  [amount, rate, fee].forEach(input => input.addEventListener('input', updatePreview));
+  document.getElementById('quick-entry').addEventListener('quick-mode-updated', updatePreview);
+  fee.form.addEventListener('quick-transfer-reset', () => {
+    fee.value = '';
+    restoreDefaultRate();
+  });
+  restoreDefaultRate();
 })();
 (() => {
   const root = document.getElementById('quick-entry');
@@ -288,10 +404,15 @@
     const note = form.querySelector('input[name="note"]');
     if (amount) amount.value = '';
     if (note) note.value = '';
+    document.getElementById('quick-note-details').open = false;
     const installment = form.querySelector('#quick-use-installment');
     if (installment) {
       installment.checked = false;
       installment.dispatchEvent(new Event('change'));
+    }
+    if (form.dataset.quickForm === 'transfer') {
+      form.dispatchEvent(new Event('quick-transfer-reset'));
+      if (amount) amount.dispatchEvent(new Event('input'));
     }
     if (amount) amount.focus();
   };
@@ -303,6 +424,8 @@
       const button = form.querySelector('[data-quick-submit]');
       const status = form.querySelector('[data-quick-status]');
       button.disabled = true;
+      root.dataset.submitting = 'true';
+      root.dispatchEvent(new Event('quick-entry-check'));
       status.className = 'text-sm text-blue-600';
       status.textContent = '正在保存…';
       try {
@@ -322,7 +445,8 @@
         status.textContent = error.message;
         if (window.harukaShowError) window.harukaShowError(error.message);
       } finally {
-        button.disabled = false;
+        root.dataset.submitting = 'false';
+        root.dispatchEvent(new Event('quick-entry-check'));
       }
     });
   }
@@ -339,6 +463,8 @@
   const pending = [];
 
   window.harukaApplyReceiptDraft = draft => {
+    if (root.dataset.submitting === 'true') throw new Error('正在保存，请完成后再填入草稿。');
+    root.dispatchEvent(new CustomEvent('quick-mode-request', { detail: draft.kind === 'income' ? 'income' : 'expense' }));
     const kind = billForm.querySelector('[name="kind"]');
     const amount = billForm.querySelector('[name="amount"]');
     const category = billForm.querySelector('[name="category"]');
@@ -350,7 +476,10 @@
     }
     if (draft.amount) amount.value = draft.amount;
     if (draft.category && Array.from(category.options).some(option => !option.disabled && option.value === draft.category)) category.value = draft.category;
-    if (draft.note) note.value = draft.note;
+    if (draft.note) {
+      note.value = draft.note;
+      document.getElementById('quick-note-details').open = true;
+    }
     if (draft.happened_at_local && localTime) {
       localTime.value = draft.happened_at_local;
       localTime.dispatchEvent(new Event('input'));
@@ -383,6 +512,7 @@
 
   addButton.addEventListener('click', () => {
     if (!billForm.reportValidity()) return;
+    if (root.dataset.submitting === 'true' || billForm.dataset.quickForm !== 'bill') return;
     if (document.getElementById('quick-use-installment')?.checked) {
       batchStatus.className = 'text-sm text-red-600 mt-3';
       batchStatus.textContent = '分期计划需要单独创建，不能加入普通收支批量列表。';

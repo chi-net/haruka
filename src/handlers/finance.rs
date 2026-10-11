@@ -516,7 +516,7 @@ async fn proposal(
             let daily = planning::per_trade_amount(source_targets[index], config.trading_days)
                 .map_err(bad)?;
             daily_amounts.push(daily);
-            let fee = investments::calculate_fee(daily, row.fee_rate_bps)?;
+            let fee = super::fees::calculate(daily, row.fee_rate_bps)?;
             daily_debit = daily_debit
                 .checked_add(daily)
                 .and_then(|sum| sum.checked_add(fee))

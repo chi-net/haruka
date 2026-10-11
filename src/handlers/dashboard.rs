@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::{Html, Redirect},
 };
-use chrono::{Datelike, Duration, Months, NaiveDate, Timelike};
+use chrono::{Datelike, Duration, NaiveDate, Timelike};
 use rust_decimal::Decimal;
 use sea_orm::{EntityTrait, QueryOrder};
 use serde::Serialize;
@@ -31,6 +31,7 @@ struct AccountOption {
     name: String,
     kind: String,
     currency: String,
+    transfer_fee_rate: String,
 }
 
 struct AccountSummary {
@@ -49,6 +50,9 @@ struct CreditAccountSummary {
     repayment_date: String,
     repayment_amount: String,
     follows_billing_day: bool,
+    has_repayment: bool,
+    installment_principal: String,
+    has_installments: bool,
     usage_percent: i64,
     danger: bool,
 }
@@ -157,20 +161,31 @@ fn account_kind_label(kind: &str) -> &'static str {
     }
 }
 
-fn date_with_clamped_day(year: i32, month: u32, day: u32) -> NaiveDate {
-    let first = NaiveDate::from_ymd_opt(year, month, 1).expect("有效年月");
-    let next_month = first.checked_add_months(Months::new(1)).expect("有效年月");
-    let last_day = (next_month - Duration::days(1)).day();
-    NaiveDate::from_ymd_opt(year, month, day.min(last_day)).expect("有效日期")
+struct CreditAmounts {
+    used: i64,
+    available: i64,
+    repayment: i64,
+    usage_percent: i64,
+    danger: bool,
 }
 
-fn next_repayment_date(today: NaiveDate, repayment_day: i32) -> NaiveDate {
-    let current = date_with_clamped_day(today.year(), today.month(), repayment_day as u32);
-    if current >= today {
-        current
+fn credit_amounts(balance: i64, limit: i64, installment_principal: i64) -> CreditAmounts {
+    let used = balance.checked_neg().unwrap_or(i64::MAX).max(0);
+    let available = limit.saturating_sub(used).max(0);
+    let repayment = used.saturating_sub(installment_principal).max(0);
+    let usage_percent = if limit > 0 {
+        (i128::from(used) * 100 / i128::from(limit)).min(100) as i64
+    } else if used > 0 {
+        100
     } else {
-        let next_month = today.checked_add_months(Months::new(1)).expect("有效年月");
-        date_with_clamped_day(next_month.year(), next_month.month(), repayment_day as u32)
+        0
+    };
+    CreditAmounts {
+        used,
+        available,
+        repayment,
+        usage_percent,
+        danger: used > 0 && (available == 0 || (limit > 0 && available <= limit / 5)),
     }
 }
 
@@ -273,6 +288,10 @@ pub async fn show(
             name: account_names.get(&account.id).cloned().unwrap_or_default(),
             kind: account.kind.clone(),
             currency: account.currency.clone(),
+            transfer_fee_rate: super::fees::format_rate(crypto::decrypt_cents(
+                &dek,
+                &account.transfer_fee_rate_bps,
+            )),
         })
         .collect::<Vec<_>>();
     let mut account_balances = HashMap::new();
@@ -302,6 +321,30 @@ pub async fn show(
             days_since: fund.days_since,
         })
         .collect();
+    let reminder_plans: HashMap<i64, installment_plan::Model> = installment_plan::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|plan| (plan.id, plan))
+        .collect();
+    let installment_items = installment_item::Entity::find()
+        .order_by_asc(installment_item::Column::DueDate)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let mut installment_principals = HashMap::<i64, i64>::new();
+    for item in installment_items
+        .iter()
+        .filter(|item| item.paid_at.is_none())
+    {
+        if let Some(plan) = reminder_plans.get(&item.plan_id) {
+            let principal = installment_principals.entry(plan.account_id).or_default();
+            *principal = principal
+                .checked_add(crypto::decrypt_cents(&dek, &item.principal))
+                .ok_or_else(|| err500("分期剩余本金超出范围"))?;
+        }
+    }
     let mut net_assets = 0i64;
     let mut account_summaries = Vec::with_capacity(accounts.len());
     let mut credit_accounts = Vec::new();
@@ -320,36 +363,29 @@ pub async fn show(
             let limit = detail
                 .map(|detail| crypto::decrypt_cents(&dek, &detail.credit_limit))
                 .unwrap_or_default();
-            let used = balance.checked_neg().unwrap_or(i64::MAX).max(0);
-            let available = limit.saturating_sub(used).max(0);
-            let usage_percent = if limit > 0 {
-                ((i128::from(used) * 100 / i128::from(limit)).min(100)) as i64
-            } else if used > 0 {
-                100
-            } else {
-                0
-            };
-            let billing_day = detail.map(|detail| detail.billing_day).unwrap_or(1).max(1);
+            let installment_principal = installment_principals
+                .get(&account.id)
+                .copied()
+                .unwrap_or_default();
+            let amounts = credit_amounts(balance, limit, installment_principal);
             let configured_repayment_day = detail.map(|detail| detail.repayment_day).unwrap_or(0);
-            let repayment_day = if configured_repayment_day > 0 {
-                configured_repayment_day
-            } else {
-                billing_day
-            };
             credit_accounts.push(CreditAccountSummary {
                 name: account_names.get(&account.id).cloned().unwrap_or_default(),
                 kind: account_kind_label(&account.kind).into(),
                 balance: currency::format(balance, &account.currency),
-                used: currency::format(used, &account.currency),
-                available: currency::format(available, &account.currency),
+                used: currency::format(amounts.used, &account.currency),
+                available: currency::format(amounts.available, &account.currency),
                 limit: currency::format(limit, &account.currency),
-                repayment_date: next_repayment_date(today, repayment_day)
+                repayment_date: crate::credit_dates::next_repayment_date(today, detail)
                     .format("%m月%d日")
                     .to_string(),
-                repayment_amount: currency::format(used, &account.currency),
+                repayment_amount: currency::format(amounts.repayment, &account.currency),
+                has_repayment: amounts.repayment > 0,
+                installment_principal: currency::format(installment_principal, &account.currency),
+                has_installments: installment_principal > 0,
                 follows_billing_day: configured_repayment_day == 0,
-                usage_percent,
-                danger: available == 0 || (limit > 0 && available <= limit / 5),
+                usage_percent: amounts.usage_percent,
+                danger: amounts.danger,
             });
         } else {
             account_summaries.push(AccountSummary {
@@ -446,13 +482,6 @@ pub async fn show(
     let subscription_reminder_count = all_subscription_reminders.len();
     let subscription_reminders = all_subscription_reminders.into_iter().take(10).collect();
 
-    let reminder_plans: HashMap<i64, installment_plan::Model> = installment_plan::Entity::find()
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-        .into_iter()
-        .map(|plan| (plan.id, plan))
-        .collect();
     let reminder_bills: HashMap<i64, bill::Model> = bill::Entity::find()
         .all(&state.db)
         .await
@@ -461,12 +490,8 @@ pub async fn show(
         .map(|bill| (bill.id, bill))
         .collect();
     let mut all_installment_reminders = Vec::new();
-    for item in installment_item::Entity::find()
-        .order_by_asc(installment_item::Column::DueDate)
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-        .into_iter()
+    for item in installment_items
+        .iter()
         .filter(|item| item.paid_at.is_none() && item.due_date <= today + Duration::days(7))
     {
         let Some(plan) = reminder_plans.get(&item.plan_id) else {
@@ -510,6 +535,10 @@ pub async fn show(
             name: account_names.get(&account.id).cloned().unwrap_or_default(),
             kind: account.kind.clone(),
             currency: account.currency.clone(),
+            transfer_fee_rate: super::fees::format_rate(crypto::decrypt_cents(
+                &dek,
+                &account.transfer_fee_rate_bps,
+            )),
         })
         .collect::<Vec<_>>();
     let people = debt_person::Entity::find()
@@ -693,21 +722,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn repayment_date_keeps_today_and_rolls_after_due_day() {
-        let today = NaiveDate::from_ymd_opt(2026, 10, 10).unwrap();
-        assert_eq!(next_repayment_date(today, 10), today);
-        assert_eq!(
-            next_repayment_date(today, 9),
-            NaiveDate::from_ymd_opt(2026, 11, 9).unwrap()
-        );
+    fn zero_debt_and_positive_balances_never_warn_or_require_repayment() {
+        for limit in [0, 100_000] {
+            for balance in [0, 10_000] {
+                let amounts = credit_amounts(balance, limit, 0);
+                assert_eq!(amounts.used, 0);
+                assert_eq!(amounts.repayment, 0);
+                assert_eq!(amounts.usage_percent, 0);
+                assert!(!amounts.danger);
+            }
+        }
     }
 
     #[test]
-    fn repayment_date_clamps_to_month_end() {
-        let today = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
-        assert_eq!(
-            next_repayment_date(today, 31),
-            NaiveDate::from_ymd_opt(2026, 2, 28).unwrap()
-        );
+    fn unpaid_installment_principal_is_excluded_only_from_repayment() {
+        let amounts = credit_amounts(-90_000, 100_000, 60_000);
+        assert_eq!(amounts.used, 90_000);
+        assert_eq!(amounts.available, 10_000);
+        assert_eq!(amounts.repayment, 30_000);
+        assert_eq!(amounts.usage_percent, 90);
+        assert!(amounts.danger);
+        assert_eq!(credit_amounts(-50_000, 100_000, 60_000).repayment, 0);
+        assert_eq!(credit_amounts(-60_000, 100_000, 60_000).repayment, 0);
     }
 }

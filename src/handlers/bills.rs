@@ -12,7 +12,10 @@ use sea_orm::{
     TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 
 use crate::{
     crypto, currency,
@@ -58,6 +61,7 @@ struct AccountOption {
     name: String,
     kind: String,
     currency: String,
+    transfer_fee_rate: String,
 }
 
 struct CategoryOption {
@@ -460,6 +464,10 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
             name: names.remove(&a.id).unwrap_or_default(),
             kind: a.kind,
             currency: a.currency,
+            transfer_fee_rate: super::fees::format_rate(crypto::decrypt_cents(
+                dek,
+                &a.transfer_fee_rate_bps,
+            )),
         })
         .collect())
 }
@@ -579,6 +587,14 @@ pub(crate) async fn ledger_rows(
         .into_iter()
         .map(|plan| (plan.bill_id, plan.id))
         .collect();
+    let transfers = transfer::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let transfer_fee_bill_ids: HashSet<i64> = transfers
+        .iter()
+        .filter_map(|transfer| transfer.fee_bill_id)
+        .collect();
 
     let mut rows = Vec::new();
     for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
@@ -593,6 +609,8 @@ pub(crate) async fn ledger_rows(
             happened_at: bill.happened_at.format(TIME_FMT).to_string(),
             record_type: if incoming {
                 "收入".into()
+            } else if transfer_fee_bill_ids.contains(&bill.id) {
+                "支出 · 转账手续费（自动）".into()
             } else if installment_plan_ids.contains_key(&bill.id) {
                 "支出 · 分期".into()
             } else {
@@ -615,7 +633,9 @@ pub(crate) async fn ledger_rows(
                 "text-red-600"
             }
             .into(),
-            edit_url: if installment_plan_ids.contains_key(&bill.id) {
+            edit_url: if installment_plan_ids.contains_key(&bill.id)
+                || transfer_fee_bill_ids.contains(&bill.id)
+            {
                 String::new()
             } else {
                 format!("/bills/{}/edit", bill.id)
@@ -625,7 +645,11 @@ pub(crate) async fn ledger_rows(
                 .get(&bill.id)
                 .map(|plan_id| format!("/installments/{plan_id}"))
                 .unwrap_or_default(),
-            delete_action: format!("/bills/{}/delete", bill.id),
+            delete_action: if transfer_fee_bill_ids.contains(&bill.id) {
+                String::new()
+            } else {
+                format!("/bills/{}/delete", bill.id)
+            },
             delete_confirm: "确认删除这条账单？".into(),
             sort_key: bill.happened_at,
             bill_kind: bill.kind,
@@ -634,11 +658,7 @@ pub(crate) async fn ledger_rows(
         });
     }
 
-    for transfer in transfer::Entity::find()
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-    {
+    for transfer in transfers {
         let amount = crypto::decrypt_cents(dek, &transfer.amount);
         let to_amount = super::transfer_to_cents(dek, &transfer);
         let from_currency = account_currencies
@@ -649,6 +669,8 @@ pub(crate) async fn ledger_rows(
             .get(&transfer.to_account_id)
             .map(String::as_str)
             .unwrap_or(&default_currency);
+        let fee_amount = crypto::decrypt_cents(dek, &transfer.fee_amount);
+        let fee_rate = crypto::decrypt_cents(dek, &transfer.fee_rate_bps);
         rows.push(LedgerRow {
             happened_at: transfer.happened_at.format(TIME_FMT).to_string(),
             record_type: "转账".into(),
@@ -663,7 +685,15 @@ pub(crate) async fn ledger_rows(
                     .cloned()
                     .unwrap_or_else(|| "已删除账户".into())
             ),
-            subject: "账户间".into(),
+            subject: if fee_amount > 0 || fee_rate > 0 {
+                format!(
+                    "账户间 · 手续费 {}（费率 {}%）",
+                    currency::format(fee_amount, from_currency),
+                    super::fees::format_rate(fee_rate)
+                )
+            } else {
+                "账户间".into()
+            },
             note: crypto::decrypt_string(dek, &transfer.note),
             amount: if from_currency == to_currency {
                 currency::format(amount, from_currency)
@@ -679,7 +709,11 @@ pub(crate) async fn ledger_rows(
             share_url: String::new(),
             detail_url: String::new(),
             delete_action: format!("/transfers/{}/delete", transfer.id),
-            delete_confirm: "确认删除这条转账？".into(),
+            delete_confirm: if transfer.fee_bill_id.is_some() {
+                "确认删除这条转账并一并撤销手续费？".into()
+            } else {
+                "确认删除这条转账？".into()
+            },
             sort_key: transfer.happened_at,
             bill_kind: String::new(),
             amount_cents: rates.convert(amount, from_currency).map_err(err500)?,
@@ -1262,11 +1296,27 @@ pub async fn create_batch(
     }))
 }
 
+async fn ensure_not_transfer_fee(state: &AppState, bill_id: i64) -> HandlerResult<()> {
+    if transfer::Entity::find()
+        .filter(transfer::Column::FeeBillId.eq(bill_id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "转账手续费流水不能单独编辑或删除，请从账单列表删除对应转账以一并撤销手续费",
+        ));
+    }
+    Ok(())
+}
+
 pub async fn edit_form(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
+    ensure_not_transfer_fee(&state, id).await?;
     if investment_execution::Entity::find()
         .filter(investment_execution::Column::FeeBillId.eq(id))
         .one(&state.db)
@@ -1331,6 +1381,7 @@ pub async fn update(
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
+    ensure_not_transfer_fee(&state, id).await?;
     if investment_execution::Entity::find()
         .filter(investment_execution::Column::FeeBillId.eq(id))
         .one(&state.db)
@@ -1411,6 +1462,7 @@ pub async fn delete(
     Form(form): Form<DeleteFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
+    ensure_not_transfer_fee(&state, id).await?;
     if investment_execution::Entity::find()
         .filter(investment_execution::Column::FeeBillId.eq(id))
         .one(&state.db)

@@ -361,6 +361,7 @@ mod tests {
             parent_id,
             last_calibrated_at: None,
             sms_names: crypto::encrypt(dek, b"[]"),
+            transfer_fee_rate_bps: crypto::encrypt_cents(dek, 0),
         }
     }
 

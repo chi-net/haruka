@@ -1,0 +1,62 @@
+<p class="mb-4 text-sm text-amber-800">JavaScript 未启用：分别填写收支、转账或借还，时间按 UTC 输入；保存后返回当前页面。跨币转账可填写实际到账金额，同币转账请留空。</p>
+<section class="mb-5 border-b border-gray-200 pb-5">
+  <h3 class="font-medium mb-3">收入/支出</h3>
+  <form method="post" action="/bills" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
+    <label class="text-sm">类型<select name="kind" class="block w-full border rounded px-3 py-2"><option value="expense">支出</option><option value="income">收入</option></select></label>
+    <label class="text-sm">账户<select name="account_id" required class="block w-full border rounded px-3 py-2">{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select></label>
+    <label class="text-sm">分类<select name="category" required class="block w-full border rounded px-3 py-2">{% for c in categories %}<option value="{{ c.name }}">{{ c.kind }} · {{ c.name }}</option>{% endfor %}</select></label>
+    <label class="text-sm">金额<input name="amount" type="number" step="0.01" min="0.01" required class="block w-full border rounded px-3 py-2"></label>
+    <label class="text-sm">时间（UTC）<input name="happened_at" type="datetime-local" value="{{ happened_at }}" required class="block min-w-0 w-full border rounded px-3 py-2"></label>
+    <label class="text-sm">备注<input name="note" class="block w-full border rounded px-3 py-2"></label>
+    <details class="sm:col-span-2 border rounded p-3">
+      <summary class="cursor-pointer text-sm">信用账户支出分期（可选）</summary>
+      <label class="block my-3 text-sm"><input type="checkbox" name="use_installment" value="true"> 将这笔支出设置为分期</label>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label class="text-sm">期限<select name="installment_term" class="block w-full border rounded px-3 py-2"><option value="3">3 期</option><option value="6">6 期</option><option value="9">9 期</option><option value="12" selected>12 期</option><option value="24">24 期</option><option value="36">3 年</option><option value="60">5 年</option><option value="120">10 年</option><option value="180">15 年</option><option value="240">20 年</option><option value="360">30 年</option></select></label>
+        <label class="text-sm">还款方式<select name="installment_method" class="block w-full border rounded px-3 py-2"><option value="equal_payment">等额本息</option><option value="equal_principal">等额本金</option><option value="flat">等本等息</option></select></label>
+        <label class="text-sm">年利率（%）<input name="installment_annual_rate" type="number" min="0" max="100" step="0.01" value="13.03" class="block w-full border rounded px-3 py-2"></label>
+        <label class="text-sm">总手续费<input name="installment_fee" type="number" min="0" step="0.01" value="0" class="block w-full border rounded px-3 py-2"></label>
+        <label class="text-sm">首期还款日<input name="installment_first_due_date" type="date" value="{{ first_due_date }}" class="block min-w-0 w-full border rounded px-3 py-2"></label>
+      </div>
+    </details>
+    <div class="sm:col-span-2"><button class="rounded bg-blue-600 px-4 py-2 text-sm text-white">保存收支</button></div>
+  </form>
+</section>
+<section class="mb-5 border-b border-gray-200 pb-5">
+  <h3 class="font-medium mb-3">转账</h3>
+  {% if accounts.len() < 2 || transfer_sources.is_empty() %}
+  <p class="text-sm text-amber-700">至少需要两个账户和一个可用的转出账户。</p>
+  {% else %}
+  <form method="post" action="/transfers" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
+    <label class="text-sm">转出账户<select name="from_account_id" required class="block w-full border rounded px-3 py-2">{% for a in transfer_sources %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select></label>
+    <label class="text-sm">转入账户<select name="to_account_id" required class="block w-full border rounded px-3 py-2">{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select></label>
+    <label class="text-sm">转出金额<input name="amount" type="number" step="0.01" min="0.01" required class="block w-full border rounded px-3 py-2"></label>
+    <label class="text-sm">时间（UTC）<input name="happened_at" type="datetime-local" value="{{ happened_at }}" required class="block min-w-0 w-full border rounded px-3 py-2"></label>
+    <label class="text-sm">费率（%，留空使用来源默认）<input name="fee_rate" type="number" min="0" max="100" step="0.01" class="block w-full border rounded px-3 py-2"></label>
+    <label class="text-sm">手续费金额（来源原币，手填优先）<input name="fee_amount" type="number" min="0" step="0.01" class="block w-full border rounded px-3 py-2"></label>
+    <label class="text-sm">实际到账金额（跨币转账可选）<input name="to_amount" type="number" min="0.01" step="0.01" class="block w-full border rounded px-3 py-2"></label>
+    <label class="text-sm">备注<input name="note" class="block w-full border rounded px-3 py-2"></label>
+    <p class="sm:col-span-2 text-xs text-gray-500">手续费在本金之外扣除，计入支出；手填金额（含 0）优先，留空按费率计算。信用账户只能转出正余额。</p>
+    <div class="sm:col-span-2"><button class="rounded bg-blue-600 px-4 py-2 text-sm text-white">确认转账</button></div>
+  </form>
+  {% endif %}
+</section>
+<section>
+  <div class="flex justify-between gap-3 mb-3"><h3 class="font-medium">借还</h3><a href="/debt-people" class="text-sm text-blue-600">管理借贷对象</a></div>
+  {% if people.is_empty() %}
+  <p class="text-sm text-amber-700">请先添加借款人或出借人。</p>
+  {% else %}
+  <form method="post" action="/debts" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
+    <label class="text-sm">操作<select name="kind" class="block w-full border rounded px-3 py-2"><option value="lend">我借给对方</option><option value="borrow">我向对方借入</option><option value="repayment_received">对方还我</option><option value="repayment_paid">我还对方</option></select></label>
+    <label class="text-sm">对象<select name="person_id" required class="block w-full border rounded px-3 py-2">{% for p in people %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></label>
+    <label class="text-sm">账户<select name="account_id" required class="block w-full border rounded px-3 py-2">{% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select></label>
+    <label class="text-sm">金额<input name="amount" type="number" step="0.01" min="0.01" required class="block w-full border rounded px-3 py-2"></label>
+    <label class="text-sm">时间（UTC）<input name="happened_at" type="datetime-local" value="{{ happened_at }}" required class="block min-w-0 w-full border rounded px-3 py-2"></label>
+    <label class="text-sm">备注<input name="note" class="block w-full border rounded px-3 py-2"></label>
+    <div class="sm:col-span-2"><button class="rounded bg-blue-600 px-4 py-2 text-sm text-white">保存借还记录</button></div>
+  </form>
+  {% endif %}
+</section>

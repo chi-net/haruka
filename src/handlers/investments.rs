@@ -321,17 +321,6 @@ fn format_fee_rate(bps: i64) -> String {
     format!("{}%", Decimal::new(bps, 2).normalize())
 }
 
-pub(crate) fn calculate_fee(amount: i64, fee_rate_bps: i64) -> HandlerResult<i64> {
-    let numerator = i128::from(amount)
-        .checked_mul(i128::from(fee_rate_bps))
-        .ok_or_else(|| bad_request("手续费计算超出范围"))?;
-    let rounded = numerator
-        .checked_add(5_000)
-        .ok_or_else(|| bad_request("手续费计算超出范围"))?
-        / 10_000;
-    i64::try_from(rounded).map_err(|_| bad_request("手续费计算超出范围"))
-}
-
 async fn is_trading_day(state: &AppState, date: NaiveDate) -> HandlerResult<bool> {
     if matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
         return Ok(false);
@@ -1319,7 +1308,7 @@ async fn execute_plan_day(
     } else {
         crypto::decrypt_cents(dek, &plan.fee_rate_bps)
     };
-    let fee = calculate_fee(amount, fee_rate_bps)?;
+    let fee = super::fees::calculate(amount, fee_rate_bps)?;
     let total_debit = amount
         .checked_add(fee)
         .ok_or_else(|| bad_request("定投本金和手续费合计超出范围"))?;

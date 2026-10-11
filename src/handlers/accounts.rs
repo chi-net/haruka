@@ -13,9 +13,13 @@ use sea_orm::{
     QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 
 use crate::{
+    credit_dates::{self, BillingDayEffect, BillingSchedule},
     crypto, currency,
     entity::{
         account, account_detail, balance_adjustment, bill, debt_person, debt_record,
@@ -88,6 +92,7 @@ struct AccountDetailTemplate {
     account_username: String,
     credit_summary: String,
     note: String,
+    transfer_fee_rate: String,
     created_at: String,
     balance: String,
     month_label: String,
@@ -121,7 +126,10 @@ struct AccountFormTemplate {
     account_username: String,
     credit_limit: String,
     billing_day: String,
+    is_edit: bool,
+    billing_schedule_summary: String,
     repayment_day: String,
+    transfer_fee_rate: String,
     note: String,
 }
 
@@ -146,8 +154,12 @@ pub struct AccountFormData {
     account_username: String,
     credit_limit: String,
     billing_day: String,
+    #[serde(default = "default_billing_day_effective")]
+    billing_day_effective: String,
     #[serde(default)]
     repayment_day: String,
+    #[serde(default)]
+    transfer_fee_rate: String,
     note: String,
 }
 
@@ -185,6 +197,49 @@ fn valid_account_kind(kind: &str) -> bool {
     )
 }
 
+fn default_billing_day_effective() -> String {
+    "next_month".into()
+}
+
+fn billing_schedule_summary(detail: &account_detail::Model, today: chrono::NaiveDate) -> String {
+    let current = credit_dates::effective_billing_day(detail, today);
+    let mut summary = format!("当前账单日 {} 日", current);
+    if let Some((day, effective_on)) = credit_dates::pending_billing_change(detail, today) {
+        summary.push_str(&format!(
+            " · 待生效账单日 {} 日（{} 起）",
+            day, effective_on
+        ));
+    }
+    summary
+}
+
+fn credit_summary(
+    detail: &account_detail::Model,
+    dek: &crypto::Dek,
+    currency: &str,
+    today: chrono::NaiveDate,
+) -> String {
+    let billing_day = credit_dates::effective_billing_day(detail, today);
+    if billing_day <= 0 {
+        return String::new();
+    }
+    format!(
+        "授信额 {} · {} · 还款日 {} 日{}",
+        currency::format(crypto::decrypt_cents(dek, &detail.credit_limit), currency),
+        billing_schedule_summary(detail, today),
+        if detail.repayment_day > 0 {
+            detail.repayment_day
+        } else {
+            billing_day
+        },
+        if detail.repayment_day == 0 {
+            "（随账单日）"
+        } else {
+            ""
+        }
+    )
+}
+
 fn account_kind_label(kind: &str) -> &'static str {
     match kind {
         "payment" => "支付账户",
@@ -198,17 +253,18 @@ fn account_kind_label(kind: &str) -> &'static str {
     }
 }
 
-async fn save_account_detail(
-    state: &AppState,
+async fn save_account_detail<C: ConnectionTrait>(
+    db: &C,
     dek: &crypto::Dek,
     account_id: i64,
     kind: &str,
     card_number: &str,
     account_username: &str,
     credit_limit: i64,
-    billing_day: i32,
+    schedule: BillingSchedule,
     repayment_day: i32,
 ) -> HandlerResult<()> {
+    let billing_day = schedule.billing_day;
     let (card_number, account_username, credit_limit, billing_day, repayment_day) = match kind {
         "payment" => ("", account_username.trim(), 0, 0, 0),
         "bank" | "stored_value" => (card_number.trim(), "", 0, 0, 0),
@@ -235,7 +291,7 @@ async fn save_account_detail(
         && credit_limit == 0
     {
         account_detail::Entity::delete_by_id(account_id)
-            .exec(&state.db)
+            .exec(db)
             .await
             .map_err(err500)?;
         return Ok(());
@@ -247,6 +303,16 @@ async fn save_account_detail(
         account_username: Set(crypto::encrypt(dek, account_username.as_bytes())),
         credit_limit: Set(crypto::encrypt_cents(dek, credit_limit)),
         billing_day: Set(billing_day),
+        pending_billing_day: Set(if matches!(kind, "credit_card" | "credit_service") {
+            schedule.pending_billing_day
+        } else {
+            None
+        }),
+        billing_day_effective_on: Set(if matches!(kind, "credit_card" | "credit_service") {
+            schedule.billing_day_effective_on
+        } else {
+            None
+        }),
         repayment_day: Set(repayment_day),
     })
     .on_conflict(
@@ -256,11 +322,13 @@ async fn save_account_detail(
                 account_detail::Column::AccountUsername,
                 account_detail::Column::CreditLimit,
                 account_detail::Column::BillingDay,
+                account_detail::Column::PendingBillingDay,
+                account_detail::Column::BillingDayEffectiveOn,
                 account_detail::Column::RepaymentDay,
             ])
             .to_owned(),
     )
-    .exec(&state.db)
+    .exec(db)
     .await
     .map_err(err500)?;
     Ok(())
@@ -499,6 +567,7 @@ fn parse_credit_settings(
 pub async fn list(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Query(query): Query<AccountsQuery>,
 ) -> HandlerResult<Html<String>> {
     let accounts = account::Entity::find()
@@ -515,26 +584,12 @@ pub async fn list(
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let details: HashMap<i64, (String, String, i64, i32, i32)> = account_detail::Entity::find()
+    let details: HashMap<i64, account_detail::Model> = account_detail::Entity::find()
         .all(&state.db)
         .await
         .map_err(err500)?
         .into_iter()
-        .map(|detail| {
-            let card_number = crypto::decrypt_string(&dek, &detail.card_number);
-            let account_username = crypto::decrypt_string(&dek, &detail.account_username);
-            let credit_limit = crypto::decrypt_cents(&dek, &detail.credit_limit);
-            (
-                detail.account_id,
-                (
-                    super::mask_card_number(&card_number),
-                    super::mask_account_username(&account_username),
-                    credit_limit,
-                    detail.billing_day,
-                    detail.repayment_day,
-                ),
-            )
-        })
+        .map(|detail| (detail.account_id, detail))
         .collect();
     let mut net: HashMap<i64, i64> = accounts
         .iter()
@@ -597,31 +652,28 @@ pub async fn list(
     }
     crate::investment_funds::roll_up_balances(&accounts, &mut net)?;
 
+    let today = time_zone.today();
     let rows = accounts
         .into_iter()
         .filter(|account| account.kind != "investment_fund")
         .map(|account| {
-            let (card_number, account_username, credit_limit, billing_day, repayment_day) =
-                details.get(&account.id).cloned().unwrap_or_default();
-            let credit_summary = if billing_day > 0 {
-                format!(
-                    "授信额 {} · 账单日 {} 日 · 还款日 {} 日{}",
-                    currency::format(credit_limit, &account.currency),
-                    billing_day,
-                    if repayment_day > 0 {
-                        repayment_day
-                    } else {
-                        billing_day
-                    },
-                    if repayment_day == 0 {
-                        "（随账单日）"
-                    } else {
-                        ""
-                    }
-                )
-            } else {
-                String::new()
-            };
+            let detail = details.get(&account.id);
+            let card_number = detail
+                .map(|item| {
+                    super::mask_card_number(&crypto::decrypt_string(&dek, &item.card_number))
+                })
+                .unwrap_or_default();
+            let account_username = detail
+                .map(|item| {
+                    super::mask_account_username(&crypto::decrypt_string(
+                        &dek,
+                        &item.account_username,
+                    ))
+                })
+                .unwrap_or_default();
+            let credit_summary = detail
+                .map(|item| credit_summary(item, &dek, &account.currency, today))
+                .unwrap_or_default();
             AccountRow {
                 id: account.id,
                 name: crypto::decrypt_string(&dek, &account.name),
@@ -763,6 +815,10 @@ pub async fn detail(
         .into_iter()
         .map(|plan| (plan.bill_id, plan.id))
         .collect();
+    let transfer_fee_bill_ids: HashSet<i64> = account_transfers
+        .iter()
+        .filter_map(|item| item.fee_bill_id)
+        .collect();
 
     let mut records = Vec::with_capacity(
         account_bills.len()
@@ -779,6 +835,8 @@ pub async fn detail(
                 happened_at: item.happened_at.format("%Y-%m-%dT%H:%M").to_string(),
                 record_type: if incoming {
                     "收入".into()
+                } else if transfer_fee_bill_ids.contains(&item.id) {
+                    "支出 · 转账手续费（自动）".into()
                 } else if installment_plans.contains_key(&item.id) {
                     "支出 · 分期".into()
                 } else {
@@ -820,6 +878,20 @@ pub async fn detail(
             .get(&counterpart_id)
             .cloned()
             .unwrap_or_else(|| "已删除账户".into());
+        let mut note = crypto::decrypt_string(&dek, &item.note);
+        if !incoming {
+            if !note.is_empty() {
+                note.push_str(" · ");
+            }
+            note.push_str(&format!(
+                "手续费 {}（费率 {}%）",
+                currency::format(
+                    crypto::decrypt_cents(&dek, &item.fee_amount),
+                    &account.currency
+                ),
+                super::fees::format_rate(crypto::decrypt_cents(&dek, &item.fee_rate_bps)),
+            ));
+        }
         records.push((
             item.happened_at,
             AccountLedgerRow {
@@ -834,7 +906,7 @@ pub async fn detail(
                 } else {
                     format!("转至 {counterpart}")
                 },
-                note: crypto::decrypt_string(&dek, &item.note),
+                note,
                 amount: format!(
                     "{}{}",
                     if incoming { "+" } else { "-" },
@@ -925,28 +997,7 @@ pub async fn detail(
         .unwrap_or_default();
     let credit_summary = detail
         .as_ref()
-        .filter(|item| item.billing_day > 0)
-        .map(|item| {
-            let repayment_day = if item.repayment_day > 0 {
-                item.repayment_day
-            } else {
-                item.billing_day
-            };
-            format!(
-                "授信额 {} · 账单日 {} 日 · 还款日 {} 日{}",
-                currency::format(
-                    crypto::decrypt_cents(&dek, &item.credit_limit),
-                    &account.currency
-                ),
-                item.billing_day,
-                repayment_day,
-                if item.repayment_day == 0 {
-                    "（随账单日）"
-                } else {
-                    ""
-                }
-            )
-        })
+        .map(|item| credit_summary(item, &dek, &account.currency, today))
         .unwrap_or_default();
     let html = AccountDetailTemplate {
         id,
@@ -964,6 +1015,10 @@ pub async fn detail(
         },
         account_username,
         credit_summary,
+        transfer_fee_rate: super::fees::format_rate(crypto::decrypt_cents(
+            &dek,
+            &account.transfer_fee_rate_bps,
+        )),
         note: crypto::decrypt_string(&dek, &account.note),
         created_at: account.created_at.format("%Y-%m-%dT%H:%M").to_string(),
         balance: currency::format(current_balance(&state, &dek, id).await?, &account.currency),
@@ -1027,7 +1082,10 @@ pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<Strin
         account_username: String::new(),
         credit_limit: String::new(),
         billing_day: String::new(),
+        is_edit: false,
+        billing_schedule_summary: String::new(),
         repayment_day: String::new(),
+        transfer_fee_rate: "0".into(),
         note: String::new(),
     }
     .render()
@@ -1049,12 +1107,19 @@ pub async fn create(
     if !currency::valid(&form.currency) {
         return Err(bad_request("账户货币无效"));
     }
+    BillingDayEffect::parse(&form.billing_day_effective)
+        .ok_or_else(|| bad_request("账单日生效方式无效"))?;
     let (credit_limit, billing_day, repayment_day) = parse_credit_settings(
         &form.account_kind,
         &form.credit_limit,
         &form.billing_day,
         &form.repayment_day,
     )?;
+    let transfer_fee_rate = if form.account_kind == "investment" {
+        0
+    } else {
+        super::fees::parse_rate(&form.transfer_fee_rate)?
+    };
     let _balance_guard = state.balance_writes.lock().await;
     let transaction = state.db.begin().await.map_err(err500)?;
     let account = account::ActiveModel {
@@ -1062,6 +1127,7 @@ pub async fn create(
         kind: Set(form.account_kind.clone()),
         currency: Set(form.currency.clone()),
         balance_offset: Set(crypto::encrypt_cents(&dek, 0)),
+        transfer_fee_rate_bps: Set(crypto::encrypt_cents(&dek, transfer_fee_rate)),
         note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
@@ -1076,6 +1142,7 @@ pub async fn create(
             parent_id: Set(Some(account.id)),
             currency: Set(account.currency.clone()),
             balance_offset: Set(crypto::encrypt_cents(&dek, 0)),
+            transfer_fee_rate_bps: Set(crypto::encrypt_cents(&dek, 0)),
             note: Set(crypto::encrypt(&dek, b"")),
             sms_names: Set(crypto::encrypt(&dek, b"[]")),
             created_at: Set(account.created_at),
@@ -1085,25 +1152,29 @@ pub async fn create(
         .await
         .map_err(err500)?;
     }
-    transaction.commit().await.map_err(err500)?;
     save_account_detail(
-        &state,
+        &transaction,
         &dek,
         account.id,
         &form.account_kind,
         &form.card_number,
         &form.account_username,
         credit_limit,
-        billing_day,
+        BillingSchedule {
+            billing_day,
+            ..BillingSchedule::default()
+        },
         repayment_day,
     )
     .await?;
+    transaction.commit().await.map_err(err500)?;
     Ok(Redirect::to("/accounts"))
 }
 
 pub async fn edit_form(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
     let account = account::Entity::find_by_id(id)
@@ -1130,10 +1201,21 @@ pub async fn edit_form(
         .as_ref()
         .map(|detail| super::fmt_cents(crypto::decrypt_cents(&dek, &detail.credit_limit)))
         .unwrap_or_default();
+    let today = time_zone.today();
     let billing_day = detail
         .as_ref()
-        .filter(|detail| detail.billing_day > 0)
-        .map(|detail| detail.billing_day.to_string())
+        .filter(|detail| credit_dates::effective_billing_day(detail, today) > 0)
+        .map(|detail| {
+            credit_dates::pending_billing_change(detail, today)
+                .map(|(day, _)| day)
+                .unwrap_or_else(|| credit_dates::effective_billing_day(detail, today))
+                .to_string()
+        })
+        .unwrap_or_default();
+    let billing_schedule_summary = detail
+        .as_ref()
+        .filter(|detail| credit_dates::effective_billing_day(detail, today) > 0)
+        .map(|detail| billing_schedule_summary(detail, today))
         .unwrap_or_default();
     let repayment_day = detail
         .as_ref()
@@ -1152,7 +1234,13 @@ pub async fn edit_form(
         account_username,
         credit_limit,
         billing_day,
+        is_edit: true,
+        billing_schedule_summary,
         repayment_day,
+        transfer_fee_rate: super::fees::format_rate(crypto::decrypt_cents(
+            &dek,
+            &account.transfer_fee_rate_bps,
+        )),
         note: crypto::decrypt_string(&dek, &account.note),
     }
     .render()
@@ -1163,6 +1251,7 @@ pub async fn edit_form(
 pub async fn update(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Path(id): Path<i64>,
     Form(form): Form<AccountFormData>,
 ) -> HandlerResult<Redirect> {
@@ -1176,12 +1265,19 @@ pub async fn update(
     if !currency::valid(&form.currency) {
         return Err(bad_request("账户货币无效"));
     }
+    let billing_effect = BillingDayEffect::parse(&form.billing_day_effective)
+        .ok_or_else(|| bad_request("账单日生效方式无效"))?;
     let (credit_limit, billing_day, repayment_day) = parse_credit_settings(
         &form.account_kind,
         &form.credit_limit,
         &form.billing_day,
         &form.repayment_day,
     )?;
+    let transfer_fee_rate = if form.account_kind == "investment" {
+        0
+    } else {
+        super::fees::parse_rate(&form.transfer_fee_rate)?
+    };
     let account = account::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -1250,24 +1346,43 @@ pub async fn update(
     } else if balance < 0 {
         return Err(bad_request("当前余额为负，不能改为禁止透支的账户类型"));
     }
+    let transaction = state.db.begin().await.map_err(err500)?;
+    let existing_detail = account_detail::Entity::find_by_id(id)
+        .one(&transaction)
+        .await
+        .map_err(err500)?;
+    let schedule = if matches!(form.account_kind.as_str(), "credit_card" | "credit_service") {
+        BillingSchedule::for_edit(
+            existing_detail
+                .as_ref()
+                .filter(|_| matches!(account.kind.as_str(), "credit_card" | "credit_service")),
+            billing_day,
+            billing_effect,
+            time_zone.today(),
+        )
+    } else {
+        BillingSchedule::default()
+    };
     let mut active = account.into_active_model();
     active.name = Set(crypto::encrypt(&dek, form.name.trim().as_bytes()));
     active.kind = Set(form.account_kind.clone());
     active.currency = Set(form.currency.clone());
+    active.transfer_fee_rate_bps = Set(crypto::encrypt_cents(&dek, transfer_fee_rate));
     active.note = Set(crypto::encrypt(&dek, form.note.trim().as_bytes()));
-    active.update(&state.db).await.map_err(err500)?;
+    active.update(&transaction).await.map_err(err500)?;
     save_account_detail(
-        &state,
+        &transaction,
         &dek,
         id,
         &form.account_kind,
         &form.card_number,
         &form.account_username,
         credit_limit,
-        billing_day,
+        schedule,
         repayment_day,
     )
     .await?;
+    transaction.commit().await.map_err(err500)?;
     Ok(Redirect::to("/accounts"))
 }
 
@@ -1356,10 +1471,12 @@ pub async fn delete(
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     if target.kind == "investment_fund" {
         crate::investment_funds::ensure_unused(&state, &dek, id).await?;
+        let transaction = state.db.begin().await.map_err(err500)?;
         account::Entity::delete_by_id(id)
-            .exec(&state.db)
+            .exec(&transaction)
             .await
             .map_err(err500)?;
+        transaction.commit().await.map_err(err500)?;
         return Ok(Redirect::to(&format!(
             "/accounts/{}/funds",
             target.parent_id.unwrap_or(id)
@@ -1375,13 +1492,16 @@ pub async fn delete(
         for child in children {
             crate::investment_funds::ensure_unused(&state, &dek, child.id).await?;
         }
+        let transaction = state.db.begin().await.map_err(err500)?;
         account::Entity::delete_by_id(id)
-            .exec(&state.db)
+            .exec(&transaction)
             .await
             .map_err(err500)?;
+        transaction.commit().await.map_err(err500)?;
         return Ok(Redirect::to("/accounts"));
     }
     let mut balance_changes: HashMap<i64, i64> = HashMap::new();
+    let mut fee_bill_ids = HashSet::new();
     for transfer in transfer::Entity::find()
         .filter(
             Condition::any()
@@ -1413,13 +1533,38 @@ pub async fn delete(
                     .ok_or_else(|| bad_request("余额超出范围"))?,
             );
         }
+        if let Some(fee_bill_id) = transfer.fee_bill_id {
+            if fee_bill_ids.insert(fee_bill_id) {
+                let fee_bill = bill::Entity::find_by_id(fee_bill_id)
+                    .one(&state.db)
+                    .await
+                    .map_err(err500)?
+                    .ok_or_else(|| err500("转账手续费账单不存在"))?;
+                if fee_bill.account_id != transfer.from_account_id || fee_bill.kind != "expense" {
+                    return Err(err500("转账手续费账单关联不一致"));
+                }
+                if fee_bill.account_id != id {
+                    let current = balance_changes
+                        .get(&fee_bill.account_id)
+                        .copied()
+                        .unwrap_or_default();
+                    balance_changes.insert(
+                        fee_bill.account_id,
+                        current
+                            .checked_add(crypto::decrypt_cents(&dek, &fee_bill.amount))
+                            .ok_or_else(|| bad_request("余额超出范围"))?,
+                    );
+                }
+            }
+        }
     }
     for (account_id, delta) in balance_changes {
         ensure_balance_delta(&state, &dek, account_id, delta).await?;
     }
+    let transaction = state.db.begin().await.map_err(err500)?;
     for item in installment_item::Entity::find()
         .filter(installment_item::Column::RepaymentAccountId.eq(id))
-        .all(&state.db)
+        .all(&transaction)
         .await
         .map_err(err500)?
     {
@@ -1428,7 +1573,7 @@ pub async fn delete(
         active.repayment_account_id = Set(None);
         active.principal_transfer_id = Set(None);
         active.charge_bill_id = Set(None);
-        active.update(&state.db).await.map_err(err500)?;
+        active.update(&transaction).await.map_err(err500)?;
     }
     subscription::Entity::update_many()
         .col_expr(
@@ -1436,12 +1581,20 @@ pub async fn delete(
             Expr::value(Option::<i64>::None),
         )
         .filter(subscription::Column::AutoDebitAccountId.eq(id))
-        .exec(&state.db)
+        .exec(&transaction)
         .await
         .map_err(err500)?;
+    if !fee_bill_ids.is_empty() {
+        bill::Entity::delete_many()
+            .filter(bill::Column::Id.is_in(fee_bill_ids))
+            .exec(&transaction)
+            .await
+            .map_err(err500)?;
+    }
     account::Entity::delete_by_id(id)
-        .exec(&state.db)
+        .exec(&transaction)
         .await
         .map_err(err500)?;
+    transaction.commit().await.map_err(err500)?;
     Ok(Redirect::to("/accounts"))
 }
