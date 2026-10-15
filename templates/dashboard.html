@@ -3,7 +3,6 @@
 {% block content %}
 <div class="mb-5 flex items-center justify-between gap-3">
   <h1 class="text-xl font-bold">仪表板</h1>
-  <a href="/bills/new" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">记一笔</a>
 </div>
 
 <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
@@ -74,13 +73,13 @@
 {% if !credit_accounts.is_empty() %}
 <section class="mb-5 rounded-xl border-2 border-violet-400 bg-violet-50 p-3 sm:p-4">
   <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-    <div class="min-w-0"><h2 class="font-bold text-violet-900">信用账户额度概览</h2><p class="text-xs text-violet-800">实际金额与日期以金融机构账单为准。</p></div>
+    <div class="min-w-0"><h2 class="font-bold text-violet-900">信贷额度概览</h2><p class="text-xs text-violet-800">实际金额与日期以金融机构账单为准。</p></div>
   </div>
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
     {% for service in credit_accounts %}
     <article data-credit-summary class="min-w-0 rounded-lg border-2 {% if service.danger %}border-red-400 bg-red-50{% else %}border-violet-200 bg-white{% endif %} p-3">
       <div class="flex flex-wrap items-start justify-between gap-2">
-        <div class="min-w-0 break-words"><h3 class="font-semibold">{{ service.name }} <span class="text-xs font-normal text-violet-800">{{ service.kind }}</span></h3><p class="mt-0.5 text-xs text-gray-600 break-all">账户余额 {{ service.balance }}</p></div>
+        <div class="min-w-0 break-words"><h3 class="font-semibold">{{ service.name }} <span class="text-xs font-normal text-violet-800">{{ service.kind }}</span></h3>/div>
         {% if service.danger %}<span class="rounded-full bg-red-600 px-2 py-1 text-xs font-bold text-white">⚠️额度紧张</span>{% endif %}
       </div>
       <dl class="mt-2 grid grid-cols-3 gap-2 text-xs">
@@ -100,7 +99,6 @@
           <div class="mt-1 flex flex-wrap items-baseline justify-between gap-1 {% if period.overdue %}font-semibold text-red-800{% else %}text-violet-900{% endif %}"><p class="text-xs">最早未还 {{ period.due_date }}{% if period.overdue %} · 已逾期{% endif %}</p><p class="text-xs">月供 <span class="font-mono break-all">{{ period.total }}</span></p></div>
           <a href="/installments" class="text-xs text-blue-700 hover:underline">查看分期与还款</a>
           {% when None %}
-          <div class="flex items-baseline justify-between gap-1"><h4 class="text-gray-700">分期</h4><p>暂无</p></div>
           {% endmatch %}
         </section>
         <section data-credit-repayment class="mt-2 border-t border-violet-200 pt-2">

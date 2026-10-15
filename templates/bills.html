@@ -26,7 +26,7 @@
       <input type="hidden" name="time_zone" value="{{ time_zone }}">
       <button type="submit" class="border border-gray-300 text-gray-700 text-sm px-3 py-1.5 rounded hover:bg-gray-50">导出 CSV</button>
     </form>
-    {% if advanced_search %}<a href="/bills?time_zone={{ time_zone|urlencode }}" class="text-sm text-blue-600 hover:underline">返回账单</a>{% else %}<a href="/bills/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">记一笔</a>{% endif %}
+    {% if advanced_search %}<a href="/bills?time_zone={{ time_zone|urlencode }}" class="text-sm text-blue-600 hover:underline">返回账单</a>{% else %}
     {% endif %}
   </div>
 </div>
