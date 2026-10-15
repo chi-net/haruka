@@ -13,8 +13,8 @@ use axum::{
 };
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, IntoActiveModel, QueryFilter,
+    QueryOrder, Set, TransactionTrait,
 };
 use serde::Deserialize;
 use std::{
@@ -107,16 +107,25 @@ async fn rows(
     dek: &crypto::Dek,
     root: &account::Model,
 ) -> HandlerResult<(Vec<FundRow>, i64)> {
+    fund_rows(state, dek, children(state, root).await?).await
+}
+
+async fn fund_rows(
+    state: &AppState,
+    dek: &crypto::Dek,
+    funds: Vec<account::Model>,
+) -> HandlerResult<(Vec<FundRow>, i64)> {
     let mut rows = Vec::new();
     let mut total = 0i64;
     let details: HashMap<_, _> = account_detail::Entity::find()
+        .filter(account_detail::Column::AccountId.is_in(funds.iter().map(|fund| fund.id)))
         .all(&state.db)
         .await
         .map_err(err500)?
         .into_iter()
         .map(|detail| (detail.account_id, detail))
         .collect();
-    for a in children(state, root).await? {
+    for a in funds {
         let value = accounts::current_balance(state, dek, a.id).await?;
         total = total
             .checked_add(value)
@@ -323,30 +332,130 @@ pub async fn delete(
 #[derive(Template)]
 #[template(path = "fund_valuation.html")]
 struct ValuationTemplate {
+    heading: String,
+    action: String,
+    back: String,
+    all_groups: bool,
+    saved: Option<usize>,
+    groups: Vec<ValuationGroup>,
+}
+struct ValuationGroup {
     id: i64,
     name: String,
     currency: String,
     total: String,
     funds: Vec<FundRow>,
 }
+
+async fn valuation_groups(
+    state: &AppState,
+    scope: Option<i64>,
+) -> HandlerResult<Vec<(account::Model, Vec<account::Model>)>> {
+    if let Some(id) = scope {
+        let root = group(state, id).await?;
+        let funds = children(state, &root).await?;
+        return Ok(vec![(root, funds)]);
+    }
+    let roots = account::Entity::find()
+        .filter(account::Column::Kind.eq("investment"))
+        .filter(account::Column::ParentId.is_null())
+        .order_by_asc(account::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let mut groups: Vec<_> = roots.into_iter().map(|root| (root, Vec::new())).collect();
+    let positions: HashMap<_, _> = groups
+        .iter()
+        .enumerate()
+        .map(|(position, (root, _))| (root.id, position))
+        .collect();
+    let funds = account::Entity::find()
+        .filter(
+            Condition::any()
+                .add(account::Column::Kind.eq("investment_fund"))
+                .add(account::Column::ParentId.is_in(positions.keys().copied())),
+        )
+        .order_by_asc(account::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    for fund in funds {
+        let position = fund
+            .parent_id
+            .and_then(|parent| positions.get(&parent))
+            .ok_or_else(|| err500("基金缺少有效投资分组"))?;
+        let (root, children) = &mut groups[*position];
+        if fund.kind != "investment_fund" || fund.currency != root.currency {
+            return Err(err500("基金分组或货币不一致"));
+        }
+        children.push(fund);
+    }
+    Ok(groups)
+}
+
+async fn render_valuation(
+    state: &AppState,
+    dek: &crypto::Dek,
+    scope: Option<i64>,
+    saved: Option<usize>,
+) -> HandlerResult<Html<String>> {
+    let _guard = state.balance_writes.lock().await;
+    let mut groups = Vec::new();
+    for (root, models) in valuation_groups(state, scope).await? {
+        let (funds, total) = fund_rows(state, dek, models).await?;
+        groups.push(ValuationGroup {
+            id: root.id,
+            name: root_display_name(state, dek, &root).await?,
+            total: currency::format(total, &root.currency),
+            currency: root.currency,
+            funds,
+        });
+    }
+    let (heading, action, back) = if let Some(id) = scope {
+        (
+            format!("{} · 批量校准基金价值", groups[0].name),
+            format!("/accounts/{id}/funds/valuation"),
+            format!("/accounts/{id}/funds"),
+        )
+    } else {
+        (
+            "全部基金 · 批量校准价值".into(),
+            "/funds/valuation".into(),
+            "/accounts".into(),
+        )
+    };
+    Ok(Html(
+        ValuationTemplate {
+            heading,
+            action,
+            back,
+            all_groups: scope.is_none(),
+            saved,
+            groups,
+        }
+        .render()
+        .map_err(err500)?,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct ValuationQuery {
+    saved: Option<usize>,
+}
+
+pub async fn all_valuation_form(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Query(query): Query<ValuationQuery>,
+) -> HandlerResult<Html<String>> {
+    render_valuation(&state, &dek, None, query.saved).await
+}
 pub async fn valuation_form(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
-    let root = group(&state, id).await?;
-    let (funds, total) = rows(&state, &dek, &root).await?;
-    Ok(Html(
-        ValuationTemplate {
-            id,
-            name: root_display_name(&state, &dek, &root).await?,
-            currency: root.currency.clone(),
-            total: currency::format(total, &root.currency),
-            funds,
-        }
-        .render()
-        .map_err(err500)?,
-    ))
+    render_valuation(&state, &dek, Some(id), None).await
 }
 fn parse_target(text: &str) -> HandlerResult<i64> {
     let decimal = Decimal::from_str(text.trim()).map_err(|_| bad("持仓价值格式不正确"))?;
@@ -364,93 +473,120 @@ pub async fn calibrate(
     Path(id): Path<i64>,
     Form(form): Form<HashMap<String, String>>,
 ) -> HandlerResult<Redirect> {
+    apply_calibration(&state, &dek, Some(id), form).await?;
+    Ok(Redirect::to(&format!("/accounts/{id}/funds")))
+}
+
+pub async fn calibrate_all(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Form(form): Form<HashMap<String, String>>,
+) -> HandlerResult<Redirect> {
+    let saved = apply_calibration(&state, &dek, None, form).await?;
+    Ok(Redirect::to(&format!("/funds/valuation?saved={saved}")))
+}
+
+async fn apply_calibration(
+    state: &AppState,
+    dek: &crypto::Dek,
+    scope: Option<i64>,
+    form: HashMap<String, String>,
+) -> HandlerResult<usize> {
     let _guard = state.balance_writes.lock().await;
-    let root = group(&state, id).await?;
-    let funds = children(&state, &root).await?;
-    let ids: HashSet<_> = funds.iter().map(|a| a.id).collect();
+    let groups = valuation_groups(state, scope).await?;
+    let ids: HashSet<_> = groups
+        .iter()
+        .flat_map(|(_, funds)| funds.iter().map(|fund| fund.id))
+        .collect();
     for key in form.keys() {
-        let row_id = ["target_", "baseline_", "reviewed_"]
+        let suffix = ["target_", "baseline_", "reviewed_"]
             .into_iter()
             .find_map(|prefix| key.strip_prefix(prefix))
-            .ok_or_else(|| bad("估值字段无效"))?
-            .parse::<i64>()
-            .map_err(|_| bad("估值基金无效"))?;
+            .ok_or_else(|| bad("估值字段无效"))?;
+        if suffix.starts_with('0') || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(bad("估值基金无效"));
+        }
+        let row_id = suffix.parse::<i64>().map_err(|_| bad("估值基金无效"))?;
         if !ids.contains(&row_id) {
-            return Err(bad("基金不属于当前投资分组"));
+            return Err(bad("基金不属于当前校准范围"));
         }
     }
     let tx = state.db.begin().await.map_err(err500)?;
     let now = chrono::Utc::now();
-    let mut total = 0i64;
-    for a in funds {
-        let target_text = form
-            .get(&format!("target_{}", a.id))
-            .map(String::as_str)
-            .unwrap_or("")
-            .trim();
-        let reviewed = form.contains_key(&format!("reviewed_{}", a.id));
-        let change = if target_text.is_empty() && !reviewed {
-            None
-        } else {
-            let baseline = form
-                .get(&format!("baseline_{}", a.id))
-                .ok_or_else(|| bad("缺少估值基准，请重新打开页面"))?
-                .parse::<i64>()
-                .map_err(|_| bad("估值基准无效"))?;
-            let target = if target_text.is_empty() {
-                baseline
+    let mut saved = 0;
+    for (_, funds) in groups {
+        let mut total = 0i64;
+        for a in funds {
+            let target_text = form
+                .get(&format!("target_{}", a.id))
+                .map(String::as_str)
+                .unwrap_or("")
+                .trim();
+            let reviewed = form.contains_key(&format!("reviewed_{}", a.id));
+            let change = if target_text.is_empty() && !reviewed {
+                None
             } else {
-                parse_target(target_text)?
+                let baseline = form
+                    .get(&format!("baseline_{}", a.id))
+                    .ok_or_else(|| bad("缺少估值基准，请重新打开页面"))?
+                    .parse::<i64>()
+                    .map_err(|_| bad("估值基准无效"))?;
+                let target = if target_text.is_empty() {
+                    baseline
+                } else {
+                    parse_target(target_text)?
+                };
+                if target < 0 {
+                    return Err(bad("持仓价值必须非负"));
+                }
+                (target != baseline || reviewed).then_some((baseline, target))
             };
-            if target < 0 {
-                return Err(bad("持仓价值必须非负"));
+            let fresh = accounts::current_balance_on(&tx, dek, a.id).await?;
+            total = total
+                .checked_add(change.map_or(fresh, |(_, target)| target))
+                .ok_or_else(|| bad("投资分组总价值超出范围，本批次未保存"))?;
+            let Some((baseline, target)) = change else {
+                continue;
+            };
+            if fresh != baseline {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!(
+                        "基金 {} 已有新流水或估值变化；本批次未保存，请刷新后核对",
+                        crypto::decrypt_string(dek, &a.name)
+                    ),
+                ));
             }
-            (target != baseline || reviewed).then_some((baseline, target))
-        };
-        let fresh = accounts::current_balance_on(&tx, &dek, a.id).await?;
-        total = total
-            .checked_add(change.map_or(fresh, |(_, target)| target))
-            .ok_or_else(|| bad("投资分组总价值超出范围，本批次未保存"))?;
-        let Some((baseline, target)) = change else {
-            continue;
-        };
-        if fresh != baseline {
-            return Err((
-                StatusCode::CONFLICT,
-                format!(
-                    "基金 {} 已有新流水或估值变化；本批次未保存，请刷新后核对",
-                    crypto::decrypt_string(&dek, &a.name)
-                ),
-            ));
+            let offset = crypto::decrypt_cents(dek, &a.balance_offset)
+                .checked_add(
+                    target
+                        .checked_sub(fresh)
+                        .ok_or_else(|| bad("估值差额超出范围"))?,
+                )
+                .ok_or_else(|| bad("持仓价值超出范围"))?;
+            let account_id = a.id;
+            let mut active = a.into_active_model();
+            if target != fresh {
+                active.balance_offset = Set(crypto::encrypt_cents(dek, offset));
+            }
+            active.last_calibrated_at = Set(Some(now));
+            active.update(&tx).await.map_err(err500)?;
+            balance_adjustment::ActiveModel {
+                account_id: Set(account_id),
+                from_balance: Set(crypto::encrypt_cents(dek, fresh)),
+                to_balance: Set(crypto::encrypt_cents(dek, target)),
+                happened_at: Set(now.naive_utc()),
+                created_at: Set(now),
+                ..Default::default()
+            }
+            .insert(&tx)
+            .await
+            .map_err(err500)?;
+            saved += 1;
         }
-        let offset = crypto::decrypt_cents(&dek, &a.balance_offset)
-            .checked_add(
-                target
-                    .checked_sub(fresh)
-                    .ok_or_else(|| bad("估值差额超出范围"))?,
-            )
-            .ok_or_else(|| bad("持仓价值超出范围"))?;
-        let account_id = a.id;
-        let mut active = a.into_active_model();
-        if target != fresh {
-            active.balance_offset = Set(crypto::encrypt_cents(&dek, offset));
-        }
-        active.last_calibrated_at = Set(Some(now));
-        active.update(&tx).await.map_err(err500)?;
-        balance_adjustment::ActiveModel {
-            account_id: Set(account_id),
-            from_balance: Set(crypto::encrypt_cents(&dek, fresh)),
-            to_balance: Set(crypto::encrypt_cents(&dek, target)),
-            happened_at: Set(now.naive_utc()),
-            created_at: Set(now),
-            ..Default::default()
-        }
-        .insert(&tx)
-        .await
-        .map_err(err500)?;
     }
     tx.commit().await.map_err(err500)?;
-    Ok(Redirect::to(&format!("/accounts/{id}/funds")))
+    Ok(saved)
 }
 #[derive(Default, Deserialize)]
 pub struct RemindersQuery {

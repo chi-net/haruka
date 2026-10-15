@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% block title %}账户 - haruka{% endblock %}
 {% block content %}
-<div class="flex items-center justify-between mb-4">
+<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
   <h1 class="text-xl font-bold">账户</h1>
-  <a href="/accounts/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新建账户</a>
+  <div class="flex flex-wrap items-center gap-2">
+    <a href="/funds/valuation" class="border border-blue-200 text-blue-600 text-sm px-3 py-1.5 rounded hover:bg-blue-50">全部基金校准</a>
+    <a href="/accounts/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">新建账户</a>
+  </div>
 </div>
 <p class="text-sm text-gray-500 mb-3"><a href="/funds/valuation-reminders" class="text-blue-600 hover:underline">查看每月估值提醒</a></p>
 <form method="get" action="/accounts" class="flex justify-end mb-3">

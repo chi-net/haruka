@@ -334,16 +334,19 @@ pub async fn show(
             && matches!(account.kind.as_str(), "credit_card" | "credit_service")
             && account_balances.get(&account.id) != Some(&0)
     }) {
-        let statement = credit_statements::calculate(
-            account,
-            details.get(&account.id),
-            &ledger,
-            &dek,
-            time_zone,
-            today,
-        )
-        .map_err(err500)?;
-        statements.insert(account.id, statement);
+        let detail = details.get(&account.id);
+        let limit = detail
+            .map(|detail| crypto::decrypt_cents(&dek, &detail.credit_limit))
+            .unwrap_or_default();
+        let statement = if account.kind == "credit_card" && limit == 0 {
+            None
+        } else {
+            Some(
+                credit_statements::calculate(account, detail, &ledger, &dek, time_zone, today)
+                    .map_err(err500)?,
+            )
+        };
+        statements.insert(account.id, (limit, statement));
     }
     drop(balance_guard);
     let default_currency = currency::default_currency(&state).await.map_err(err500)?;
@@ -393,12 +396,18 @@ pub async fn show(
                 continue;
             }
             let detail = details.get(&account.id);
-            let limit = detail
-                .map(|detail| crypto::decrypt_cents(&dek, &detail.credit_limit))
-                .unwrap_or_default();
-            let statement = statements
+            let (limit, statement) = statements
                 .remove(&account.id)
                 .ok_or_else(|| err500("信用账户账单估算缺失"))?;
+            if account.kind == "credit_card" && limit == 0 {
+                account_summaries.push(AccountSummary {
+                    name: account_names.get(&account.id).cloned().unwrap_or_default(),
+                    kind: account_kind_label(&account.kind).into(),
+                    balance: currency::format(balance, &account.currency),
+                });
+                continue;
+            }
+            let statement = statement.ok_or_else(|| err500("信用账户账单估算缺失"))?;
             let amounts = credit_amounts(balance, limit);
             let due_total = statement.due.iter().try_fold(0i64, |total, due| {
                 total

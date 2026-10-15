@@ -412,6 +412,10 @@ async fn main() {
             get(handlers::funds::valuation_form).post(handlers::funds::calibrate),
         )
         .route(
+            "/funds/valuation",
+            get(handlers::funds::all_valuation_form).post(handlers::funds::calibrate_all),
+        )
+        .route(
             "/funds/{id}/edit",
             get(handlers::funds::edit_form).post(handlers::funds::update),
         )
