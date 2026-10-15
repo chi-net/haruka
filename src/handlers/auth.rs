@@ -14,6 +14,7 @@ use zeroize::Zeroizing;
 use crate::{
     crypto,
     entity::{account, category, meta, passkey, recovery},
+    password_attempts::{self, Verification},
     AppState,
 };
 
@@ -51,6 +52,7 @@ struct SetupTemplate {
 struct UnlockTemplate {
     error: String,
     has_passkeys: bool,
+    password_locked: bool,
 }
 
 #[derive(Template)]
@@ -174,6 +176,7 @@ pub async fn setup(
         salt: Set(salt.to_vec()),
         dek_nonce: Set(nonce),
         wrapped_dek: Set(wrapped),
+        failed_password_rounds: Set(0),
     }
     .insert(&state.db)
     .await
@@ -196,13 +199,16 @@ pub async fn unlock_form(State(state): State<AppState>) -> HandlerResult<Respons
     if !has_meta(&state).await? {
         return Ok(Redirect::to("/setup").into_response());
     }
+    let lock_message = password_attempts::lock_message(&state).await?;
+    let password_locked = lock_message.is_some();
     let html = UnlockTemplate {
-        error: String::new(),
+        error: lock_message.unwrap_or_default(),
         has_passkeys: passkey::Entity::find()
             .count(&state.db)
             .await
             .map_err(err500)?
             > 0,
+        password_locked,
     }
     .render()
     .map_err(err500)?;
@@ -215,15 +221,8 @@ pub async fn unlock(
     Form(form): Form<UnlockFormData>,
 ) -> HandlerResult<Response> {
     let password = Zeroizing::new(form.password);
-    let m = meta::Entity::find_by_id(1)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or((StatusCode::NOT_FOUND, "尚未设置密码".into()))?;
-
-    let kek = crypto::derive_kek(password.as_str(), &m.salt);
-    match crypto::unwrap_dek(&m.dek_nonce, &m.wrapped_dek, kek.as_slice()) {
-        Some(dek) => {
+    match password_attempts::verify(&state, password.as_str()).await? {
+        Verification::Verified(dek) => {
             ensure_default_account(&state, &dek).await?;
             state.remove_session(&headers);
             Ok(set_session_cookie(
@@ -232,14 +231,15 @@ pub async fn unlock(
                 &dek,
             ))
         }
-        None => {
+        Verification::Incorrect { remaining } => {
             let html = UnlockTemplate {
-                error: "密码错误".to_string(),
+                error: format!("主密码错误，本次服务器启动剩余 {remaining} 次尝试。"),
                 has_passkeys: passkey::Entity::find()
                     .count(&state.db)
                     .await
                     .map_err(err500)?
                     > 0,
+                password_locked: false,
             }
             .render()
             .map_err(err500)?;
@@ -253,14 +253,15 @@ pub async fn generate_recovery(
     Form(form): Form<RecoveryPasswordFormData>,
 ) -> HandlerResult<Response> {
     let password = Zeroizing::new(form.password);
-    let meta = meta::Entity::find_by_id(1)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or((StatusCode::NOT_FOUND, "尚未设置密码".into()))?;
-    let kek = crypto::derive_kek(password.as_str(), &meta.salt);
-    let dek = crypto::unwrap_dek(&meta.dek_nonce, &meta.wrapped_dek, kek.as_slice())
-        .ok_or((StatusCode::UNAUTHORIZED, "主密码错误".into()))?;
+    let dek = match password_attempts::verify(&state, password.as_str()).await? {
+        Verification::Verified(dek) => dek,
+        Verification::Incorrect { remaining } => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                format!("主密码错误，本次服务器启动剩余 {remaining} 次尝试。"),
+            ));
+        }
+    };
     let phrase = store_new_recovery(&state, &dek).await?;
     let html = RecoveryPhraseTemplate {
         heading: "新的恢复助记词".into(),

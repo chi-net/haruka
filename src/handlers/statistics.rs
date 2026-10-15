@@ -372,7 +372,11 @@ pub async fn show(
         let amount = rates
             .convert(native_amount, bill_currency)
             .map_err(err500)?;
-        let category_name = crypto::decrypt_string(&dek, &bill.category);
+        let category_name = if bill.is_private {
+            "隐私账单".into()
+        } else {
+            crypto::decrypt_string(&dek, &bill.category)
+        };
         let account_name = account_names
             .get(&bill.account_id)
             .cloned()
@@ -418,21 +422,23 @@ pub async fn show(
                 .ok_or_else(|| err500("统计金额超出范围"))?;
             expense_active_dates.insert(date);
             expense_amounts.push(amount);
-            if bill.is_food {
+            if !bill.is_private && bill.is_food {
                 food_expense = food_expense
                     .checked_add(amount)
                     .ok_or_else(|| err500("统计金额超出范围"))?;
             }
-            expense_orders.push(ExpenseOrderValue {
-                id: bill.id,
-                amount,
-                native_amount,
-                currency: bill_currency.to_string(),
-                category: category_name,
-                account: account_name,
-                note: crypto::decrypt_string(&dek, &bill.note),
-                happened_at: bill.happened_at,
-            });
+            if !bill.is_private {
+                expense_orders.push(ExpenseOrderValue {
+                    id: bill.id,
+                    amount,
+                    native_amount,
+                    currency: bill_currency.to_string(),
+                    category: category_name,
+                    account: account_name,
+                    note: crypto::decrypt_string(&dek, &bill.note),
+                    happened_at: bill.happened_at,
+                });
+            }
         }
     }
     let average_income = if income_count == 0 {

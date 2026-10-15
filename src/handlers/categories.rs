@@ -129,6 +129,7 @@ pub async fn show(
         bill::Entity::find()
             .filter(bill::Column::Kind.eq("expense"))
             .filter(bill::Column::CategoryId.gt(0))
+            .filter(bill::Column::IsPrivate.eq(false))
             .all(&state.db)
             .await
             .map_err(err500)?

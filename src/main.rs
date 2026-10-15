@@ -1,5 +1,6 @@
 mod category_limits;
 mod credit_dates;
+mod credit_statements;
 mod crypto;
 mod currency;
 mod db;
@@ -8,6 +9,8 @@ mod financial_planning;
 mod handlers;
 mod investment_funds;
 mod market_data;
+mod password_attempts;
+mod privacy;
 mod sms_templates;
 
 use std::{
@@ -123,6 +126,8 @@ pub struct SessionDek(pub Dek);
 pub struct AppState {
     pub db: DatabaseConnection,
     sessions: Arc<RwLock<HashMap<String, Dek>>>,
+    pub(crate) password_attempts: Arc<tokio::sync::Mutex<password_attempts::Attempts>>,
+    pub(crate) privacy: Arc<tokio::sync::Mutex<privacy::PrivacyState>>,
     pub balance_writes: Arc<tokio::sync::Mutex<()>>,
     pub(crate) fund_migration_ready: Arc<tokio::sync::OnceCell<()>>,
     fx_client: reqwest::Client,
@@ -226,7 +231,27 @@ async fn require_unlock(State(state): State<AppState>, mut req: Request, next: N
             return error.into_response();
         }
         req.extensions_mut().insert(SessionDek(dek));
-        return next.run(req).await;
+        let privacy_access = privacy::is_unlocked(&state, req.headers()).await;
+        let recheck_privacy = !matches!(
+            req.uri().path(),
+            "/lock" | "/privacy/lock" | "/privacy/password" | "/privacy/setup" | "/privacy/unlock"
+        );
+        let privacy_headers = (privacy_access && recheck_privacy).then(|| req.headers().clone());
+        req.extensions_mut()
+            .insert(privacy::PrivacyAccess(privacy_access));
+        let mut response = next.run(req).await;
+        if let Some(headers) = privacy_headers {
+            if !privacy::is_unlocked(&state, &headers).await {
+                response = (axum::http::StatusCode::UNAUTHORIZED, "隐私模式已锁定").into_response();
+            }
+        }
+        response
+            .headers_mut()
+            .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+        response
+            .headers_mut()
+            .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+        return response;
     }
 
     let has_meta = match meta::Entity::find_by_id(1).one(&state.db).await {
@@ -313,6 +338,10 @@ async fn main() {
     let state = AppState {
         db,
         sessions: Arc::new(RwLock::new(HashMap::new())),
+        password_attempts: Arc::new(tokio::sync::Mutex::new(
+            password_attempts::Attempts::default(),
+        )),
+        privacy: Arc::new(tokio::sync::Mutex::new(privacy::PrivacyState::default())),
         balance_writes: Arc::new(tokio::sync::Mutex::new(())),
         fund_migration_ready: Arc::new(tokio::sync::OnceCell::new()),
         fx_client: reqwest::Client::builder()
@@ -337,6 +366,13 @@ async fn main() {
     };
 
     let protected = Router::new()
+        .route("/privacy", get(privacy::show))
+        .route("/privacy/setup", post(privacy::setup))
+        .route("/privacy/unlock", post(privacy::unlock))
+        .route("/privacy/activity", post(privacy::activity))
+        .route("/privacy/lock", post(privacy::lock))
+        .route("/privacy/password", post(privacy::change_password))
+        .route("/privacy/bills", get(handlers::bills::private_list))
         .route("/", get(handlers::dashboard::redirect))
         .route("/dashboard", get(handlers::dashboard::show))
         .route(

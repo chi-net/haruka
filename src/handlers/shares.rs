@@ -211,6 +211,9 @@ async fn bill_summary(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
+    if item.is_private {
+        return Err(bad_request("隐私账单不支持公开分享"));
+    }
     let account = account::Entity::find_by_id(item.account_id)
         .one(&state.db)
         .await
@@ -350,6 +353,7 @@ pub async fn create(
     Path(bill_id): Path<i64>,
     Form(form): Form<CreateShareForm>,
 ) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
     let expires_at = NaiveDateTime::parse_from_str(form.expires_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("有效期结束时间格式不正确"))?;
     if expires_at <= Utc::now().naive_utc() {

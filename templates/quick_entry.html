@@ -26,27 +26,24 @@
       <p id="quick-entry-unavailable" class="hidden text-sm text-amber-700" role="status"></p>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div><label id="quick-transfer-amount-label" for="quick-transfer-amount" class="mb-1 block text-xs text-gray-500">金额</label><input id="quick-transfer-amount" name="amount" type="number" step="0.01" min="0.01" required placeholder="输入金额" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-base font-mono"></div>
-        <div data-utc-field><label for="quick-transfer-time" class="mb-1 block text-xs text-gray-500">时间</label><input id="quick-transfer-time" data-utc-picker data-utc-value="{{ happened_at }}" name="happened_at" value="{{ happened_at }}" type="datetime-local" required class="min-w-0 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"><input id="quick-transfer-time-utc" data-utc-target type="hidden" value="{{ happened_at }}"></div>
+        <div data-utc-field><div class="mb-1 flex items-center justify-between gap-2"><label for="quick-transfer-time" class="block text-xs text-gray-500">时间</label><button id="quick-time-reset" type="button" class="text-xs text-blue-700 hover:underline">重置到现在</button></div><input id="quick-transfer-time" data-utc-picker data-utc-value="{{ happened_at }}" value="{{ happened_at }}" type="datetime-local" required class="min-w-0 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"><input id="quick-transfer-time-utc" data-utc-target name="happened_at" type="hidden" value="{{ happened_at }}"></div>
       </div>
       <fieldset data-quick-fields="transfer" disabled class="hidden min-w-0">
-        <details id="quick-transfer-settings" class="rounded-lg border border-gray-200">
-          <summary class="cursor-pointer px-3 py-2 text-sm text-blue-700">手续费与实际到账金额</summary>
-          <div class="grid grid-cols-1 gap-3 border-t border-gray-100 p-3 sm:grid-cols-2">
+        <div id="quick-transfer-settings" class="rounded-lg border border-gray-200 p-3">
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div><label for="quick-transfer-fee-rate" class="mb-1 block text-xs text-gray-500">转账费率（%）</label><input id="quick-transfer-fee-rate" name="fee_rate" type="number" min="0" max="100" step="0.01" placeholder="来源账户默认费率" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"><p class="mt-1 text-xs text-gray-400">留空使用来源默认，填 0 覆盖默认。</p></div>
             <div><label id="quick-transfer-fee-amount-label" for="quick-transfer-fee-amount" class="mb-1 block text-xs text-gray-500">手续费金额（转出账户原币）</label><input id="quick-transfer-fee-amount" name="fee_amount" type="number" min="0" step="0.01" placeholder="留空按费率计算" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"><p class="mt-1 text-xs text-gray-400">手填金额优先，填 0 免手续费。</p></div>
             <div id="quick-transfer-to-amount-field" class="hidden sm:col-span-2"><label id="quick-transfer-to-amount-label" for="quick-transfer-to-amount" class="mb-1 block text-xs text-gray-500">实际转入金额</label><input id="quick-transfer-to-amount" name="to_amount" type="number" step="0.01" min="0.01" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"></div>
             <p class="text-xs text-gray-500 sm:col-span-2">手续费在本金之外扣除，计入支出及预算；信用账户仅能转出正余额。</p>
           </div>
-        </details>
+        </div>
         <div class="mt-3 rounded-lg bg-blue-50 p-3 text-xs text-blue-900">
           <p id="quick-transfer-fee-preview" aria-live="polite">手续费以来源原币在本金之外额外扣除。</p>
           <p id="quick-transfer-quote-status" class="mt-1 hidden" aria-live="polite"></p>
         </div>
       </fieldset>
       <fieldset data-quick-fields="bill" class="min-w-0">
-        <details id="quick-installment-toggle-field" class="hidden rounded-lg border border-gray-200">
-          <summary class="cursor-pointer px-3 py-2 text-sm text-blue-700">支出分期（可选）</summary>
-          <div class="border-t border-gray-100 p-3">
+        <div id="quick-installment-toggle-field" class="hidden rounded-lg border border-gray-200 p-3">
             <label class="inline-flex items-center gap-2 text-sm"><input id="quick-use-installment" type="checkbox" name="use_installment" value="true"> 将这笔支出设置为分期</label>
             <fieldset id="quick-installment-settings" disabled class="hidden mt-3 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
               <div><label class="mb-1 block text-xs text-gray-500">期限</label><select id="quick-installment-term" name="installment_term" class="w-full rounded-lg border px-3 py-2 text-sm"><option value="3">3 期</option><option value="6">6 期</option><option value="9">9 期</option><option value="12" selected>12 期</option><option value="24">24 期</option><option value="36">3 年（36 期）</option><option value="60">5 年（60 期）</option><option value="120">10 年（120 期）</option><option value="180">15 年（180 期）</option><option value="240">20 年（240 期）</option><option value="360">30 年（360 期）</option></select></div>
@@ -55,15 +52,16 @@
               <div><label class="mb-1 block text-xs text-gray-500">总手续费</label><input name="installment_fee" type="number" min="0" step="0.01" value="0.00" class="w-full rounded-lg border px-3 py-2 text-sm font-mono"></div>
               <div class="sm:col-span-2"><label class="mb-1 block text-xs text-gray-500">首期还款日</label><input id="quick-installment-first-due" name="installment_first_due_date" type="date" value="{{ first_due_date }}" class="min-w-0 w-full rounded-lg border px-3 py-2 text-sm"></div>
             </fieldset>
-          </div>
-        </details>
+        </div>
       </fieldset>
-      <details id="quick-note-details" class="rounded-lg border border-gray-200">
-        <summary class="cursor-pointer px-3 py-2 text-sm text-gray-600">添加备注（可选）</summary>
-        <div class="border-t border-gray-100 p-3"><label for="quick-note" class="sr-only">备注</label><input id="quick-note" name="note" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></div>
-      </details>
+      <fieldset data-quick-fields="bill" class="min-w-0">
+        <label class="inline-flex items-center gap-2 text-sm"><input id="quick-is-private" type="checkbox" name="is_private" value="true"> 隐私账单</label>
+        <p class="mt-1 text-xs text-gray-400">收入和支出可设为隐私账单；详情仅在隐私模式解锁后查看。</p>
+      </fieldset>
+      <div><label for="quick-note" class="mb-1 block text-xs text-gray-500">备注（可选）</label><textarea id="quick-note" name="note" rows="2" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"></textarea></div>
       <div class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 pt-4">
         <button id="quick-batch-add" type="button" class="rounded-lg border border-blue-200 px-3 py-2 text-sm text-blue-700">加入批量列表</button>
+        <button id="quick-batch-cancel-edit" type="button" hidden class="rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600">取消编辑草稿</button>
         <button data-quick-submit class="ml-auto rounded-lg bg-blue-600 px-5 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">保存支出</button>
         <p data-quick-status class="w-full text-sm text-gray-500" aria-live="polite"></p>
       </div>
@@ -124,14 +122,16 @@
     unavailable.textContent = message;
     unavailable.classList.toggle('hidden', !message);
     const busy = root.dataset.submitting === 'true';
-    submit.disabled = busy || !!message;
+    const editing = root.dataset.editingDraft === 'true';
+    submit.disabled = busy || !!message || editing;
     batch.disabled = busy || !!message;
-    buttons.forEach(button => button.disabled = busy);
+    buttons.forEach(button => button.disabled = busy || (editing && ['transfer', 'debt'].includes(button.dataset.quickMode)));
     const currency = account.selectedOptions[0]?.dataset.currency || '';
     amountLabel.textContent = `${family === 'transfer' ? '转出金额' : '金额'}${currency ? `（${currency}）` : ''}`;
   };
   const selectMode = mode => {
     if (root.dataset.submitting === 'true' || !['expense', 'income', 'transfer', 'debt'].includes(mode)) return;
+    if (root.dataset.editingDraft === 'true' && ['transfer', 'debt'].includes(mode)) return;
     const family = mode === 'expense' || mode === 'income' ? 'bill' : mode;
     root.dataset.mode = mode;
     form.dataset.quickForm = family;
@@ -174,6 +174,18 @@
   }, true);
   selectMode('expense');
   document.getElementById('quick-entry-enhanced').hidden = false;
+})();
+(() => {
+  const root = document.getElementById('quick-entry');
+  const reset = document.getElementById('quick-time-reset');
+  const picker = document.getElementById('quick-transfer-time');
+  if (!root || !reset || !picker) return;
+  reset.addEventListener('click', () => {
+    window.harukaInitLocalTimes(root);
+    picker.value = window.harukaLocalDateTimeValue(new Date());
+    picker.dispatchEvent(new Event('input', { bubbles: true }));
+    picker.dispatchEvent(new Event('change', { bubbles: true }));
+  });
 })();
 (() => {
   const kind = document.getElementById('quick-bill-kind');
@@ -283,7 +295,7 @@
         const quote = await response.json();
         if (currentRequest !== requestNumber) return;
         toAmount.value = quote.to_amount;
-        status.textContent = `预计到账 ${quote.to_amount} ${toCurrency}；可展开设置按实际到账金额修改。`;
+        status.textContent = `预计到账 ${quote.to_amount} ${toCurrency}；可按实际到账金额修改。`;
       } catch (error) {
         if (currentRequest !== requestNumber) return;
         toAmount.value = '';
@@ -401,10 +413,9 @@
 
   const resetForNext = form => {
     const amount = form.querySelector('input[name="amount"]');
-    const note = form.querySelector('input[name="note"]');
+    const note = form.querySelector('[name="note"]');
     if (amount) amount.value = '';
     if (note) note.value = '';
-    document.getElementById('quick-note-details').open = false;
     const installment = form.querySelector('#quick-use-installment');
     if (installment) {
       installment.checked = false;
@@ -420,6 +431,7 @@
   for (const form of root.querySelectorAll('[data-quick-form]')) {
     form.addEventListener('submit', async event => {
       event.preventDefault();
+      if (root.dataset.submitting === 'true' || root.dataset.editingDraft === 'true') return;
       if (!form.reportValidity()) return;
       const button = form.querySelector('[data-quick-submit]');
       const status = form.querySelector('[data-quick-status]');
@@ -453,14 +465,30 @@
 
   const billForm = root.querySelector('[data-quick-form="bill"]');
   const addButton = document.getElementById('quick-batch-add');
+  const cancelEdit = document.getElementById('quick-batch-cancel-edit');
   const panel = document.getElementById('quick-batch-panel');
   const list = document.getElementById('quick-batch-list');
   const count = document.getElementById('quick-batch-count');
   const clearButton = document.getElementById('quick-batch-clear');
   const submitButton = document.getElementById('quick-batch-submit');
   const batchStatus = document.getElementById('quick-batch-status');
-  if (!billForm || !addButton || !panel || !list || !count || !clearButton || !submitButton || !batchStatus) return;
+  if (!billForm || !addButton || !cancelEdit || !panel || !list || !count || !clearButton || !submitButton || !batchStatus) return;
   const pending = [];
+  let editingEntry = null;
+  const finishDraftEdit = () => {
+    editingEntry = null;
+    root.dataset.editingDraft = 'false';
+    addButton.textContent = '加入批量列表';
+    cancelEdit.hidden = true;
+    root.dispatchEvent(new Event('quick-entry-check'));
+  };
+  cancelEdit.addEventListener('click', () => {
+    if (root.dataset.submitting === 'true') return;
+    finishDraftEdit();
+    resetForNext(billForm);
+    batchStatus.textContent = '已取消编辑，列表中的原草稿未改变。';
+    renderBatch();
+  });
 
   window.harukaApplyReceiptDraft = draft => {
     if (root.dataset.submitting === 'true') throw new Error('正在保存，请完成后再填入草稿。');
@@ -476,13 +504,12 @@
     }
     if (draft.amount) amount.value = draft.amount;
     if (draft.category && Array.from(category.options).some(option => !option.disabled && option.value === draft.category)) category.value = draft.category;
-    if (draft.note) {
-      note.value = draft.note;
-      document.getElementById('quick-note-details').open = true;
-    }
+    if (draft.note) note.value = draft.note;
+    if (typeof draft.is_private === 'boolean') document.getElementById('quick-is-private').checked = draft.is_private;
     if (draft.happened_at_local && localTime) {
       localTime.value = draft.happened_at_local;
-      localTime.dispatchEvent(new Event('input'));
+      localTime.dispatchEvent(new Event('input', { bubbles: true }));
+      localTime.dispatchEvent(new Event('change', { bubbles: true }));
     }
     amount.focus();
   };
@@ -490,22 +517,70 @@
   const renderBatch = () => {
     panel.classList.toggle('hidden', pending.length === 0);
     count.textContent = String(pending.length);
+    const busy = root.dataset.submitting === 'true';
+    submitButton.disabled = busy || !!editingEntry;
+    clearButton.disabled = busy;
     list.replaceChildren();
     pending.forEach((entry, index) => {
       const row = document.createElement('div');
-      row.className = 'flex items-center justify-between gap-3 rounded border border-blue-100 bg-white px-3 py-2 text-sm';
+      row.className = 'flex flex-wrap items-center justify-between gap-3 rounded border border-blue-100 bg-white px-3 py-2 text-sm';
       const text = document.createElement('span');
       text.className = 'min-w-0 break-words';
-      text.textContent = `${entry.kind_label} · ${entry.account_label} · ${entry.category} · ${entry.amount}`;
+      text.textContent = `${entry.is_private ? '隐私' : '普通'} · ${entry.kind_label} · ${entry.account_label} · ${entry.category} · ${entry.amount}${entry.note ? ` · ${entry.note}` : ''}${editingEntry === entry ? '（正在编辑）' : ''}`;
+      const actions = document.createElement('div');
+      actions.className = 'flex shrink-0 gap-3';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'text-blue-700 hover:underline disabled:opacity-50';
+      edit.textContent = '编辑';
+      edit.disabled = busy;
+      edit.addEventListener('click', () => {
+        if (root.dataset.submitting === 'true') return;
+        if (editingEntry && editingEntry !== entry) {
+          batchStatus.textContent = '请先更新或取消当前草稿的编辑。';
+          return;
+        }
+        root.dispatchEvent(new CustomEvent('quick-mode-request', { detail: entry.kind }));
+        const account = billForm.querySelector('[name="account_id"]');
+        account.value = entry.account_id;
+        account.dispatchEvent(new Event('change', { bubbles: true }));
+        billForm.querySelector('[name="amount"]').value = entry.amount;
+        billForm.querySelector('[name="category"]').value = entry.category;
+        billForm.querySelector('[name="note"]').value = entry.note;
+        document.getElementById('quick-is-private').checked = entry.is_private;
+        const localTime = billForm.querySelector('[data-utc-picker]');
+        window.harukaInitLocalTimes(root);
+        const date = window.harukaUtcDate(entry.happened_at);
+        localTime.value = date ? window.harukaLocalDateTimeValue(date) : '';
+        localTime.dispatchEvent(new Event('input', { bubbles: true }));
+        localTime.dispatchEvent(new Event('change', { bubbles: true }));
+        document.getElementById('quick-use-installment').checked = false;
+        document.getElementById('quick-use-installment').dispatchEvent(new Event('change'));
+        editingEntry = entry;
+        root.dataset.editingDraft = 'true';
+        addButton.textContent = '更新这条草稿';
+        cancelEdit.hidden = false;
+        batchStatus.textContent = '正在编辑草稿；更新后再提交整批。';
+        root.dispatchEvent(new Event('quick-entry-check'));
+        renderBatch();
+        billForm.querySelector('[name="amount"]').focus();
+      });
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.className = 'shrink-0 text-red-600 hover:underline';
       remove.textContent = '移除';
+      remove.disabled = busy;
       remove.addEventListener('click', () => {
+        if (root.dataset.submitting === 'true') return;
+        if (editingEntry === entry) {
+          finishDraftEdit();
+          resetForNext(billForm);
+        }
         pending.splice(index, 1);
         renderBatch();
       });
-      row.append(text, remove);
+      actions.append(edit, remove);
+      row.append(text, actions);
       list.append(row);
     });
   };
@@ -519,7 +594,7 @@
       panel.classList.remove('hidden');
       return;
     }
-    if (pending.length >= 100) {
+    if (pending.length >= 100 && !editingEntry) {
       batchStatus.className = 'text-sm text-red-600 mt-3';
       batchStatus.textContent = '单次最多加入 100 条。';
       panel.classList.remove('hidden');
@@ -528,32 +603,43 @@
     const data = new FormData(billForm);
     const account = billForm.querySelector('[name="account_id"]');
     const kind = String(data.get('kind') || '');
-    pending.push({
+    const entry = {
       account_id: String(data.get('account_id') || ''),
       kind,
       amount: String(data.get('amount') || ''),
       category: String(data.get('category') || ''),
       note: String(data.get('note') || ''),
+      is_private: data.get('is_private') === 'true',
       happened_at: String(data.get('happened_at') || ''),
       account_label: account.selectedOptions[0]?.textContent?.trim() || '未知账户',
       kind_label: kind === 'income' ? '收入' : '支出'
-    });
+    };
+    const wasEditing = !!editingEntry;
+    if (editingEntry) Object.assign(editingEntry, entry);
+    else pending.push(entry);
+    finishDraftEdit();
     batchStatus.className = 'text-sm text-blue-800 mt-3';
-    batchStatus.textContent = '已加入列表，可以继续填写下一条。';
+    batchStatus.textContent = wasEditing ? '草稿已更新。' : '已加入列表，可以继续填写下一条。';
     renderBatch();
     resetForNext(billForm);
   });
 
   clearButton.addEventListener('click', () => {
+    if (root.dataset.submitting === 'true') return;
+    if (editingEntry) {
+      finishDraftEdit();
+      resetForNext(billForm);
+    }
     pending.length = 0;
     batchStatus.textContent = '';
     renderBatch();
   });
 
   submitButton.addEventListener('click', async () => {
-    if (!pending.length) return;
-    submitButton.disabled = true;
-    clearButton.disabled = true;
+    if (!pending.length || editingEntry || root.dataset.submitting === 'true') return;
+    root.dataset.submitting = 'true';
+    root.dispatchEvent(new Event('quick-entry-check'));
+    renderBatch();
     batchStatus.className = 'text-sm text-blue-700 mt-3';
     batchStatus.textContent = `正在提交 ${pending.length} 条记录…`;
     try {
@@ -576,8 +662,9 @@
       batchStatus.textContent = error.message;
       if (window.harukaShowError) window.harukaShowError(error.message);
     } finally {
-      submitButton.disabled = false;
-      clearButton.disabled = false;
+      root.dataset.submitting = 'false';
+      root.dispatchEvent(new Event('quick-entry-check'));
+      renderBatch();
     }
   });
 })();

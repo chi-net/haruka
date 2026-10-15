@@ -15,6 +15,9 @@ pub struct Model {
     pub category_id: Option<i64>,
     /// 创建或修改账单时记录的食品类标记
     pub is_food: bool,
+    /// 应用内隐私账单标记；金额仍参与真实余额，分类与备注仅隐私模式可读。
+    #[sea_orm(default_value = false)]
+    pub is_private: bool,
     pub note: String,
     pub happened_at: DateTime,
     pub created_at: DateTimeUtc,

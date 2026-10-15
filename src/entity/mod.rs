@@ -19,6 +19,7 @@ pub mod market_index_quote;
 pub mod meta;
 pub mod passkey;
 pub mod preference;
+pub mod privacy_credential;
 pub mod recovery;
 pub mod recurring_investment;
 pub mod sms_template;

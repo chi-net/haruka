@@ -8,6 +8,9 @@ pub struct Model {
     pub salt: Vec<u8>,
     pub dek_nonce: Vec<u8>,
     pub wrapped_dek: Vec<u8>,
+    /// Completed password-failure rounds; three permanently disable password verification.
+    #[sea_orm(default_value = 0)]
+    pub failed_password_rounds: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

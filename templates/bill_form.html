@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ heading }} - haruka{% endblock %}
 {% block content %}
+<div {% if is_private %}data-privacy-sensitive{% endif %} hx-history="false">
 <h1 class="text-xl font-bold mb-4">{{ heading }}</h1>
 <form method="post" action="{{ action }}" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4 max-w-md">
   <div>
@@ -42,11 +43,14 @@
     <label class="block text-sm text-gray-600 mb-1">备注</label>
     <input name="note" value="{{ note }}" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
   </div>
+  <label class="flex items-center gap-2 text-sm"><input type="checkbox" name="is_private" value="true" {% if is_private %}checked{% endif %}>设为隐私账单</label>
+  <p class="text-xs text-gray-500">隐私账单的分类与备注仅在隐私模式显示；设为隐私会撤销已有公开分享。</p>
   <div class="flex gap-3">
     <button type="submit" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">保存</button>
     <a href="/bills" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300 hover:bg-gray-50">取消</a>
   </div>
 </form>
+</div>
 <script>
 (() => {
   const category = document.getElementById('bill-category');

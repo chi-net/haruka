@@ -1,11 +1,17 @@
 {% extends "base.html" %}
 {% block title %}{{ page_heading }} - Haruka{% endblock %}
 {% block content %}
+<div {% if private_mode %}data-privacy-sensitive{% endif %} hx-history="false">
 <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
   <div>
     <h1 class="text-xl font-bold">{{ page_heading }}</h1>
   </div>
   <div class="flex flex-wrap items-center justify-end gap-2">
+    {% if private_mode %}
+    <a href="/privacy" class="text-sm text-blue-600 hover:underline">隐私密码与状态</a>
+    <button type="button" data-privacy-lock class="border border-gray-300 rounded px-3 py-1.5 text-sm">立即锁定隐私模式</button>
+    <a href="/bills/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded">记一笔</a>
+    {% else %}
     <form method="get" action="{{ export_action }}" hx-boost="false">
       <input type="hidden" name="mode" value="{{ search_mode }}">
       <input type="hidden" name="start_date" value="{{ start_date }}">
@@ -21,6 +27,7 @@
       <button type="submit" class="border border-gray-300 text-gray-700 text-sm px-3 py-1.5 rounded hover:bg-gray-50">导出 CSV</button>
     </form>
     {% if advanced_search %}<a href="/bills?time_zone={{ time_zone|urlencode }}" class="text-sm text-blue-600 hover:underline">返回账单</a>{% else %}<a href="/bills/new" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">记一笔</a>{% endif %}
+    {% endif %}
   </div>
 </div>
 <div class="grid grid-cols-3 gap-3 mb-4 text-center">
@@ -103,7 +110,7 @@
         {% if !record.share_url.is_empty() %}<a href="{{ record.share_url }}" class="text-blue-600 hover:underline mr-3">分享</a>{% endif %}
         {% if !record.edit_url.is_empty() %}<a href="{{ record.edit_url }}" class="text-blue-600 hover:underline mr-3">编辑</a>{% endif %}
         {% if !record.delete_action.is_empty() %}<form method="post" action="{{ record.delete_action }}" class="inline" hx-confirm="{{ record.delete_confirm }}">
-          <input type="hidden" name="redirect_to" value="/bills">
+          <input type="hidden" name="redirect_to" value="{{ search_action }}">
           <button type="submit" class="text-red-600 hover:underline">删除</button>
         </form>{% endif %}
       </td>
@@ -116,4 +123,5 @@
 {% include "pagination.html" %}
 {% endif %}
 {% endif %}
+</div>
 {% endblock %}

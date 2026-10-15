@@ -82,28 +82,83 @@ impl BillingSchedule {
     }
 }
 
-fn date_with_clamped_day(month_start: NaiveDate, day: i32) -> NaiveDate {
-    let last_day = (next_month_start(month_start) - Duration::days(1)).day();
-    month_start
-        .with_day((day.max(1) as u32).min(last_day))
-        .expect("有效日期")
+fn month_start(on: NaiveDate) -> NaiveDate {
+    on.with_day(1).expect("有效月初")
 }
 
-pub fn next_repayment_date(today: NaiveDate, detail: Option<&account_detail::Model>) -> NaiveDate {
-    let repayment_in_month = |month_start| {
-        let day = match detail {
-            Some(detail) if detail.repayment_day > 0 => detail.repayment_day,
-            Some(detail) => effective_billing_day(detail, month_start),
-            None => 1,
-        };
-        date_with_clamped_day(month_start, day)
-    };
-    let month_start = today.with_day(1).expect("有效月初");
-    let current = repayment_in_month(month_start);
-    if current >= today {
-        current
+fn shift_month(on: NaiveDate, forward: bool) -> Result<NaiveDate, String> {
+    let on = month_start(on);
+    let shifted = if forward {
+        on.checked_add_months(Months::new(1))
     } else {
-        repayment_in_month(next_month_start(today))
+        on.checked_sub_months(Months::new(1))
+    };
+    shifted.ok_or_else(|| "信用账单日期超出范围".into())
+}
+
+fn date_with_clamped_day(month: NaiveDate, day: i32) -> Result<NaiveDate, String> {
+    let month = month_start(month);
+    let last = shift_month(month, true)?
+        .checked_sub_signed(Duration::days(1))
+        .ok_or_else(|| "信用账单日期超出范围".to_string())?;
+    month
+        .with_day((day.max(1) as u32).min(last.day()))
+        .ok_or_else(|| "信用账单日期超出范围".into())
+}
+
+fn billing_close(
+    month: NaiveDate,
+    detail: Option<&account_detail::Model>,
+) -> Result<NaiveDate, String> {
+    let month = month_start(month);
+    let day = detail.map_or(1, |detail| effective_billing_day(detail, month));
+    date_with_clamped_day(month, day)
+}
+
+fn repayment_in_month(
+    month: NaiveDate,
+    detail: Option<&account_detail::Model>,
+) -> Result<NaiveDate, String> {
+    let month = month_start(month);
+    let day = match detail {
+        Some(detail) if detail.repayment_day > 0 => detail.repayment_day,
+        Some(detail) => effective_billing_day(detail, month),
+        None => 1,
+    };
+    date_with_clamped_day(month, day)
+}
+
+/// 消费归属原始账期；还款日只能在出账当月或次月，不随查询日期移动。
+pub(crate) fn statement_dates(
+    posted: NaiveDate,
+    detail: Option<&account_detail::Model>,
+) -> Result<(NaiveDate, NaiveDate), String> {
+    let month = month_start(posted);
+    let current_close = billing_close(month, detail)?;
+    let close = if posted <= current_close {
+        current_close
+    } else {
+        billing_close(shift_month(month, true)?, detail)?
+    };
+    let current_due = repayment_in_month(close, detail)?;
+    let due = if current_due >= close {
+        current_due
+    } else {
+        repayment_in_month(shift_month(close, true)?, detail)?
+    };
+    Ok((close, due))
+}
+
+/// 分期还款日之前（含当天）的最近一次出账日。
+pub(crate) fn installment_billing_close(
+    due: NaiveDate,
+    detail: Option<&account_detail::Model>,
+) -> Result<NaiveDate, String> {
+    let close = billing_close(due, detail)?;
+    if close <= due {
+        Ok(close)
+    } else {
+        billing_close(shift_month(due, false)?, detail)
     }
 }
 
@@ -231,73 +286,77 @@ mod tests {
     }
 
     #[test]
-    fn repayment_follows_current_and_pending_month_but_fixed_day_does_not() {
-        let mut existing = detail(5, Some(20), Some("2026-11-01"));
+    fn statement_keeps_original_close_and_due_with_clamped_days() {
+        let mut existing = detail(31, None, None);
+        existing.repayment_day = 5;
         assert_eq!(
-            next_repayment_date(date("2026-10-01"), Some(&existing)),
-            date("2026-10-05")
+            statement_dates(date("2024-02-29"), Some(&existing)).unwrap(),
+            (date("2024-02-29"), date("2024-03-05"))
         );
         assert_eq!(
-            next_repayment_date(date("2026-10-05"), Some(&existing)),
-            date("2026-10-05")
+            statement_dates(date("2026-04-30"), Some(&existing)).unwrap(),
+            (date("2026-04-30"), date("2026-05-05"))
         );
         assert_eq!(
-            next_repayment_date(date("2026-10-06"), Some(&existing)),
-            date("2026-11-20")
+            statement_dates(date("2026-12-31"), Some(&existing)).unwrap(),
+            (date("2026-12-31"), date("2027-01-05"))
         );
+        existing.repayment_day = 31;
         assert_eq!(
-            next_repayment_date(date("2026-11-01"), Some(&existing)),
-            date("2026-11-20")
-        );
-        existing.repayment_day = 12;
-        assert_eq!(
-            next_repayment_date(date("2026-10-13"), Some(&existing)),
-            date("2026-11-12")
-        );
-        assert_eq!(
-            next_repayment_date(date("2026-11-01"), Some(&existing)),
-            date("2026-11-12")
+            statement_dates(date("2024-02-01"), Some(&existing)).unwrap(),
+            (date("2024-02-29"), date("2024-02-29"))
         );
     }
 
     #[test]
-    fn repayment_clamps_month_end_including_leap_year_and_year_boundary() {
+    fn statement_switches_after_close_and_obeys_scheduled_month() {
+        let mut existing = detail(5, Some(20), Some("2026-11-01"));
+        existing.repayment_day = 12;
+        assert_eq!(
+            statement_dates(date("2026-10-05"), Some(&existing)).unwrap(),
+            (date("2026-10-05"), date("2026-10-12"))
+        );
+        assert_eq!(
+            statement_dates(date("2026-10-06"), Some(&existing)).unwrap(),
+            (date("2026-11-20"), date("2026-12-12"))
+        );
+        existing.repayment_day = 0;
+        assert_eq!(
+            statement_dates(date("2026-10-06"), Some(&existing)).unwrap(),
+            (date("2026-11-20"), date("2026-11-20"))
+        );
+        assert_eq!(
+            statement_dates(date("2026-12-02"), None).unwrap(),
+            (date("2027-01-01"), date("2027-01-01"))
+        );
+    }
+
+    #[test]
+    fn installment_close_is_latest_before_due_including_schedule_and_leap_year() {
         let existing = detail(31, None, None);
         assert_eq!(
-            next_repayment_date(date("2024-02-01"), Some(&existing)),
+            installment_billing_close(date("2024-03-05"), Some(&existing)).unwrap(),
             date("2024-02-29")
         );
         assert_eq!(
-            next_repayment_date(date("2026-02-01"), Some(&existing)),
-            date("2026-02-28")
-        );
-        assert_eq!(
-            next_repayment_date(date("2026-04-01"), Some(&existing)),
-            date("2026-04-30")
-        );
-        let existing = detail(5, Some(31), Some("2024-02-01"));
-        assert_eq!(
-            next_repayment_date(date("2024-01-31"), Some(&existing)),
+            installment_billing_close(date("2024-02-29"), Some(&existing)).unwrap(),
             date("2024-02-29")
         );
-        let existing = detail(31, Some(2), Some("2026-11-01"));
+        let existing = detail(5, Some(20), Some("2027-01-01"));
         assert_eq!(
-            next_repayment_date(date("2026-10-30"), Some(&existing)),
-            date("2026-10-31")
+            installment_billing_close(date("2027-01-12"), Some(&existing)).unwrap(),
+            date("2026-12-05")
         );
         assert_eq!(
-            next_repayment_date(date("2026-11-01"), Some(&existing)),
-            date("2026-11-02")
+            installment_billing_close(date("2027-01-20"), Some(&existing)).unwrap(),
+            date("2027-01-20")
         );
-        let existing = detail(5, Some(2), Some("2027-01-01"));
-        assert_eq!(
-            next_repayment_date(date("2026-12-31"), Some(&existing)),
-            date("2027-01-02")
-        );
-        assert_eq!(
-            next_repayment_date(date("2026-12-31"), None),
-            date("2027-01-01")
-        );
+    }
+
+    #[test]
+    fn statement_date_overflow_is_reported_instead_of_panicking() {
+        assert!(statement_dates(NaiveDate::MAX, None).is_err());
+        assert!(installment_billing_close(NaiveDate::MIN, Some(&detail(31, None, None))).is_err());
     }
 
     #[test]

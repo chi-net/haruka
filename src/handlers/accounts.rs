@@ -344,6 +344,37 @@ async fn transaction_balance<C: ConnectionTrait>(
         .all(db)
         .await
         .map_err(err500)?;
+    let transfers = transfer::Entity::find()
+        .filter(
+            Condition::any()
+                .add(transfer::Column::FromAccountId.eq(account_id))
+                .add(transfer::Column::ToAccountId.eq(account_id)),
+        )
+        .all(db)
+        .await
+        .map_err(err500)?;
+    let debt_records = debt_record::Entity::find()
+        .filter(debt_record::Column::AccountId.eq(account_id))
+        .all(db)
+        .await
+        .map_err(err500)?;
+    transaction_balance_from_records(dek, account_id, &bills, &transfers, &debt_records)
+}
+
+pub(crate) fn transaction_balance_from_records(
+    dek: &crypto::Dek,
+    account_id: i64,
+    bills: &[bill::Model],
+    transfers: &[transfer::Model],
+    debts: &[debt_record::Model],
+) -> HandlerResult<i64> {
+    let bills = bills.iter().filter(|bill| bill.account_id == account_id);
+    let transfers = transfers.iter().filter(|transfer| {
+        transfer.from_account_id == account_id || transfer.to_account_id == account_id
+    });
+    let debt_records = debts
+        .iter()
+        .filter(|record| record.account_id == account_id);
     let mut total = 0i64;
     for bill in bills {
         let cents = crypto::decrypt_cents(dek, &bill.amount);
@@ -356,15 +387,6 @@ async fn transaction_balance<C: ConnectionTrait>(
             .checked_add(signed)
             .ok_or_else(|| err500("余额超出范围"))?;
     }
-    let transfers = transfer::Entity::find()
-        .filter(
-            Condition::any()
-                .add(transfer::Column::FromAccountId.eq(account_id))
-                .add(transfer::Column::ToAccountId.eq(account_id)),
-        )
-        .all(db)
-        .await
-        .map_err(err500)?;
     for transfer in transfers {
         let from_cents = crypto::decrypt_cents(dek, &transfer.amount);
         let signed = if transfer.to_account_id == account_id {
@@ -378,11 +400,6 @@ async fn transaction_balance<C: ConnectionTrait>(
             .checked_add(signed)
             .ok_or_else(|| err500("余额超出范围"))?;
     }
-    let debt_records = debt_record::Entity::find()
-        .filter(debt_record::Column::AccountId.eq(account_id))
-        .all(db)
-        .await
-        .map_err(err500)?;
     for record in debt_records {
         let cents = crypto::decrypt_cents(dek, &record.amount);
         let signed = if matches!(record.kind.as_str(), "borrow" | "repayment_received") {
@@ -842,8 +859,16 @@ pub async fn detail(
                 } else {
                     "支出".into()
                 },
-                subject: crypto::decrypt_string(&dek, &item.category),
-                note: crypto::decrypt_string(&dek, &item.note),
+                subject: if item.is_private {
+                    "隐私账单".into()
+                } else {
+                    crypto::decrypt_string(&dek, &item.category)
+                },
+                note: if item.is_private {
+                    String::new()
+                } else {
+                    crypto::decrypt_string(&dek, &item.note)
+                },
                 amount: format!(
                     "{}{}",
                     if incoming { "+" } else { "-" },
@@ -855,10 +880,14 @@ pub async fn detail(
                     "text-red-600"
                 }
                 .into(),
-                detail_url: installment_plans
-                    .get(&item.id)
-                    .map(|plan_id| format!("/installments/{plan_id}"))
-                    .unwrap_or_default(),
+                detail_url: if item.is_private {
+                    String::new()
+                } else {
+                    installment_plans
+                        .get(&item.id)
+                        .map(|plan_id| format!("/installments/{plan_id}"))
+                        .unwrap_or_default()
+                },
             },
         ));
     }

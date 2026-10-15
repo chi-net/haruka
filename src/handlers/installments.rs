@@ -32,6 +32,19 @@ fn bad_request(message: &str) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, message.to_string())
 }
 
+fn bill_title(dek: &crypto::Dek, bill: &bill::Model) -> String {
+    if bill.is_private {
+        return "隐私账单".into();
+    }
+    let category = crypto::decrypt_string(dek, &bill.category);
+    let note = crypto::decrypt_string(dek, &bill.note);
+    if note.is_empty() {
+        category
+    } else {
+        format!("{category} · {note}")
+    }
+}
+
 pub(crate) struct NewPlan {
     pub term_months: i32,
     pub method: String,
@@ -508,13 +521,7 @@ async fn render_list(
                 overdue_count += 1;
             }
         }
-        let category = crypto::decrypt_string(&dek, &bill.category);
-        let note = crypto::decrypt_string(&dek, &bill.note);
-        let title = if note.is_empty() {
-            category
-        } else {
-            format!("{category} · {note}")
-        };
+        let title = bill_title(dek, bill);
         rows.push(InstallmentRow {
             id: plan.id,
             title,
@@ -740,13 +747,7 @@ pub async fn detail(
         .skip(pagination.start)
         .take(pagination.per_page)
         .collect();
-    let category = crypto::decrypt_string(&dek, &bill.category);
-    let note = crypto::decrypt_string(&dek, &bill.note);
-    let title = if note.is_empty() {
-        category
-    } else {
-        format!("{category} · {note}")
-    };
+    let title = bill_title(&dek, &bill);
     Ok(Html(
         InstallmentDetailTemplate {
             title,
@@ -883,13 +884,7 @@ pub async fn set_paid(
             .await
             .map_err(err500)?
             .ok_or_else(|| err500("分期计划关联的账单不存在"))?;
-        let category_name = crypto::decrypt_string(&dek, &original_bill.category);
-        let original_note = crypto::decrypt_string(&dek, &original_bill.note);
-        let title = if original_note.is_empty() {
-            category_name
-        } else {
-            format!("{category_name} · {original_note}")
-        };
+        let title = bill_title(&dek, &original_bill);
         let happened_at = chrono::Utc::now().naive_utc();
         let transaction = state.db.begin().await.map_err(err500)?;
         let principal_transfer = transfer::ActiveModel {
@@ -917,6 +912,7 @@ pub async fn set_paid(
                     category: Set(crypto::encrypt(&dek, "分期费用".as_bytes())),
                     category_id: Set(Some(category_id)),
                     is_food: Set(false),
+                    is_private: Set(original_bill.is_private),
                     note: Set(crypto::encrypt(
                         &dek,
                         format!("分期还款：{title} · 第 {} 期利息与手续费", item.sequence)

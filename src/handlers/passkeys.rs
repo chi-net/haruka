@@ -18,7 +18,8 @@ use zeroize::Zeroizing;
 
 use crate::{
     crypto,
-    entity::{meta, passkey},
+    entity::passkey,
+    password_attempts::{self, Verification},
     AppState, SessionDek,
 };
 
@@ -435,18 +436,15 @@ pub async fn repair_authentication(
     }
 
     let password = Zeroizing::new(form.password);
-    let metadata = meta::Entity::find_by_id(1)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or((StatusCode::NOT_FOUND, "尚未设置密码".into()))?;
-    let password_kek = crypto::derive_kek(password.as_str(), &metadata.salt);
-    let dek = crypto::unwrap_dek(
-        &metadata.dek_nonce,
-        &metadata.wrapped_dek,
-        password_kek.as_slice(),
-    )
-    .ok_or((StatusCode::UNAUTHORIZED, "主密码错误".into()))?;
+    let dek = match password_attempts::verify(&state, password.as_str()).await? {
+        Verification::Verified(dek) => dek,
+        Verification::Incorrect { remaining } => {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                format!("主密码错误，本次服务器启动剩余 {remaining} 次尝试。"),
+            ));
+        }
+    };
     add_compatible_wrapper(&state.db, passkey_id, &dek, passkey_kek.as_slice()).await?;
     state.passkey_repairs.lock().await.remove(&form.flow_id);
 

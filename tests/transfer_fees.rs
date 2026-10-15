@@ -2,12 +2,15 @@ use std::{
     net::TcpListener,
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use reqwest::{header, Client, Response, StatusCode};
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
 use serde_json::Value;
+
+static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 struct TestApp {
     child: Child,
@@ -25,8 +28,9 @@ impl TestApp {
             .unwrap()
             .as_nanos();
         let directory = std::env::temp_dir().join(format!(
-            "haruka-transfer-fees-test-{}-{nonce}",
-            std::process::id()
+            "haruka-transfer-fees-test-{}-{nonce}-{}",
+            std::process::id(),
+            NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&directory).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

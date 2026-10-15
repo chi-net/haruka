@@ -1,0 +1,241 @@
+<script>
+(() => {
+  // A boosted navigation re-evaluates this script; the secret lives only in this closure.
+  if (window.harukaPrivacy) return;
+  let token = null;
+  let epoch = 0;
+  let timer = null;
+  let confirmedWall = 0;
+  let confirmedMono = 0;
+  let idleMs = 60000;
+  let lastActivityRequest = 0;
+  let activityPending = false;
+  let leaving = false;
+  const requests = new Map();
+  const requestGrants = new WeakMap();
+  const formRequests = new Set();
+  const own = value => {
+    try { return new URL(value, location.href).origin === location.origin; }
+    catch (_) { return false; }
+  };
+  const expired = () => !token || Date.now() - confirmedWall >= idleMs || performance.now() - confirmedMono >= idleMs;
+  const sensitive = () => [...document.querySelectorAll('[data-privacy-sensitive]')];
+  const clearSensitive = () => {
+    sensitive().forEach(element => {
+      element.hidden = true;
+      element.querySelectorAll('input,textarea,select').forEach(input => { input.value = ''; });
+      element.replaceChildren();
+    });
+    document.querySelectorAll('[data-privacy-form] input[type="password"]').forEach(input => { input.value = ''; });
+  };
+  const post = (path, secret, options = {}) => fetch(path, {
+    method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+    ...options,
+    headers: { Accept: 'application/json', ...(secret ? { 'X-Haruka-Privacy': secret } : {}), ...(options.headers || {}) }
+  });
+  const revoke = secret => {
+    if (secret) post('/privacy/lock', secret, { keepalive: true }).catch(() => {});
+  };
+  const lock = (navigate = true) => {
+    const secret = token;
+    const hadSensitive = sensitive().length > 0;
+    token = null;
+    epoch++;
+    clearTimeout(timer);
+    timer = null;
+    clearSensitive();
+    // Prevent already-authorized responses from resurrecting a cleared private DOM.
+    requests.forEach((_, xhr) => xhr.abort());
+    requests.clear();
+    formRequests.forEach(controller => controller.abort());
+    formRequests.clear();
+    activityPending = false;
+    revoke(secret);
+    if (navigate && !leaving && (hadSensitive || location.pathname.startsWith('/privacy/bills'))) {
+      leaving = true;
+      location.replace('/privacy');
+    }
+  };
+  const active = () => {
+    if (token && expired()) lock();
+    return !!token;
+  };
+  const headers = () => active() ? { 'X-Haruka-Privacy': token } : {};
+  const arm = () => {
+    clearTimeout(timer);
+    if (!token) return;
+    const remaining = Math.min(idleMs - (Date.now() - confirmedWall), idleMs - (performance.now() - confirmedMono));
+    timer = setTimeout(() => { if (expired()) lock(); else arm(); }, Math.max(1, remaining));
+  };
+  const confirm = (wall, mono) => {
+    // Start at request dispatch, not response receipt: network delays must not extend exposure.
+    confirmedWall = wall;
+    confirmedMono = mono;
+    arm();
+  };
+  const navigatePrivate = () => {
+    if (!active()) return;
+    // Only AJAX can carry this tab's bearer; a full navigation deliberately locks.
+    htmx.ajax('GET', '/privacy/bills', { target: 'body', swap: 'innerHTML', headers: headers() }).then(() => {
+      if (!active()) return;
+      history.replaceState(null, '', '/privacy/bills');
+      window.scrollTo(0, 0);
+    }).catch(() => { if (token) lock(); });
+  };
+  window.harukaPrivacy = Object.freeze({ headers, active, lock: () => lock() });
+
+  document.addEventListener('click', event => {
+    const button = event.target.closest('[data-privacy-lock]');
+    if (!button) return;
+    event.preventDefault();
+    lock();
+  }, true);
+  document.addEventListener('submit', async event => {
+    const form = event.target.closest('[data-privacy-form]');
+    if (!form) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!own(form.action) || !form.reportValidity()) return;
+    const changing = form.dataset.privacyForm === 'change';
+    if (changing && !active()) return;
+    const requestEpoch = epoch;
+    const secret = token;
+    const startedWall = Date.now();
+    const startedMono = performance.now();
+    const controller = new AbortController();
+    formRequests.add(controller);
+    const button = form.querySelector('button[type="submit"]');
+    const message = document.querySelector('[data-privacy-message]');
+    if (message) message.textContent = '';
+    if (button) button.disabled = true;
+    const body = new URLSearchParams(new FormData(form));
+    // Do not retain password field values while a request is in flight.
+    form.querySelectorAll('input[type="password"]').forEach(input => { input.value = ''; });
+    try {
+      const response = await post(form.action, secret, { body, signal: controller.signal });
+      const payload = await response.json();
+      if (requestEpoch !== epoch) {
+        if (payload.token) revoke(payload.token);
+        return;
+      }
+      if (!response.ok || !payload.ok) {
+        if (changing && response.status === 401 && payload.error !== '隐私密码错误') {
+          lock();
+          return;
+        }
+        throw new Error(payload.error || `请求失败（HTTP ${response.status}）`);
+      }
+      if (changing) { lock(); return; }
+      if (typeof payload.token !== 'string' || !payload.token) throw new Error('服务器未返回隐私授权');
+      token = payload.token;
+      epoch++;
+      idleMs = Math.min(60000, Number(payload.idle_seconds || 60) * 1000);
+      confirm(startedWall, startedMono);
+      if (expired()) { lock(); return; }
+      navigatePrivate();
+    } catch (error) {
+      if (requestEpoch === epoch && error.name !== 'AbortError' && message) message.textContent = error.message;
+    } finally {
+      // Remove references to password-bearing form bodies as soon as fetch settles.
+      for (const key of [...body.keys()]) body.delete(key);
+      formRequests.delete(controller);
+      if (button) button.disabled = false;
+    }
+  }, true);
+
+  const activity = async event => {
+    if (!event.isTrusted || document.visibilityState !== 'visible' || !active()) return;
+    const now = performance.now();
+    // Never use a heartbeat or a delayed activity timer: every extension needs this event.
+    if (activityPending || now - lastActivityRequest < 1000) return;
+    lastActivityRequest = now;
+    activityPending = true;
+    const requestEpoch = epoch;
+    const secret = token;
+    const wall = Date.now();
+    const mono = performance.now();
+    try {
+      const response = await post('/privacy/activity', secret);
+      const payload = await response.json();
+      if (requestEpoch !== epoch || secret !== token) return;
+      if (!response.ok || !payload.ok || expired()) { lock(); return; }
+      confirm(wall, mono);
+    } catch (_) {
+      if (requestEpoch === epoch && token) lock();
+    } finally {
+      if (requestEpoch === epoch) activityPending = false;
+    }
+  };
+  ['pointerdown', 'pointermove', 'keydown', 'touchstart', 'wheel'].forEach(name => {
+    document.addEventListener(name, activity, { capture: true, passive: true });
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (token && expired()) lock();
+  });
+  window.addEventListener('focus', () => { if (token && expired()) lock(); });
+  window.addEventListener('pagehide', () => { leaving = true; lock(false); });
+  window.addEventListener('pageshow', event => {
+    if (event.persisted) {
+      leaving = false;
+      lock(false);
+      location.replace('/privacy');
+    } else if (token && expired()) lock();
+  });
+  // A browser history navigation must not restore a private snapshot without authorization.
+  window.addEventListener('popstate', () => { if (!active() && sensitive().length) lock(); });
+
+  document.addEventListener('htmx:configRequest', event => {
+    const path = event.detail.path || event.detail.elt?.getAttribute('href') || location.href;
+    delete event.detail.headers['X-Haruka-Privacy'];
+    delete event.detail.headers['x-haruka-privacy'];
+    if (own(path)) Object.assign(event.detail.headers, headers());
+  });
+  document.addEventListener('htmx:beforeRequest', event => {
+    const xhr = event.detail.xhr;
+    const config = event.detail.requestConfig;
+    const path = config?.path || location.href;
+    if (!own(path)) return;
+    const secret = config?.headers?.['X-Haruka-Privacy'];
+    if (secret && (!active() || secret !== token)) { event.preventDefault(); return; }
+    if (secret) {
+      const grant = { epoch, token: secret };
+      requests.set(xhr, grant);
+      requestGrants.set(xhr, grant);
+    }
+  });
+  document.addEventListener('htmx:beforeSwap', event => {
+    const xhr = event.detail.xhr;
+    const request = requestGrants.get(xhr);
+    if (request && (request.epoch !== epoch || request.token !== token || !active())) {
+      event.detail.shouldSwap = false;
+      event.preventDefault();
+      return;
+    }
+    if (request && (xhr.status === 401 || xhr.status === 403)) {
+      event.detail.shouldSwap = false;
+      lock();
+      return;
+    }
+    const responseHasSecrets = !active() && xhr.responseText &&
+      new DOMParser().parseFromString(xhr.responseText, 'text/html').querySelector('[data-privacy-sensitive]');
+    if (responseHasSecrets) {
+      event.detail.shouldSwap = false;
+      event.preventDefault();
+      lock();
+    }
+  });
+  document.addEventListener('htmx:afterRequest', event => { requests.delete(event.detail.xhr); });
+  document.addEventListener('htmx:afterSwap', () => {
+    if (!active() && sensitive().length) lock();
+  });
+  document.addEventListener('htmx:historyRestore', () => {
+    if (!active() && sensitive().length) lock();
+  });
+  if (window.htmx) {
+    htmx.config.historyCacheSize = 0;
+    htmx.config.historyRestoreAsHxRequest = false;
+  }
+  // No bearer is recoverable after a full reload, including a restored private page.
+  if (sensitive().length) lock();
+})();
+</script>

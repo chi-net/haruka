@@ -268,6 +268,7 @@ mod tests {
             category: "not needed for count".into(),
             category_id: id,
             is_food: true,
+            is_private: false,
             note: String::new(),
             happened_at: time(happened_at),
             created_at: time("2026-01-01 00:00:00").and_utc(),

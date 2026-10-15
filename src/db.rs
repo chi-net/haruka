@@ -4,7 +4,8 @@ use crate::entity::{
     account, account_detail, balance_adjustment, bill, bill_share, budget, category, debt_person,
     debt_record, debt_request, exchange_rate, financial_plan, installment_item, installment_plan,
     investment_execution, investment_sms_event, market_closed_day, market_index_quote, meta,
-    passkey, preference, recovery, recurring_investment, sms_template, subscription, transfer,
+    passkey, preference, privacy_credential, recovery, recurring_investment, sms_template,
+    subscription, transfer,
 };
 
 pub async fn init() -> DatabaseConnection {
@@ -18,6 +19,17 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_meta.if_not_exists()))
         .await
         .expect("建表失败");
+    ensure_column(
+        &db,
+        "meta",
+        "failed_password_rounds",
+        "INTEGER NOT NULL DEFAULT 0",
+    )
+    .await;
+    let mut create_privacy = schema.create_table_from_entity(privacy_credential::Entity);
+    db.execute(builder.build(create_privacy.if_not_exists()))
+        .await
+        .expect("创建隐私密码表失败");
     let mut create_recovery = schema.create_table_from_entity(recovery::Entity);
     db.execute(builder.build(create_recovery.if_not_exists()))
         .await
@@ -134,6 +146,7 @@ pub async fn init() -> DatabaseConnection {
         .expect("建表失败");
     ensure_column(&db, "bills", "is_food", "BOOLEAN NOT NULL DEFAULT 0").await;
     ensure_column(&db, "bills", "category_id", "INTEGER DEFAULT NULL").await;
+    ensure_column(&db, "bills", "is_private", "BOOLEAN NOT NULL DEFAULT 0").await;
     let mut create_bill_shares = schema.create_table_from_entity(bill_share::Entity);
     db.execute(builder.build(create_bill_shares.if_not_exists()))
         .await

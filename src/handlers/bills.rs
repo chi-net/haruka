@@ -20,8 +20,8 @@ use std::{
 use crate::{
     crypto, currency,
     entity::{
-        account, account_detail, balance_adjustment, bill, category, debt_person, debt_record,
-        installment_item, installment_plan, investment_execution, transfer,
+        account, account_detail, balance_adjustment, bill, bill_share, category, debt_person,
+        debt_record, installment_item, installment_plan, investment_execution, transfer,
     },
     AppState, SessionDek,
 };
@@ -78,6 +78,7 @@ struct PersonOption {
 #[template(path = "bills.html")]
 struct BillsTemplate {
     page_heading: String,
+    private_mode: bool,
     advanced_search: bool,
     search_action: String,
     export_action: String,
@@ -131,6 +132,7 @@ struct BillFormTemplate {
     category: String,
     note: String,
     happened_at: String,
+    is_private: bool,
 }
 
 #[derive(Deserialize)]
@@ -141,6 +143,8 @@ pub struct BillFormData {
     category: String,
     note: String,
     happened_at: String,
+    #[serde(default)]
+    is_private: bool,
     #[serde(default)]
     use_installment: bool,
     #[serde(default)]
@@ -165,6 +169,8 @@ pub struct BatchBillEntryData {
     category: String,
     note: String,
     happened_at: String,
+    #[serde(default)]
+    is_private: bool,
 }
 
 #[derive(Deserialize)]
@@ -379,6 +385,7 @@ struct ParsedBill {
     category: String,
     note: String,
     happened_at: NaiveDateTime,
+    is_private: bool,
     redirect_to: String,
     installment: Option<super::installments::NewPlan>,
 }
@@ -424,6 +431,7 @@ fn parse_form(form: BillFormData) -> HandlerResult<ParsedBill> {
         category: form.category.trim().to_string(),
         note: form.note.trim().to_string(),
         happened_at,
+        is_private: form.is_private,
         redirect_to: ledger_redirect(form.redirect_to.as_deref()).into(),
         installment: if form.use_installment {
             Some(super::installments::parse_input(
@@ -547,6 +555,7 @@ pub(crate) async fn ledger_rows(
     state: &AppState,
     dek: &crypto::Dek,
     time_zone: super::ClientTimeZone,
+    private_mode: bool,
 ) -> HandlerResult<Vec<LedgerRow>> {
     let accounts = account::Entity::find()
         .all(&state.db)
@@ -598,6 +607,9 @@ pub(crate) async fn ledger_rows(
 
     let mut rows = Vec::new();
     for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
+        if bill.is_private != private_mode {
+            continue;
+        }
         let incoming = bill.kind == "income";
         let amount = crypto::decrypt_cents(dek, &bill.amount);
         let bill_currency = account_currencies
@@ -640,7 +652,11 @@ pub(crate) async fn ledger_rows(
             } else {
                 format!("/bills/{}/edit", bill.id)
             },
-            share_url: format!("/bills/{}/share", bill.id),
+            share_url: if private_mode {
+                String::new()
+            } else {
+                format!("/bills/{}/share", bill.id)
+            },
             detail_url: installment_plan_ids
                 .get(&bill.id)
                 .map(|plan_id| format!("/installments/{plan_id}"))
@@ -656,6 +672,10 @@ pub(crate) async fn ledger_rows(
             amount_cents: converted,
             is_expense: !incoming,
         });
+    }
+    if private_mode {
+        rows.sort_by(|left, right| right.sort_key.cmp(&left.sort_key));
+        return Ok(rows);
     }
 
     for transfer in transfers {
@@ -849,7 +869,35 @@ pub async fn list(
     Extension(time_zone): Extension<super::ClientTimeZone>,
     Query(query): Query<BillsQuery>,
 ) -> HandlerResult<Html<String>> {
-    render_list(&state, &dek, query, false, time_zone).await
+    render_list(&state, &dek, query, false, time_zone, false).await
+}
+
+pub async fn private_list(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
+    Extension(crate::privacy::PrivacyAccess(unlocked)): Extension<crate::privacy::PrivacyAccess>,
+    Query(query): Query<BillsQuery>,
+    headers: HeaderMap,
+) -> HandlerResult<Response> {
+    if !unlocked {
+        if !accepts_json(&headers)
+            && headers.get("hx-request").is_none()
+            && headers
+                .get(header::ACCEPT)
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.contains("text/html"))
+        {
+            return Ok(Redirect::to("/privacy").into_response());
+        }
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "隐私模式已锁定，请进入隐私模式解锁".into(),
+        ));
+    }
+    render_list(&state, &dek, query, true, time_zone, true)
+        .await
+        .map(IntoResponse::into_response)
 }
 
 pub async fn advanced_search(
@@ -858,7 +906,7 @@ pub async fn advanced_search(
     Extension(time_zone): Extension<super::ClientTimeZone>,
     Query(query): Query<BillsQuery>,
 ) -> HandlerResult<Html<String>> {
-    render_list(&state, &dek, query, true, time_zone).await
+    render_list(&state, &dek, query, true, time_zone, false).await
 }
 
 fn normalize_query(query: &mut BillsQuery, advanced_search: bool) {
@@ -908,7 +956,7 @@ async fn export_csv_response(
     normalize_query(&mut query, advanced_search);
     let time_zone = time_zone.from_query(&query.time_zone)?;
     let filter = LedgerFilter::from_query(&query, time_zone)?;
-    let rows = ledger_rows(state, dek, time_zone)
+    let rows = ledger_rows(state, dek, time_zone, false)
         .await?
         .into_iter()
         .filter(|row| filter.matches(row))
@@ -987,6 +1035,7 @@ async fn render_list(
     mut query: BillsQuery,
     advanced_search: bool,
     time_zone: super::ClientTimeZone,
+    private_mode: bool,
 ) -> HandlerResult<Html<String>> {
     normalize_query(&mut query, advanced_search);
     let time_zone = time_zone.from_query(&query.time_zone)?;
@@ -994,7 +1043,7 @@ async fn render_list(
     let filter = LedgerFilter::from_query(&query, time_zone)?;
     let has_filters = filter.is_active();
     let default_currency = currency::default_currency(state).await.map_err(err500)?;
-    let all_records = ledger_rows(state, dek, time_zone)
+    let all_records = ledger_rows(state, dek, time_zone, private_mode)
         .await?
         .into_iter()
         .filter(|row| filter.matches(row))
@@ -1029,14 +1078,19 @@ async fn render_list(
         Vec::new()
     };
     let html = BillsTemplate {
+        private_mode,
         time_zone: query.time_zone.clone(),
-        page_heading: if advanced_search {
+        page_heading: if private_mode {
+            "隐私账单".into()
+        } else if advanced_search {
             "高级搜索".into()
         } else {
             "账单".into()
         },
         advanced_search,
-        search_action: if advanced_search {
+        search_action: if private_mode {
+            "/privacy/bills".into()
+        } else if advanced_search {
             "/bills/search".into()
         } else {
             "/bills".into()
@@ -1068,7 +1122,9 @@ async fn render_list(
         pagination: super::pagination_view(
             &pagination,
             total_records,
-            if advanced_search {
+            if private_mode {
+                "/privacy/bills"
+            } else if advanced_search {
                 "/bills/search"
             } else {
                 "/bills"
@@ -1155,6 +1211,7 @@ pub async fn create(
         category: Set(crypto::encrypt(&dek, parsed.category.as_bytes())),
         category_id: Set(Some(category.id)),
         is_food: Set(category.is_food),
+        is_private: Set(parsed.is_private),
         note: Set(crypto::encrypt(&dek, parsed.note.as_bytes())),
         happened_at: Set(parsed.happened_at),
         created_at: Set(chrono::Utc::now()),
@@ -1237,6 +1294,7 @@ pub async fn create_batch(
             category: entry.category,
             note: entry.note,
             happened_at: entry.happened_at,
+            is_private: entry.is_private,
             use_installment: false,
             installment_term: String::new(),
             installment_method: String::new(),
@@ -1278,6 +1336,7 @@ pub async fn create_batch(
             category: Set(crypto::encrypt(&dek, parsed.category.as_bytes())),
             category_id: Set(Some(category_id)),
             is_food: Set(is_food),
+            is_private: Set(parsed.is_private),
             note: Set(crypto::encrypt(&dek, parsed.note.as_bytes())),
             happened_at: Set(parsed.happened_at),
             created_at: Set(chrono::Utc::now()),
@@ -1311,9 +1370,17 @@ async fn ensure_not_transfer_fee(state: &AppState, bill_id: i64) -> HandlerResul
     Ok(())
 }
 
+fn require_bill_access(bill: &bill::Model, unlocked: bool) -> HandlerResult<()> {
+    if bill.is_private && !unlocked {
+        return Err((StatusCode::NOT_FOUND, "账单不存在".into()));
+    }
+    Ok(())
+}
+
 pub async fn edit_form(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(crate::privacy::PrivacyAccess(unlocked)): Extension<crate::privacy::PrivacyAccess>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
     ensure_not_transfer_fee(&state, id).await?;
@@ -1355,6 +1422,7 @@ pub async fn edit_form(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
+    require_bill_access(&b, unlocked)?;
     let accounts = account_options(&state, &dek).await?;
     let categories = category_options(&state, &dek).await?;
     let html = BillFormTemplate {
@@ -1368,6 +1436,7 @@ pub async fn edit_form(
         category: crypto::decrypt_string(&dek, &b.category),
         note: crypto::decrypt_string(&dek, &b.note),
         happened_at: b.happened_at.format(TIME_FMT).to_string(),
+        is_private: b.is_private,
     }
     .render()
     .map_err(err500)?;
@@ -1377,6 +1446,7 @@ pub async fn edit_form(
 pub async fn update(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(crate::privacy::PrivacyAccess(unlocked)): Extension<crate::privacy::PrivacyAccess>,
     Path(id): Path<i64>,
     Form(form): Form<BillFormData>,
 ) -> HandlerResult<Redirect> {
@@ -1422,6 +1492,7 @@ pub async fn update(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
+    require_bill_access(&b, unlocked)?;
     let old_amount = crypto::decrypt_cents(&dek, &b.amount);
     let old_signed = signed_amount(&b.kind, old_amount)?;
     let new_signed = signed_amount(&parsed.kind, parsed.amount)?;
@@ -1449,15 +1520,30 @@ pub async fn update(
     active.category = Set(crypto::encrypt(&dek, parsed.category.as_bytes()));
     active.category_id = Set(Some(category.id));
     active.is_food = Set(category.is_food);
+    active.is_private = Set(parsed.is_private);
     active.note = Set(crypto::encrypt(&dek, parsed.note.as_bytes()));
     active.happened_at = Set(parsed.happened_at);
-    active.update(&state.db).await.map_err(err500)?;
-    Ok(Redirect::to("/bills"))
+    let transaction = state.db.begin().await.map_err(err500)?;
+    active.update(&transaction).await.map_err(err500)?;
+    if parsed.is_private {
+        bill_share::Entity::delete_many()
+            .filter(bill_share::Column::SourceBillId.eq(id))
+            .exec(&transaction)
+            .await
+            .map_err(err500)?;
+    }
+    transaction.commit().await.map_err(err500)?;
+    Ok(Redirect::to(if parsed.is_private {
+        "/privacy/bills"
+    } else {
+        "/bills"
+    }))
 }
 
 pub async fn delete(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(crate::privacy::PrivacyAccess(unlocked)): Extension<crate::privacy::PrivacyAccess>,
     Path(id): Path<i64>,
     Form(form): Form<DeleteFormData>,
 ) -> HandlerResult<Redirect> {
@@ -1490,6 +1576,7 @@ pub async fn delete(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
+    require_bill_access(&b, unlocked)?;
     if let Some(plan) = installment_plan::Entity::find()
         .filter(installment_plan::Column::BillId.eq(id))
         .one(&state.db)
@@ -1523,5 +1610,9 @@ pub async fn delete(
         .exec(&state.db)
         .await
         .map_err(err500)?;
-    Ok(Redirect::to(ledger_redirect(form.redirect_to.as_deref())))
+    Ok(Redirect::to(if b.is_private {
+        "/privacy/bills"
+    } else {
+        ledger_redirect(form.redirect_to.as_deref())
+    }))
 }

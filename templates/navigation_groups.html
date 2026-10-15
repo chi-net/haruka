@@ -1,13 +1,16 @@
 <div data-nav-section>
   <a data-nav-link data-nav-primary href="/dashboard" class="inline-flex h-10 items-center rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">仪表板</a>
 </div>
+<div data-nav-section>
+  <a data-nav-link data-nav-primary href="/bills/new" class="inline-flex h-10 items-center rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">记一笔</a>
+</div>
 <div data-nav-section class="relative lg:w-20">
   <a data-nav-link data-nav-primary href="/bills" class="absolute left-0 top-0 z-10 inline-flex h-10 items-center rounded-md px-3 text-sm text-gray-600 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">账单</a>
   <details data-nav-group name="haruka-navigation">
     <summary id="{{ nav_prefix }}-bills-toggle" aria-label="展开账单相关功能" aria-controls="{{ nav_prefix }}-bills-panel" class="flex h-10 cursor-pointer list-none items-center justify-end rounded-md px-3 text-sm text-gray-600 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"><span aria-hidden="true">▾</span></summary>
     <div id="{{ nav_prefix }}-bills-panel" class="mt-1 space-y-1 rounded-lg border border-gray-200 bg-white p-1 lg:absolute lg:left-0 lg:top-full lg:z-40 lg:mt-2 lg:w-56 lg:shadow-lg">
-      <a data-nav-link href="/bills/new" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">记一笔</a>
       <a data-nav-link href="/bills/search" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">高级搜索</a>
+      <a data-nav-link href="/privacy" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">隐私模式</a>
       <a data-nav-link href="/categories" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">分类</a>
       <a data-nav-link href="/shares" class="block rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">分享管理</a>
     </div>

@@ -71,30 +71,70 @@
 {% endif %}
 
 {% if !credit_accounts.is_empty() %}
-<section class="mb-5 rounded-xl border-2 border-violet-400 bg-violet-50 p-5 shadow-md">
-  <div class="flex items-start justify-between gap-3 mb-4">
-    <div><p class="text-xs font-bold tracking-wider text-violet-700">信用账户额度概览</p><h2 class="text-xl font-bold text-violet-950 mt-1">信用卡与信贷服务</h2><p class="text-sm text-violet-700 mt-1">应还估算不含分期剩余本金，分期期次单独提醒；实际金额请以金融机构账单为准。</p></div>
-    <a href="/accounts" class="shrink-0 rounded border border-violet-300 bg-white px-3 py-2 text-sm font-medium text-violet-800 hover:bg-violet-100">管理还款日</a>
+<section class="mb-5 rounded-xl border-2 border-violet-400 bg-violet-50 p-4 sm:p-5 shadow-md">
+  <div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+    <div class="min-w-0"><p class="text-xs font-bold tracking-wider text-violet-700">信用账户额度概览</p><h2 class="text-xl font-bold text-violet-950 mt-1">信用卡与信贷服务</h2><p class="text-sm text-violet-700 mt-1">按已记录交易自动估算，不是银行账单；实际出账、还款金额与日期请以金融机构账单为准。</p></div>
+    <a href="/accounts" class="rounded border border-violet-300 bg-white px-3 py-2 text-sm font-medium text-violet-800 hover:bg-violet-100">管理账单与还款日</a>
   </div>
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
     {% for service in credit_accounts %}
-    <article data-credit-summary class="rounded-lg border-2 {% if service.danger %}border-red-400 bg-red-50{% else %}border-violet-200 bg-white{% endif %} p-4">
-      <div class="flex items-start justify-between gap-3">
-        <div><p class="text-xs font-medium text-violet-700">{{ service.kind }}</p><p class="text-base font-semibold mt-0.5">{{ service.name }}</p><p class="text-xs text-gray-500 mt-1">账户余额 {{ service.balance }}</p></div>
+    <article data-credit-summary class="min-w-0 rounded-lg border-2 {% if service.danger %}border-red-400 bg-red-50{% else %}border-violet-200 bg-white{% endif %} p-4">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0 break-words"><p class="text-xs font-medium text-violet-700">{{ service.kind }} · 自动估算</p><p class="text-base font-semibold mt-0.5">{{ service.name }}</p><p class="text-xs text-gray-500 mt-1 break-all">账户余额 {{ service.balance }}</p></div>
         {% if service.danger %}<span class="rounded-full bg-red-600 px-2 py-1 text-xs font-bold text-white">额度紧张</span>{% endif %}
       </div>
-      {% if service.has_repayment %}
-      <div data-credit-repayment class="mt-4 rounded-lg border border-violet-200 bg-violet-100 p-3">
-        <p class="text-xs font-medium text-violet-800">预计还款</p>
-        <p class="mt-1 text-lg font-bold text-violet-950"><span class="font-mono">{{ service.repayment_date }}</span> 应还 <span class="font-mono text-red-700">{{ service.repayment_amount }}</span></p>
-        {% if service.follows_billing_day %}<p class="mt-1 text-xs text-violet-700">未单独设置还款日，当前跟随有效账单日。</p>{% endif %}
+      <div class="mt-4 space-y-3">
+        <section data-credit-unbilled class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+          <h3 class="text-sm font-semibold text-gray-800">未出账普通消费</h3>
+          <p class="mt-1 font-mono font-semibold break-all">{{ service.unbilled }}</p>
+          <p class="mt-1 text-xs text-gray-500">尚未到对应账单日，不计入下方已出账应还。</p>
+        </section>
+        <section data-credit-installments class="rounded-lg border border-violet-200 bg-violet-50 p-3">
+          <div class="flex flex-wrap items-start justify-between gap-2"><h3 class="text-sm font-semibold text-violet-900">分期</h3><a href="/installments" class="text-xs text-blue-600 hover:underline">查看分期与还款</a></div>
+          <p class="mt-2 text-xs text-violet-700">剩余本金</p>
+          <p class="mt-1 font-mono font-semibold break-all">{{ service.installment_principal }}</p>
+          {% match service.next_installment %}
+          {% when Some with (period) %}
+          <div class="mt-2 rounded border {% if period.overdue %}border-red-300 bg-red-50{% else %}border-violet-200 bg-white{% endif %} p-2">
+            <p class="text-xs font-medium {% if period.overdue %}text-red-700{% else %}text-violet-800{% endif %}">下一待还期（最早未还期）{% if period.overdue %} · 已逾期{% endif %}</p>
+            <p class="mt-1 text-sm">{{ period.due_date }}</p>
+            <p class="mt-1 font-mono font-semibold break-all">{{ period.total }}</p>
+            <p class="mt-1 text-xs text-gray-500">同日未还期次合计，含本金、利息与手续费；已支付期次不再显示。</p>
+          </div>
+          {% when None %}
+          <p class="mt-2 text-xs text-gray-500">暂无未还分期期次。</p>
+          {% endmatch %}
+          <p class="mt-2 text-xs text-violet-700">剩余本金包含已出账分期本金，不可再加到应还合计；未来期次的利息与手续费尚未计入账户负债。</p>
+        </section>
+        <section data-credit-repayment class="rounded-lg border border-violet-200 bg-violet-100 p-3">
+          <h3 class="text-sm font-semibold text-violet-900">已出账应还（估算）</h3>
+          <div class="flex flex-wrap items-baseline justify-between gap-2 mt-2"><span class="text-xs text-violet-800">应还合计</span><span class="font-mono font-bold text-red-700 break-all">{{ service.due_total }}</span></div>
+          {% if service.due.is_empty() %}
+          <p class="mt-2 text-sm text-violet-800">暂无已出账应还。</p>
+          {% else %}
+          <div class="mt-3 space-y-2">
+            {% for due in service.due %}
+            <div data-credit-due class="rounded border {% if due.overdue %}border-red-300 bg-red-50{% else %}border-violet-200 bg-white{% endif %} p-3">
+              <p class="text-sm font-semibold {% if due.overdue %}text-red-800{% else %}text-violet-900{% endif %}">{{ due.due_date }} 前还款{% if due.overdue %} · 已逾期{% endif %}</p>
+              <dl class="mt-2 space-y-1 text-xs">
+                <div class="flex flex-wrap justify-between gap-1"><dt class="text-gray-600">普通消费</dt><dd class="font-mono break-all">{{ due.ordinary }}</dd></div>
+                <div class="flex flex-wrap justify-between gap-1"><dt class="text-gray-600">分期期次（含利息与手续费）</dt><dd class="font-mono break-all">{{ due.installment }}</dd></div>
+                <div class="flex flex-wrap justify-between gap-1 border-t border-gray-200 pt-1"><dt class="font-semibold">该期应还</dt><dd class="font-mono font-semibold text-red-700 break-all">{{ due.total }}</dd></div>
+              </dl>
+            </div>
+            {% endfor %}
+          </div>
+          <p class="mt-2 text-xs text-violet-700">按原还款日分组；逾期欠款保留原日期，不会顺延到下月。</p>
+          {% endif %}
+          {% if service.follows_billing_day %}<p class="mt-2 text-xs text-violet-700">未单独设置还款日，跟随对应月份的有效账单日；缺少账单日配置时按每月 1 日估算。</p>{% endif %}
+        </section>
       </div>
-      {% endif %}
-      {% if service.has_installments %}<p class="mt-3 text-xs text-violet-700">分期剩余本金 {{ service.installment_principal }}，另按分期期次还款，不计入信用账户应还估算。</p>{% endif %}
-      <div class="grid grid-cols-3 gap-3 mt-4 text-center">
-        <div><div class="text-xs text-gray-500">已用额度</div><div class="font-mono font-semibold text-red-700 mt-1">{{ service.used }}</div></div>
-        <div><div class="text-xs text-gray-500">剩余额度</div><div class="font-mono font-semibold text-green-700 mt-1">{{ service.available }}</div></div>
-        <div><div class="text-xs text-gray-500">总授信额</div><div class="font-mono mt-1">{{ service.limit }}</div></div>
+      {% if service.has_adjustments %}<p class="mt-3 text-xs text-amber-800">存在初始余额或余额校准，无法准确还原银行账单归属；以上金额与日期仅供估算，请核对实际账单。</p>{% endif %}
+      {% if service.has_future_entries %}<p class="mt-2 text-xs text-amber-800">未来日期记录未计入本次还款估算，但仍按原规则计入账户余额与额度，因此两者可能不同。</p>{% endif %}
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 sm:text-center">
+        <div class="min-w-0"><div class="text-xs text-gray-500">已用额度</div><div class="font-mono font-semibold text-red-700 mt-1 break-all">{{ service.used }}</div></div>
+        <div class="min-w-0"><div class="text-xs text-gray-500">剩余额度</div><div class="font-mono font-semibold text-green-700 mt-1 break-all">{{ service.available }}</div></div>
+        <div class="min-w-0"><div class="text-xs text-gray-500">总授信额</div><div class="font-mono mt-1 break-all">{{ service.limit }}</div></div>
       </div>
       <div class="mt-4 h-3 overflow-hidden rounded-full bg-violet-100"><div class="h-full {% if service.danger %}bg-red-500{% else %}bg-violet-500{% endif %}" style="width: {{ service.usage_percent }}%"></div></div>
       <p class="text-right text-xs text-gray-500 mt-1">额度使用 {{ service.usage_percent }}%</p>
