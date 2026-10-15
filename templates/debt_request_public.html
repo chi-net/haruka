@@ -1,5 +1,5 @@
 {% extends "public_share_base.html" %}
-{% block title %}{{ request.kind_label }} - haruka{% endblock %}
+{% block title %}{{ request.kind_label }} - Haruka{% endblock %}
 {% block content %}
 <section class="bg-white rounded-lg border border-gray-200 p-5">
   <div class="text-center"><p class="text-sm text-gray-500">{{ request.kind_label }}</p><h1 class="text-3xl font-bold font-mono mt-2">{{ requested_amount }}</h1>{% if !request.note.is_empty() %}<p class="text-sm text-gray-600 mt-3 whitespace-pre-wrap">{{ request.note }}</p>{% endif %}</div>

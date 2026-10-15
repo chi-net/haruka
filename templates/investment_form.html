@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ heading }} - haruka{% endblock %}
+{% block title %}{{ heading }} - Haruka{% endblock %}
 {% block content %}
 <div class="flex items-center justify-between gap-3 mb-4">
   <div><h1 class="text-xl font-bold">{{ heading }}</h1></div>
@@ -9,7 +9,7 @@
 {% if fund_accounts.is_empty() %}
 <section class="max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
   <p class="font-medium">还没有可用的基金账户</p>
-  <p class="mt-1">请先新增一个“投资账户”及其下的具体基金，再回来创建定投计划；分组本身不接收资金。</p>
+  <p class="mt-1">请先新增一个“投资账户”及其下的具体基金，再回来创建定投计划！</p>
   <a href="/accounts/new" class="inline-block mt-3 text-blue-700 hover:underline">新增投资账户</a>
 </section>
 {% else if source_accounts.is_empty() %}

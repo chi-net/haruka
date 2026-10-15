@@ -1,5 +1,5 @@
 <nav class="flex flex-wrap items-center justify-between gap-3 mt-4 text-sm" aria-label="分页">
-  <span class="text-gray-500">共 {{ pagination.total_records }} {{ pagination.unit }} · 第 {{ pagination.page }} / {{ pagination.total_pages }} 页</span>
+  <span class="text-gray-500">共 {{ pagination.total_records }} {{ pagination.unit }} , 第 {{ pagination.page }} / {{ pagination.total_pages }} 页</span>
   <div class="flex flex-wrap items-center justify-end gap-1.5">
     {% if pagination.page > 1 %}
     <form method="get" action="{{ pagination.action }}">

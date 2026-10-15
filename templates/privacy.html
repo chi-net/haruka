@@ -5,8 +5,6 @@
   <header class="space-y-2">
     <h1 class="text-2xl font-bold">隐私账单</h1>
     <p class="text-sm text-gray-500">隐私密码独立于主密码。隐私账单仅在此入口解锁后可见；普通账单、搜索及仪表板始终隐藏其详情。</p>
-    <p class="text-sm text-gray-500">仅当前标签页有效，60 秒无实际操作自动锁定，刷新页面也会锁定。隐私密码不是额外的数据加密密钥，主密码仍保护整库加密。</p>
-    <p class="text-sm text-gray-500">操作同步最多节流 1 秒；为避免网络延迟延长授权，客户端计时采用保守起点，可能略早锁定。</p>
   </header>
   <p data-privacy-message role="status" aria-live="polite" class="text-sm text-red-600"></p>
   {% if unlocked %}
@@ -29,19 +27,18 @@
   <form action="/privacy/unlock" method="post" data-privacy-form="unlock" hx-boost="false" autocomplete="off" class="space-y-4 rounded-lg border border-gray-200 bg-white p-5">
     <h2 class="text-lg font-semibold">解锁隐私模式</h2>
     <label class="block space-y-1"><span class="text-sm">隐私密码</span><input type="password" name="password" required autocomplete="current-password" class="w-full rounded border border-gray-300 px-3 py-2"></label>
-    <p class="text-sm text-gray-500">连续验证错误 10 次后，隐私密码验证冷却 60 秒，不影响主密码。</p>
-    <button type="submit" class="rounded bg-blue-600 px-4 py-2 text-white">解锁并查看隐私账单</button>
+    <button type="submit" class="rounded bg-blue-600 px-4 py-2 text-white">解锁</button>
   </form>
   {% else %}
   <form action="/privacy/setup" method="post" data-privacy-form="setup" hx-boost="false" autocomplete="off" class="space-y-4 rounded-lg border border-gray-200 bg-white p-5">
     <h2 class="text-lg font-semibold">设置独立隐私密码</h2>
-    <p class="text-sm text-gray-500">请妥善记住此密码。主密码或恢复助记词不能替代隐私密码解锁。</p>
+    <p class="text-sm text-gray-500">请妥善记住此密码。密码或恢复助记词不能替代隐私密码解锁。</p>
     <label class="block space-y-1"><span class="text-sm">隐私密码（至少 6 位）</span><input type="password" name="password" required minlength="6" autocomplete="new-password" class="w-full rounded border border-gray-300 px-3 py-2"></label>
     <label class="block space-y-1"><span class="text-sm">确认隐私密码</span><input type="password" name="confirm" required minlength="6" autocomplete="new-password" class="w-full rounded border border-gray-300 px-3 py-2"></label>
     <button type="submit" class="rounded bg-blue-600 px-4 py-2 text-white">设置并查看隐私账单</button>
   </form>
   {% endif %}
   {% endif %}
-  <noscript><p class="text-red-600">隐私模式需要启用 JavaScript，以在当前标签页内保存临时授权并在超时后清除内容。</p></noscript>
+  <noscript><p class="text-red-600">隐私模式需要启用 JavaScript。</p></noscript>
 </section>
 {% endblock %}

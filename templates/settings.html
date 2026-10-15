@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}设置 - haruka{% endblock %}
+{% block title %}设置 - Haruka{% endblock %}
 {% block content %}
 <h1 class="text-xl font-bold mb-4">设置</h1>
 
@@ -26,7 +26,7 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium">本人姓名</h2>
-  <p class="text-sm text-gray-500 mt-1 mb-3">仅用于判断招商银行短信中的收款人或信用卡还款人是否是你本人，以推测可能的转账或支出。</p>
+  <p class="text-sm text-gray-500 mt-1 mb-3">仅用于判断招商银行短信中的收款人或信用卡还款人是否是你本人，以推测可能的转账或支出。你的姓名将会受到加密保护。</p>
   <form method="post" action="/settings/owner-name" class="flex flex-wrap gap-2">
     <input name="owner_name" value="{{ owner_name }}" maxlength="80" placeholder="例如：张三" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
     <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">保存本人姓名</button>
@@ -34,20 +34,13 @@
 </section>
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
-  <div class="flex flex-wrap items-center justify-between gap-3">
-    <div><h2 class="font-medium">收支分类</h2><p class="text-sm text-gray-500 mt-1">分别管理收入与支出分类，设置食品标记及支出次数软上限。</p></div>
-    <a href="/categories" class="text-sm text-blue-600 hover:underline">管理收支分类 →</a>
-  </div>
-</section>
-
-<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
-  <h2 class="font-medium">Passkey 登录</h2>
-  <p class="text-sm text-gray-500 mt-1 mb-3">Passkey 使用 Touch ID、Face ID、Windows Hello 或安全密钥验证身份，并要求 WebAuthn PRF 解锁加密账本。iCloud 可将 Passkey 同步到其他 Apple 设备；同步设备请使用注册时相同的域名和凭据。如果合法认证后本次 PRF 与原包裹不兼容，可用主密码做一次设备绑定，保留原设备包裹；没有 PRF 时不能使用 Passkey 解锁。</p>
+  <h2 class="font-medium">先进的通行密钥登录</h2>
+  <p class="text-sm text-gray-500 mt-1 mb-3"><a href="https://developer.mozilla.org/en-US/docs/Web/Security/Authentication/Passkeys" target="_blank">Passkey</a>（又称通行密钥） 使用 Touch ID、Face ID、Windows Hello 或安全密钥验证身份，实现快捷登录。（可能不支持部分浏览器，浏览器需要支持 WebAuthn PRF 技术）</p>
   <form id="passkey-enroll-form" hx-boost="false" class="flex flex-wrap gap-2 mb-4">
     <input id="passkey-name" required maxlength="80" autocomplete="off" placeholder="例如：MacBook Touch ID" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
     <select id="passkey-authenticator" class="border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">
-      <option value="platform">添加渠道1</option>
-      <option value="external">添加渠道2（备用）</option>
+      <option value="platform">主渠道</option>
+      <option value="external">备用渠道</option>
     </select>
     <button id="passkey-enroll-button" type="submit" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700 disabled:opacity-50">添加 Passkey</button>
   </form>
@@ -59,13 +52,13 @@
       <form method="post" action="/settings/passkeys/{{ key.id }}/delete" hx-confirm="确认删除这个 Passkey？删除后无法再用它解锁。"><button class="text-red-600">删除</button></form>
     </li>
     {% endfor %}
-    {% if passkeys.is_empty() %}<li class="px-3 py-2 text-sm text-gray-400">尚未添加 Passkey</li>{% endif %}
+    {% if passkeys.is_empty() %}<li class="px-3 py-2 text-sm text-gray-400">尚未添加</li>{% endif %}
   </ul>
 </section>
 
 <section class="bg-white rounded-lg border border-gray-200 p-4">
-  <h2 class="font-medium">恢复助记词</h2>
-  <p class="text-sm text-gray-500 mt-1 mb-3">{% if recovery_configured %}已设置。重新生成后旧助记词立即失效。{% else %}尚未设置。{% endif %} 此操作必须重新验证密码。</p>
+  <h2 class="font-medium">重置助记词</h2>
+  <p class="text-sm text-gray-500 mt-1 mb-3">{% if recovery_configured %}重新生成助记词后旧助记词立即失效。{% else %}尚未设置。{% endif %} 此操作必须重新验证密码。</p>
   <form method="post" action="/settings/recovery" hx-confirm="确认生成新的恢复助记词？旧助记词将立即失效。" class="flex flex-wrap gap-2">
     <input name="password" type="password" required autocomplete="current-password" placeholder="输入主密码" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
     <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">重置助记词</button>

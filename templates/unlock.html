@@ -10,15 +10,14 @@
   {% if has_passkeys %}
   <div class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
     <button data-passkey-login="platform" type="button" class="w-full bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50">使用 Passkey 进行登录</button>
-    <!-- <button data-passkey-login="external" type="button" class="w-full mt-2 border border-gray-300 bg-white text-gray-700 text-sm px-4 py-2 rounded hover:bg-gray-50 disabled:opacity-50">使用手机或安全密钥</button> -->
     <p id="passkey-login-status" class="hidden text-sm mt-3" role="status"></p>
     <form id="passkey-repair-form" hx-boost="false" class="hidden mt-4 pt-4 border-t border-gray-100 space-y-3">
       <div><label class="block text-sm text-gray-600 mb-1">密码</label><input id="passkey-repair-password" type="password" required autocomplete="current-password" {% if password_locked %}disabled{% endif %} class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm disabled:opacity-50" placeholder="仅本次兼容绑定需要"></div>
-      <p class="text-xs text-gray-500">仅在同一个 Passkey 已通过签名验证、但本次 PRF 无法解开已有包裹时，需要在五分钟内验证一次主密码。绑定当前设备或凭据提供方返回的 PRF，不覆盖原包裹，MacBook 等原设备仍可登录。没有 PRF 时不能绑定。</p>
-      <button type="submit" {% if password_locked %}disabled{% endif %} class="w-full bg-amber-600 text-white text-sm px-4 py-2 rounded hover:bg-amber-700 disabled:opacity-50">绑定当前设备并解锁</button>
+      <p class="text-xs text-gray-500">由于兼容性问题，需要您在 5 分钟内输入一次密码以进行绑定</p>
+      <button type="submit" {% if password_locked %}disabled{% endif %} class="w-full bg-amber-600 text-white text-sm px-4 py-2 rounded hover:bg-amber-700 disabled:opacity-50">绑定当前设备</button>
     </form>
   </div>
-  <div class="flex items-center gap-3 mb-4"><span class="h-px bg-gray-200 flex-1"></span><span class="text-xs text-gray-400">或使用密码进行解锁</span><span class="h-px bg-gray-200 flex-1"></span></div>
+  <div class="flex items-center gap-3 mb-4"><span class="h-px bg-gray-200 flex-1"></span><span class="text-xs text-gray-400">或</span><span class="h-px bg-gray-200 flex-1"></span></div>
   {% endif %}
   <form method="post" action="/unlock" hx-boost="false" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
     <div>
@@ -43,14 +42,14 @@ button.addEventListener('click', async () => {
   for (const item of buttons) item.disabled = true;
   status.className = 'text-sm text-blue-600 mt-3';
   status.textContent = button.dataset.passkeyLogin === 'platform'
-    ? '正在打开此设备的 Passkey（包括已通过 iCloud 同步的凭据）…'
-    : '正在等待手机或安全密钥…';
+    ? '正在验证中，请稍安勿躁...'
+    : '正在等待手机或安全密钥...';
   try {
     const result = await harukaLoginWithPasskey(button.dataset.passkeyLogin);
     if (result.repair_required) {
       {% if password_locked %}
       status.className = 'text-sm text-red-600 mt-3';
-      status.textContent = '主密码验证已被禁止，无法进行兼容绑定。请使用可直接解锁的 Passkey 或恢复助记词。';
+      status.textContent = '禁止使用密码登录，请使用可直接解锁的 Passkey 登录或使用助记词恢复密码。';
       {% else %}
       window.harukaPasskeyRepairFlow = result.repair_flow_id;
       status.className = 'text-sm text-amber-700 mt-3';
@@ -76,7 +75,7 @@ document.getElementById('passkey-repair-form').addEventListener('submit', async 
   const status = document.getElementById('passkey-login-status');
   button.disabled = true;
   status.className = 'text-sm text-blue-600 mt-3';
-  status.textContent = '正在验证主密码并绑定当前设备的 PRF…';
+  status.textContent = '正在验证密码并绑定此 Passkey...';
   try {
     const result = await harukaRepairPasskey(
       window.harukaPasskeyRepairFlow,

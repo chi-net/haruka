@@ -45,7 +45,7 @@
             <p class="text-xs text-gray-500 mt-1">已用 {{ status.percent }}%{% if status.at_limit %} · 仍可正常记账{% else if status.over_limit %} · 仍可正常记账{% endif %}</p>
           </div>
           {% when None %}
-          <p class="text-xs text-gray-500 mt-2">次数上限未启用 · 编辑分类可设置每日、每周或每月的正整数上限。</p>
+          <p class="text-xs text-gray-500 mt-2">次数上限未启用，编辑分类可设置每日、每周或每月的正整数上限。</p>
           {% endmatch %}
         </li>
         {% endfor %}
@@ -55,7 +55,6 @@
 
     <section class="bg-white rounded-lg border border-gray-200 p-4 min-w-0">
       <h2 class="font-medium mb-3">收入分类</h2>
-      <p class="text-xs text-gray-500 mb-3">收入分类不计入食品支出，也不设置次数上限。</p>
       <form method="post" action="/categories" class="space-y-3 border-b border-gray-100 pb-4 mb-4">
         <input type="hidden" name="kind" value="income">
         <div><label for="income-category-name" class="block text-sm text-gray-600 mb-1">分类名称</label><input id="income-category-name" name="name" required placeholder="例如：工资" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></div>
@@ -65,7 +64,7 @@
         {% for c in income_categories %}
         <li class="flex flex-wrap items-center justify-between gap-3 p-3 text-sm"><span class="min-w-0 break-words">{{ c.name }}</span><div class="flex items-center gap-3 shrink-0"><a href="/categories/{{ c.id }}/edit" class="text-blue-600 hover:underline">编辑</a><form method="post" action="/categories/{{ c.id }}/delete" hx-confirm="确认删除该分类？已有账单不会受影响。"><button class="text-red-600 hover:underline">删除</button></form></div></li>
         {% endfor %}
-        {% if income_categories.is_empty() %}<li class="p-4 text-sm text-gray-400">暂无收入分类，可在上方新增。</li>{% endif %}
+        {% if income_categories.is_empty() %}<li class="p-4 text-sm text-gray-400">暂无收入分类～</li>{% endif %}
       </ul>
     </section>
   </div>
