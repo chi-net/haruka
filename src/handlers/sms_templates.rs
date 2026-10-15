@@ -260,17 +260,13 @@ async fn load_references(
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let names = crate::investment_funds::display_names(dek, &account_models);
+    let names = super::bills::account_display_names(dek, &account_models, &details);
     let accounts = account_models
         .iter()
         .filter(|item| crate::investment_funds::is_money_account(item))
         .map(|item| ReferenceOption {
             id: item.id,
-            name: if item.kind == "investment_fund" {
-                names.get(&item.id).cloned().unwrap_or_default()
-            } else {
-                super::bills::account_display_name(dek, item, details.get(&item.id))
-            },
+            name: names.get(&item.id).cloned().unwrap_or_default(),
             kind: item.kind.clone(),
             selected: config.account_id == Some(item.id),
         })

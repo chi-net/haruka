@@ -110,9 +110,10 @@ fn error_message(content_type: &str, body: &[u8], status: StatusCode) -> String 
         .unwrap_or_else(|| "请求处理失败".to_string())
 }
 
-/// 把所有失败响应统一转换成可消费的错误协议：脚本/htmx 请求返回 JSON，
+/// 把所有失败响应统一转换成可消费的错误协议：短信接口/脚本/htmx 请求返回 JSON，
 /// 普通浏览器导航返回完整 HTML 错误页。原始错误详情不会被吞掉。
 pub async fn render_error_response(request: Request, next: Next) -> Response {
+    let is_sms_webhook = request.uri().path() == "/api/sms";
     let accepts_json = request
         .headers()
         .get(header::ACCEPT)
@@ -153,7 +154,7 @@ pub async fn render_error_response(request: Request, next: Next) -> Response {
         eprintln!("请求处理失败（{}）: {message}", status.as_u16());
     }
 
-    let rendered = if accepts_json || sends_json || is_htmx {
+    let rendered = if is_sms_webhook || accepts_json || sends_json || is_htmx {
         Json(ErrorPayload {
             ok: false,
             status: status.as_u16(),
@@ -427,26 +428,35 @@ pub fn transfer_to_cents(
 }
 
 pub fn mask_card_number(value: &str) -> String {
-    if value.is_empty() {
-        return String::new();
-    }
-    let mut suffix: Vec<char> = value.chars().rev().take(4).collect();
-    suffix.reverse();
-    format!("•••• {}", suffix.into_iter().collect::<String>())
+    let start = value
+        .char_indices()
+        .rev()
+        .nth(3)
+        .map_or(0, |(index, _)| index);
+    value[start..].to_owned()
 }
 
 pub fn mask_account_username(value: &str) -> String {
-    let chars: Vec<char> = value.chars().collect();
-    if chars.is_empty() {
-        return String::new();
+    // A short username must not be revealed in full, even when it has only one character.
+    let length = value.chars().count();
+    match length {
+        0 => String::new(),
+        1 => "隐藏".into(),
+        _ => value.chars().skip(length - 4.min(length - 1)).collect(),
     }
-    if chars.len() <= 5 {
-        if chars.len() == 1 {
-            return format!("{}•••", chars[0]);
+}
+
+#[cfg(test)]
+mod identity_privacy_tests {
+    #[test]
+    fn short_usernames_do_not_reveal_the_full_value() {
+        for value in ["甲", "甲乙", "甲乙丙", "甲乙丙丁", "1", "11", "111", "1111"] {
+            let suffix = super::mask_account_username(value);
+            assert_ne!(suffix, value);
+            if value.chars().count() > 1 {
+                assert!(value.ends_with(&suffix));
+                assert!(suffix.chars().count() < value.chars().count());
+            }
         }
-        return format!("{}•••{}", chars[0], chars[chars.len() - 1]);
     }
-    let prefix: String = chars[..3].iter().collect();
-    let suffix: String = chars[chars.len() - 2..].iter().collect();
-    format!("{prefix}•••{suffix}")
 }

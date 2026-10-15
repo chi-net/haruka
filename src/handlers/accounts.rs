@@ -10,7 +10,7 @@ use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{
     sea_query::{Expr, OnConflict},
     ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, EntityTrait, IntoActiveModel,
-    QueryFilter, QueryOrder, Set, TransactionTrait,
+    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -22,7 +22,7 @@ use crate::{
     credit_dates::{self, BillingDayEffect, BillingSchedule},
     crypto, currency,
     entity::{
-        account, account_detail, balance_adjustment, bill, debt_person, debt_record,
+        account, account_detail, balance_adjustment, bill, debt_person, debt_record, debt_request,
         installment_item, installment_plan, subscription, transfer,
     },
     AppState, SessionDek,
@@ -53,8 +53,6 @@ struct AccountRow {
     name: String,
     kind_label: String,
     is_investment: bool,
-    card_number: String,
-    account_username: String,
     credit_summary: String,
     note: String,
     balance: String,
@@ -85,6 +83,7 @@ struct AccountLedgerRow {
 struct AccountDetailTemplate {
     id: i64,
     name: String,
+    raw_name: String,
     kind_label: String,
     is_investment: bool,
     currency: String,
@@ -110,6 +109,11 @@ struct AccountDetailTemplate {
 #[derive(Serialize)]
 pub struct CardNumberResponse {
     card_number: String,
+}
+
+#[derive(Serialize)]
+pub struct AccountUsernameResponse {
+    account_username: String,
 }
 
 #[derive(Template)]
@@ -152,6 +156,10 @@ pub struct AccountFormData {
     currency: String,
     card_number: String,
     account_username: String,
+    #[serde(default)]
+    clear_card_number: bool,
+    #[serde(default)]
+    clear_account_username: bool,
     credit_limit: String,
     billing_day: String,
     #[serde(default = "default_billing_day_effective")]
@@ -675,29 +683,14 @@ pub async fn list(
         .filter(|account| account.kind != "investment_fund")
         .map(|account| {
             let detail = details.get(&account.id);
-            let card_number = detail
-                .map(|item| {
-                    super::mask_card_number(&crypto::decrypt_string(&dek, &item.card_number))
-                })
-                .unwrap_or_default();
-            let account_username = detail
-                .map(|item| {
-                    super::mask_account_username(&crypto::decrypt_string(
-                        &dek,
-                        &item.account_username,
-                    ))
-                })
-                .unwrap_or_default();
             let credit_summary = detail
                 .map(|item| credit_summary(item, &dek, &account.currency, today))
                 .unwrap_or_default();
             AccountRow {
                 id: account.id,
-                name: crypto::decrypt_string(&dek, &account.name),
+                name: super::bills::account_display_name(&dek, &account, detail),
                 kind_label: account_kind_label(&account.kind).into(),
                 is_investment: account.kind == "investment",
-                card_number,
-                account_username,
                 credit_summary,
                 note: crypto::decrypt_string(&dek, &account.note),
                 balance: currency::format(
@@ -817,7 +810,15 @@ pub async fn detail(
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let other_account_names = crate::investment_funds::display_names(&dek, &all_accounts);
+    let all_details = account_detail::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|detail| (detail.account_id, detail))
+        .collect();
+    let other_account_names =
+        super::bills::account_display_names(&dek, &all_accounts, &all_details);
     let person_names: HashMap<i64, String> = debt_person::Entity::find()
         .all(&state.db)
         .await
@@ -951,6 +952,7 @@ pub async fn detail(
             },
         ));
     }
+    let debt_request_ids = super::debts::request_ids_for_records(&state, &account_debts).await?;
     for item in account_debts {
         let incoming = matches!(item.kind.as_str(), "borrow" | "repayment_received");
         let amount = crypto::decrypt_cents(&dek, &item.amount);
@@ -982,7 +984,12 @@ pub async fn detail(
                     "text-red-600"
                 }
                 .into(),
-                detail_url: String::new(),
+                detail_url: debt_request_ids
+                    .get(&item.id)
+                    .copied()
+                    .flatten()
+                    .map(|request_id| format!("/debt-requests#debt-request-{request_id}"))
+                    .unwrap_or_default(),
             },
         ));
     }
@@ -1022,7 +1029,9 @@ pub async fn detail(
         .unwrap_or_default();
     let account_username = detail
         .as_ref()
-        .map(|item| crypto::decrypt_string(&dek, &item.account_username))
+        .map(|item| {
+            super::mask_account_username(&crypto::decrypt_string(&dek, &item.account_username))
+        })
         .unwrap_or_default();
     let credit_summary = detail
         .as_ref()
@@ -1034,6 +1043,7 @@ pub async fn detail(
             .get(&id)
             .cloned()
             .unwrap_or_else(|| crypto::decrypt_string(&dek, &account.name)),
+        raw_name: crypto::decrypt_string(&dek, &account.name),
         kind_label: account_kind_label(&account.kind).into(),
         is_investment: account.kind == "investment_fund",
         currency: account.currency.clone(),
@@ -1095,6 +1105,31 @@ pub async fn card_number(
     Ok((
         [("cache-control", "no-store"), ("pragma", "no-cache")],
         Json(CardNumberResponse { card_number }),
+    ))
+}
+
+pub async fn account_username(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+) -> HandlerResult<impl IntoResponse> {
+    account::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    let detail = account_detail::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "这个账户没有用户名".into()))?;
+    let account_username = crypto::decrypt_string(&dek, &detail.account_username);
+    if account_username.is_empty() {
+        return Err((StatusCode::NOT_FOUND, "这个账户没有用户名".into()));
+    }
+    Ok((
+        [("cache-control", "no-store"), ("pragma", "no-cache")],
+        Json(AccountUsernameResponse { account_username }),
     ))
 }
 
@@ -1220,11 +1255,13 @@ pub async fn edit_form(
         .map_err(err500)?;
     let card_number = detail
         .as_ref()
-        .map(|detail| crypto::decrypt_string(&dek, &detail.card_number))
+        .map(|detail| super::mask_card_number(&crypto::decrypt_string(&dek, &detail.card_number)))
         .unwrap_or_default();
     let account_username = detail
         .as_ref()
-        .map(|detail| crypto::decrypt_string(&dek, &detail.account_username))
+        .map(|detail| {
+            super::mask_account_username(&crypto::decrypt_string(&dek, &detail.account_username))
+        })
         .unwrap_or_default();
     let credit_limit = detail
         .as_ref()
@@ -1380,6 +1417,23 @@ pub async fn update(
         .one(&transaction)
         .await
         .map_err(err500)?;
+    let card_number = if form.card_number.trim().is_empty() && !form.clear_card_number {
+        existing_detail
+            .as_ref()
+            .map(|detail| crypto::decrypt_string(&dek, &detail.card_number))
+            .unwrap_or_default()
+    } else {
+        form.card_number
+    };
+    let account_username =
+        if form.account_username.trim().is_empty() && !form.clear_account_username {
+            existing_detail
+                .as_ref()
+                .map(|detail| crypto::decrypt_string(&dek, &detail.account_username))
+                .unwrap_or_default()
+        } else {
+            form.account_username
+        };
     let schedule = if matches!(form.account_kind.as_str(), "credit_card" | "credit_service") {
         BillingSchedule::for_edit(
             existing_detail
@@ -1404,8 +1458,8 @@ pub async fn update(
         &dek,
         id,
         &form.account_kind,
-        &form.card_number,
-        &form.account_username,
+        &card_number,
+        &account_username,
         credit_limit,
         schedule,
         repayment_day,
@@ -1429,9 +1483,13 @@ pub async fn balance_form(
         let group = account.parent_id.unwrap_or(id);
         return Ok(Redirect::to(&format!("/accounts/{group}/funds/valuation")).into_response());
     }
+    let detail = account_detail::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?;
     let html = AccountBalanceTemplate {
         heading: "设置账户余额".into(),
-        account_name: crypto::decrypt_string(&dek, &account.name),
+        account_name: super::bills::account_display_name(&dek, &account, detail.as_ref()),
         current_balance: currency::format(
             current_balance(&state, &dek, id).await?,
             &account.currency,
@@ -1498,6 +1556,31 @@ pub async fn delete(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    if debt_request::Entity::find()
+        .select_only()
+        .column(debt_request::Column::Id)
+        .filter(
+            Condition::any()
+                .add(debt_request::Column::AccountId.eq(id))
+                .add(debt_request::Column::RepaymentAccountId.eq(id)),
+        )
+        .into_tuple::<i64>()
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request("账户已关联借还请求与证明，不能删除"));
+    }
+    let debt_ids = debt_record::Entity::find()
+        .select_only()
+        .column(debt_record::Column::Id)
+        .filter(debt_record::Column::AccountId.eq(id))
+        .into_tuple::<i64>()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    super::debts::ensure_records_unbound(&state, &debt_ids).await?;
     if target.kind == "investment_fund" {
         crate::investment_funds::ensure_unused(&state, &dek, id).await?;
         let transaction = state.db.begin().await.map_err(err500)?;

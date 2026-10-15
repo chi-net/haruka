@@ -1,6 +1,6 @@
 use crate::{
     crypto,
-    entity::{account, balance_adjustment, investment_sms_event},
+    entity::{account, account_detail, balance_adjustment, investment_sms_event},
     handlers::accounts,
     AppState,
 };
@@ -66,28 +66,6 @@ pub(crate) async fn validate_money_account(
         return Err(err500("只有基金可以有父账户"));
     }
     Ok(())
-}
-
-pub(crate) fn display_names(
-    dek: &crypto::Dek,
-    accounts: &[account::Model],
-) -> HashMap<i64, String> {
-    let mut names: HashMap<_, _> = accounts
-        .iter()
-        .map(|account| (account.id, crypto::decrypt_string(dek, &account.name)))
-        .collect();
-    for account in accounts
-        .iter()
-        .filter(|account| account.parent_id.is_some())
-    {
-        if let Some(parent_name) = account.parent_id.and_then(|id| names.get(&id)) {
-            if let Some(name) = names.get(&account.id) {
-                let label = format!("{parent_name} / {name}");
-                names.insert(account.id, label);
-            }
-        }
-    }
-    names
 }
 
 pub(crate) fn sms_names(dek: &crypto::Dek, fund: &account::Model) -> HandlerResult<Vec<String>> {
@@ -251,7 +229,28 @@ pub(crate) async fn due_valuations(
             );
         }
     }
-    valuation_reminders(dek, &all, &balances, now)
+    let mut reminders = valuation_reminders(dek, &all, &balances, now)?;
+    if !reminders.is_empty() {
+        let details = account_detail::Entity::find()
+            .all(&state.db)
+            .await
+            .map_err(err500)?
+            .into_iter()
+            .map(|detail| (detail.account_id, detail))
+            .collect();
+        let names = crate::handlers::bills::account_display_names(dek, &all, &details);
+        let by_id: HashMap<_, _> = all.iter().map(|account| (account.id, account)).collect();
+        for reminder in &mut reminders {
+            if let Some(parent_name) = names.get(&reminder.parent_id) {
+                reminder.parent_name.clone_from(parent_name);
+            }
+            if let Some(fund) = by_id.get(&reminder.id) {
+                reminder.name =
+                    crate::handlers::bills::account_display_name(dek, fund, details.get(&fund.id));
+            }
+        }
+    }
+    Ok(reminders)
 }
 
 pub(crate) fn valuation_reminders(

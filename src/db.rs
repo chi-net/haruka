@@ -329,6 +329,21 @@ pub async fn init() -> DatabaseConnection {
     ensure_column(
         &db,
         "debt_requests",
+        "requires_confirmation",
+        "BOOLEAN NOT NULL DEFAULT 1",
+    )
+    .await;
+    ensure_column(&db, "debt_requests", "origin_debt_record_id", "INTEGER").await;
+    ensure_column(
+        &db,
+        "debt_requests",
+        "proof_version",
+        "INTEGER NOT NULL DEFAULT 1",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "debt_requests",
         "verification_digest",
         "BLOB NOT NULL DEFAULT X''",
     )

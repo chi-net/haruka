@@ -14,8 +14,8 @@ use crate::{
     credit_statements::{self, Ledger},
     crypto, currency,
     entity::{
-        account, account_detail, balance_adjustment, bill, category, debt_person, debt_record,
-        installment_item, installment_plan, subscription, transfer,
+        account, account_detail, balance_adjustment, bill, category, debt_record, installment_item,
+        installment_plan, subscription, transfer,
     },
     AppState, SessionDek,
 };
@@ -25,14 +25,6 @@ const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
 
 fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
-}
-
-struct AccountOption {
-    id: i64,
-    name: String,
-    kind: String,
-    currency: String,
-    transfer_fee_rate: String,
 }
 
 struct AccountSummary {
@@ -66,16 +58,6 @@ struct CreditAccountSummary {
     has_future_entries: bool,
     usage_percent: i64,
     danger: bool,
-}
-
-struct PersonOption {
-    id: i64,
-    name: String,
-}
-
-struct CategoryOption {
-    kind: String,
-    name: String,
 }
 
 struct ReminderRow {
@@ -128,16 +110,9 @@ struct FundValuationReminder {
 #[derive(Template)]
 #[template(path = "dashboard.html")]
 struct DashboardTemplate {
-    accounts: Vec<AccountOption>,
-    transfer_sources: Vec<AccountOption>,
     account_summaries: Vec<AccountSummary>,
     credit_accounts: Vec<CreditAccountSummary>,
     auto_debit_warnings: Vec<AutoDebitWarning>,
-    people: Vec<PersonOption>,
-    categories: Vec<CategoryOption>,
-    quick_entry_heading: String,
-    quick_redirect_to: String,
-    happened_at: String,
     net_assets: String,
     month_income: String,
     month_expense: String,
@@ -148,7 +123,6 @@ struct DashboardTemplate {
     reports_json: String,
     default_currency: String,
     time_zone: String,
-    first_due_date: String,
     subscription_reminders: Vec<ReminderRow>,
     installment_reminders: Vec<ReminderRow>,
     subscription_reminder_count: usize,
@@ -383,20 +357,6 @@ pub async fn show(
     let reminder_bills: HashMap<i64, &bill::Model> =
         bills.iter().map(|bill| (bill.id, bill)).collect();
     let account_names = super::bills::account_display_names(&dek, &accounts, &details);
-    let account_options = accounts
-        .iter()
-        .filter(|account| crate::investment_funds::is_money_account(account))
-        .map(|account| AccountOption {
-            id: account.id,
-            name: account_names.get(&account.id).cloned().unwrap_or_default(),
-            kind: account.kind.clone(),
-            currency: account.currency.clone(),
-            transfer_fee_rate: super::fees::format_rate(crypto::decrypt_cents(
-                &dek,
-                &account.transfer_fee_rate_bps,
-            )),
-        })
-        .collect::<Vec<_>>();
     let due_valuations = crate::investment_funds::valuation_reminders(
         &dek,
         &accounts,
@@ -611,32 +571,6 @@ pub async fn show(
     }
     let installment_reminder_count = all_installment_reminders.len();
     let installment_reminders = all_installment_reminders.into_iter().take(10).collect();
-    let transfer_sources = accounts
-        .iter()
-        .filter(|account| crate::investment_funds::is_money_account(account))
-        .map(|account| AccountOption {
-            id: account.id,
-            name: account_names.get(&account.id).cloned().unwrap_or_default(),
-            kind: account.kind.clone(),
-            currency: account.currency.clone(),
-            transfer_fee_rate: super::fees::format_rate(crypto::decrypt_cents(
-                &dek,
-                &account.transfer_fee_rate_bps,
-            )),
-        })
-        .collect::<Vec<_>>();
-    let people = debt_person::Entity::find()
-        .order_by_asc(debt_person::Column::Id)
-        .all(&state.db)
-        .await
-        .map_err(err500)?;
-    let people_options = people
-        .iter()
-        .map(|person| PersonOption {
-            id: person.id,
-            name: crypto::decrypt_string(&dek, &person.name),
-        })
-        .collect::<Vec<_>>();
     let category_models = category::Entity::find()
         .order_by_asc(category::Column::Id)
         .all(&state.db)
@@ -659,13 +593,6 @@ pub async fn show(
             status.id,
         )
     });
-    let categories = category_models
-        .into_iter()
-        .map(|category| CategoryOption {
-            kind: category.kind,
-            name: crypto::decrypt_string(&dek, &category.name),
-        })
-        .collect::<Vec<_>>();
 
     let mut receivable = 0i64;
     let mut payable = 0i64;
@@ -756,16 +683,9 @@ pub async fn show(
         serde_json::to_string(&build_reports(today, &bill_values)?).map_err(err500)?;
     let budget_statuses = super::budgets::current_statuses(&state, &dek, time_zone).await?;
     let html = DashboardTemplate {
-        accounts: account_options,
-        transfer_sources,
         account_summaries,
         credit_accounts,
         auto_debit_warnings,
-        people: people_options,
-        categories,
-        quick_entry_heading: "快速记账".into(),
-        quick_redirect_to: "/dashboard".into(),
-        happened_at: chrono::Utc::now().naive_utc().format(TIME_FMT).to_string(),
         net_assets: currency::format(net_assets, &default_currency),
         month_income: currency::format(month_income, &default_currency),
         month_expense: currency::format(month_expense, &default_currency),
@@ -776,9 +696,6 @@ pub async fn show(
         reports_json,
         default_currency,
         time_zone: time_zone.0.name().into(),
-        first_due_date: (today + chrono::Months::new(1))
-            .format("%Y-%m-%d")
-            .to_string(),
         subscription_reminders,
         installment_reminders,
         subscription_reminder_count,

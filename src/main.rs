@@ -385,6 +385,10 @@ async fn main() {
             post(handlers::accounts::card_number),
         )
         .route(
+            "/accounts/{id}/account-username",
+            post(handlers::accounts::account_username),
+        )
+        .route(
             "/accounts/{id}/balance-summary",
             get(handlers::accounts::balance_summary),
         )
@@ -552,7 +556,7 @@ async fn main() {
         .route("/transfers/{id}/delete", post(handlers::transfers::delete))
         .route(
             "/debts",
-            get(handlers::dashboard::redirect).post(handlers::debts::create_record),
+            get(|| async { axum::response::Redirect::to("/debt-requests") }),
         )
         .route("/debts/{id}/delete", post(handlers::debts::delete_record))
         .route(

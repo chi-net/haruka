@@ -14,7 +14,9 @@ use std::str::FromStr;
 
 use crate::{
     crypto, currency,
-    entity::{account, bill, category, installment_item, investment_execution, transfer},
+    entity::{
+        account, account_detail, bill, category, installment_item, investment_execution, transfer,
+    },
     AppState, SessionDek,
 };
 
@@ -233,10 +235,28 @@ pub async fn create(
     let fee_bill_id = if fee_amount > 0 {
         let category = fee_category(&transaction, &dek).await?;
         let note_text = form.note.trim();
+        let accounts = account::Entity::find()
+            .all(&transaction)
+            .await
+            .map_err(err500)?;
+        let details = account_detail::Entity::find()
+            .all(&transaction)
+            .await
+            .map_err(err500)?
+            .into_iter()
+            .map(|detail| (detail.account_id, detail))
+            .collect();
+        let account_names = super::bills::account_display_names(&dek, &accounts, &details);
         let note = format!(
             "转账手续费 · {} → {}{}{}",
-            crypto::decrypt_string(&dek, &from_account.name),
-            crypto::decrypt_string(&dek, &to_account.name),
+            account_names
+                .get(&from_account.id)
+                .map(String::as_str)
+                .unwrap_or_default(),
+            account_names
+                .get(&to_account.id)
+                .map(String::as_str)
+                .unwrap_or_default(),
             if note_text.is_empty() { "" } else { " · " },
             note_text,
         );

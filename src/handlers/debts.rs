@@ -1,26 +1,25 @@
 use askama::Template;
 use axum::{
     extract::{Extension, Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
-    response::{Html, IntoResponse, Redirect, Response},
-    Form, Json,
+    http::StatusCode,
+    response::{Html, Redirect},
+    Form,
 };
-use chrono::NaiveDateTime;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, Condition, EntityTrait, IntoActiveModel, QueryFilter,
+    QueryOrder, QuerySelect, Set,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto, currency,
-    entity::{account, debt_person, debt_record},
+    entity::{account, debt_person, debt_record, debt_request},
     AppState, SessionDek,
 };
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
-const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
 
 fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
@@ -70,25 +69,6 @@ struct DebtPersonFormTemplate {
 }
 
 #[derive(Deserialize)]
-pub struct DebtRecordFormData {
-    person_id: i64,
-    account_id: i64,
-    kind: String,
-    amount: String,
-    note: String,
-    happened_at: String,
-    #[serde(default)]
-    redirect_to: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct DebtCreateResponse {
-    ok: bool,
-    message: String,
-    redirect: String,
-}
-
-#[derive(Deserialize)]
 pub struct DeleteRecordFormData {
     #[serde(default)]
     redirect_to: Option<String>,
@@ -122,20 +102,6 @@ pub struct DebtPeopleQuery {
     max_payable: String,
 }
 
-fn valid_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "lend" | "borrow" | "repayment_received" | "repayment_paid"
-    )
-}
-
-fn accepts_json(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::ACCEPT)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"))
-}
-
 fn account_delta(kind: &str, amount: i64) -> HandlerResult<i64> {
     if matches!(kind, "borrow" | "repayment_received") {
         Ok(amount)
@@ -144,18 +110,6 @@ fn account_delta(kind: &str, amount: i64) -> HandlerResult<i64> {
             .checked_neg()
             .ok_or_else(|| bad_request("金额超出范围"))
     }
-}
-
-fn parse_amount(value: &str) -> HandlerResult<i64> {
-    let decimal = Decimal::from_str(value.trim())
-        .map_err(|_| bad_request("金额格式不正确"))?
-        .round_dp(2);
-    if decimal <= Decimal::ZERO {
-        return Err(bad_request("金额必须大于 0"));
-    }
-    (decimal * Decimal::from(100))
-        .to_i64()
-        .ok_or_else(|| bad_request("金额超出范围"))
 }
 
 fn parse_optional_amount(value: &str, label: &str) -> HandlerResult<Option<i64>> {
@@ -206,134 +160,72 @@ fn apply_outstanding(
     Ok(())
 }
 
-pub(crate) async fn person_outstanding(
+pub(crate) async fn request_ids_for_records(
     state: &AppState,
-    dek: &crypto::Dek,
-    person_id: i64,
-) -> HandlerResult<(i64, i64)> {
-    let accounts = account::Entity::find()
-        .all(&state.db)
-        .await
-        .map_err(err500)?;
-    let account_currencies: HashMap<i64, String> = accounts
-        .iter()
-        .map(|account| (account.id, account.currency.clone()))
-        .collect();
-    let default_currency = currency::default_currency(state).await.map_err(err500)?;
-    let currencies = accounts
-        .into_iter()
-        .map(|account| account.currency)
-        .collect::<Vec<_>>();
-    let rates = currency::RateTable::load(
-        state,
-        currencies,
-        &default_currency,
-        chrono::Local::now().date_naive(),
-    )
-    .await
-    .map_err(err500)?;
-    let records = debt_record::Entity::find()
-        .filter(debt_record::Column::PersonId.eq(person_id))
-        .all(&state.db)
-        .await
-        .map_err(err500)?;
-    let mut receivable = 0;
-    let mut payable = 0;
-    for record in records {
-        let native_amount = crypto::decrypt_cents(dek, &record.amount);
-        let record_currency = account_currencies
-            .get(&record.account_id)
-            .map(String::as_str)
-            .unwrap_or(&default_currency);
-        apply_outstanding(
-            &record.kind,
-            rates
-                .convert(native_amount, record_currency)
-                .map_err(err500)?,
-            &mut receivable,
-            &mut payable,
-        )?;
+    records: &[debt_record::Model],
+) -> HandlerResult<HashMap<i64, Option<i64>>> {
+    let mut links: HashMap<_, _> = records.iter().map(|record| (record.id, None)).collect();
+    if records.is_empty() {
+        return Ok(links);
     }
-    Ok((receivable, payable))
+    let requests = debt_request::Entity::find()
+        .select_only()
+        .columns([
+            debt_request::Column::Id,
+            debt_request::Column::ConfirmedDebtRecordId,
+            debt_request::Column::RepaymentDebtRecordId,
+            debt_request::Column::OriginDebtRecordId,
+        ])
+        .filter(
+            Condition::any()
+                .add(
+                    debt_request::Column::ConfirmedDebtRecordId.is_in(records.iter().map(|r| r.id)),
+                )
+                .add(
+                    debt_request::Column::RepaymentDebtRecordId.is_in(records.iter().map(|r| r.id)),
+                )
+                .add(debt_request::Column::OriginDebtRecordId.is_in(records.iter().map(|r| r.id))),
+        )
+        .order_by_asc(debt_request::Column::Id)
+        .into_tuple::<(i64, Option<i64>, Option<i64>, Option<i64>)>()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    for (request_id, confirmed, repayment, origin) in requests {
+        if let Some(link) = origin.and_then(|id| links.get_mut(&id)) {
+            link.get_or_insert(request_id);
+        }
+        for record_id in [confirmed, repayment].into_iter().flatten() {
+            if let Some(link) = links.get_mut(&record_id) {
+                *link = Some(request_id);
+            }
+        }
+    }
+    Ok(links)
 }
 
-pub async fn create_record(
-    State(state): State<AppState>,
-    Extension(SessionDek(dek)): Extension<SessionDek>,
-    headers: HeaderMap,
-    Form(form): Form<DebtRecordFormData>,
-) -> HandlerResult<Response> {
-    let _balance_guard = state.balance_writes.lock().await;
-    if !valid_kind(&form.kind) {
-        return Err(bad_request("借还类型无效"));
+/// All callers hold balance_writes, so proof references cannot race with deletion.
+pub(crate) async fn ensure_records_unbound(state: &AppState, ids: &[i64]) -> HandlerResult<()> {
+    if ids.is_empty() {
+        return Ok(());
     }
-    if debt_person::Entity::find_by_id(form.person_id)
+    let referenced = debt_request::Entity::find()
+        .select_only()
+        .column(debt_request::Column::Id)
+        .filter(
+            Condition::any()
+                .add(debt_request::Column::ConfirmedDebtRecordId.is_in(ids.iter().copied()))
+                .add(debt_request::Column::RepaymentDebtRecordId.is_in(ids.iter().copied()))
+                .add(debt_request::Column::OriginDebtRecordId.is_in(ids.iter().copied())),
+        )
+        .into_tuple::<i64>()
         .one(&state.db)
         .await
-        .map_err(err500)?
-        .is_none()
-    {
-        return Err(bad_request("借贷对象不存在"));
+        .map_err(err500)?;
+    if referenced.is_some() {
+        return Err(bad_request("借还流水已绑定请求与证明，不能单独删除"));
     }
-    let account = account::Entity::find_by_id(form.account_id)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or_else(|| bad_request("账户不存在"))?;
-    let amount = parse_amount(&form.amount)?;
-    let (receivable, payable) = person_outstanding(&state, &dek, form.person_id).await?;
-    let amount_in_default = currency::convert_cents(
-        &state,
-        amount,
-        &account.currency,
-        &currency::default_currency(&state).await.map_err(err500)?,
-        chrono::Local::now().date_naive(),
-    )
-    .await
-    .map_err(err500)?;
-    if form.kind == "repayment_received" && amount_in_default > receivable {
-        return Err(bad_request("还款金额超过对方尚欠金额"));
-    }
-    if form.kind == "repayment_paid" && amount_in_default > payable {
-        return Err(bad_request("还款金额超过尚欠对方金额"));
-    }
-    super::accounts::ensure_balance_delta(
-        &state,
-        &dek,
-        form.account_id,
-        account_delta(&form.kind, amount)?,
-    )
-    .await?;
-    let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
-        .map_err(|_| bad_request("时间格式不正确"))?;
-    debt_record::ActiveModel {
-        person_id: Set(form.person_id),
-        account_id: Set(form.account_id),
-        kind: Set(form.kind),
-        amount: Set(crypto::encrypt_cents(&dek, amount)),
-        note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
-        happened_at: Set(happened_at),
-        created_at: Set(chrono::Utc::now()),
-        ..Default::default()
-    }
-    .insert(&state.db)
-    .await
-    .map_err(err500)?;
-    let redirect = match form.redirect_to.as_deref() {
-        Some("/bills/new") => "/bills/new",
-        Some("/bills") => "/bills",
-        _ => "/dashboard",
-    };
-    if accepts_json(&headers) {
-        Ok(Json(DebtCreateResponse {
-            ok: true,
-            message: "借还记录已保存".into(),
-            redirect: redirect.into(),
-        })
-        .into_response())
-    } else {
-        Ok(Redirect::to(redirect).into_response())
-    }
+    Ok(())
 }
 
 pub async fn delete_record(
@@ -348,6 +240,7 @@ pub async fn delete_record(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "借还记录不存在".into()))?;
+    ensure_records_unbound(&state, &[id]).await?;
     let delta = account_delta(&record.kind, crypto::decrypt_cents(&dek, &record.amount))?
         .checked_neg()
         .ok_or_else(|| bad_request("金额超出范围"))?;
@@ -675,13 +568,24 @@ pub async fn delete_person(
     {
         return Err((StatusCode::NOT_FOUND, "借贷对象不存在".into()));
     }
-    let mut balance_changes: HashMap<i64, i64> = HashMap::new();
-    for record in debt_record::Entity::find()
+    if debt_request::Entity::find()
+        .filter(debt_request::Column::PersonId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request("借贷对象已关联请求与证明，不能删除"));
+    }
+    let records = debt_record::Entity::find()
         .filter(debt_record::Column::PersonId.eq(id))
         .all(&state.db)
         .await
-        .map_err(err500)?
-    {
+        .map_err(err500)?;
+    let record_ids: Vec<_> = records.iter().map(|record| record.id).collect();
+    ensure_records_unbound(&state, &record_ids).await?;
+    let mut balance_changes: HashMap<i64, i64> = HashMap::new();
+    for record in records {
         let delta = account_delta(&record.kind, crypto::decrypt_cents(&dek, &record.amount))?
             .checked_neg()
             .ok_or_else(|| bad_request("金额超出范围"))?;

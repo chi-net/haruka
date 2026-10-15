@@ -69,11 +69,6 @@ struct CategoryOption {
     name: String,
 }
 
-struct PersonOption {
-    id: i64,
-    name: String,
-}
-
 #[derive(Template)]
 #[template(path = "bills.html")]
 struct BillsTemplate {
@@ -110,7 +105,6 @@ struct BillsTemplate {
 struct QuickEntryPageTemplate {
     accounts: Vec<AccountOption>,
     transfer_sources: Vec<AccountOption>,
-    people: Vec<PersonOption>,
     categories: Vec<CategoryOption>,
     happened_at: String,
     quick_entry_heading: String,
@@ -480,27 +474,13 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
         .collect())
 }
 
-async fn people_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<Vec<PersonOption>> {
-    Ok(debt_person::Entity::find()
-        .order_by_asc(debt_person::Column::Id)
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-        .into_iter()
-        .map(|person| PersonOption {
-            id: person.id,
-            name: crypto::decrypt_string(dek, &person.name),
-        })
-        .collect())
-}
-
 pub(crate) fn account_display_name(
     dek: &crypto::Dek,
     account: &account::Model,
     detail: Option<&account_detail::Model>,
 ) -> String {
     let mut name = crypto::decrypt_string(dek, &account.name);
-    append_account_identity(dek, account, detail, &mut name);
+    append_account_identity(dek, detail, &mut name);
     name
 }
 
@@ -509,36 +489,49 @@ pub(crate) fn account_display_names(
     accounts: &[account::Model],
     details: &HashMap<i64, account_detail::Model>,
 ) -> HashMap<i64, String> {
-    let mut names = crate::investment_funds::display_names(dek, accounts);
-    for account in accounts {
-        if let Some(name) = names.get_mut(&account.id) {
-            append_account_identity(dek, account, details.get(&account.id), name);
+    let mut names: HashMap<_, _> = accounts
+        .iter()
+        .map(|account| {
+            (
+                account.id,
+                account_display_name(dek, account, details.get(&account.id)),
+            )
+        })
+        .collect();
+    for account in accounts
+        .iter()
+        .filter(|account| account.parent_id.is_some())
+    {
+        if let Some(parent_name) = account.parent_id.and_then(|id| names.get(&id)) {
+            if let Some(name) = names.get(&account.id) {
+                let label = format!("{parent_name} / {name}");
+                names.insert(account.id, label);
+            }
         }
     }
     names
 }
 
-pub(crate) fn append_account_identity(
+fn append_account_identity(
     dek: &crypto::Dek,
-    account: &account::Model,
     detail: Option<&account_detail::Model>,
     name: &mut String,
 ) {
     if let Some(detail) = detail {
         let card_number = crypto::decrypt_string(dek, &detail.card_number);
         if !card_number.is_empty() {
-            name.push_str(" · 卡号 ");
+            name.push('(');
             name.push_str(&super::mask_card_number(&card_number));
+            name.push(')');
         } else {
             let username = crypto::decrypt_string(dek, &detail.account_username);
             if !username.is_empty() {
-                name.push_str(" · 用户名 ");
+                name.push('(');
                 name.push_str(&super::mask_account_username(&username));
+                name.push(')');
             }
         }
     }
-    name.push_str(" · ");
-    name.push_str(&account.currency);
 }
 
 fn debt_kind_label(kind: &str) -> &'static str {
@@ -741,11 +734,12 @@ pub(crate) async fn ledger_rows(
         });
     }
 
-    for record in debt_record::Entity::find()
+    let debt_records = debt_record::Entity::find()
         .all(&state.db)
         .await
-        .map_err(err500)?
-    {
+        .map_err(err500)?;
+    let debt_request_ids = super::debts::request_ids_for_records(state, &debt_records).await?;
+    for record in debt_records {
         let incoming = matches!(record.kind.as_str(), "borrow" | "repayment_received");
         let amount = crypto::decrypt_cents(dek, &record.amount);
         let record_currency = account_currencies
@@ -753,6 +747,7 @@ pub(crate) async fn ledger_rows(
             .map(String::as_str)
             .unwrap_or(&default_currency);
         let converted = rates.convert(amount, record_currency).map_err(err500)?;
+        let request_id = debt_request_ids.get(&record.id).copied().flatten();
         rows.push(LedgerRow {
             happened_at: record.happened_at.format(TIME_FMT).to_string(),
             record_type: debt_kind_label(&record.kind).into(),
@@ -778,8 +773,14 @@ pub(crate) async fn ledger_rows(
             .into(),
             edit_url: String::new(),
             share_url: String::new(),
-            detail_url: String::new(),
-            delete_action: format!("/debts/{}/delete", record.id),
+            detail_url: request_id
+                .map(|id| format!("/debt-requests#debt-request-{id}"))
+                .unwrap_or_default(),
+            delete_action: if request_id.is_some() {
+                String::new()
+            } else {
+                format!("/debts/{}/delete", record.id)
+            },
             delete_confirm: "确认删除这条借还记录？".into(),
             sort_key: record.happened_at,
             bill_kind: String::new(),
@@ -1160,7 +1161,6 @@ pub async fn new_form(
     let html = QuickEntryPageTemplate {
         accounts,
         transfer_sources,
-        people: people_options(&state, &dek).await?,
         categories: category_options(&state, &dek).await?,
         happened_at: chrono::Utc::now().naive_utc().format(TIME_FMT).to_string(),
         quick_entry_heading: "记一笔".into(),

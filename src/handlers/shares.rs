@@ -241,11 +241,21 @@ async fn bill_summary(
             .await
             .map_err(err500)?
             .ok_or_else(|| err500("基金投资分类不存在"))?;
-        let mut name = crypto::decrypt_string(dek, &parent.name);
-        name.push_str(" / ");
-        name.push_str(&crypto::decrypt_string(dek, &account.name));
-        super::bills::append_account_identity(dek, &account, detail.as_ref(), &mut name);
-        name
+        let parent_detail = account_detail::Entity::find_by_id(parent.id)
+            .one(&state.db)
+            .await
+            .map_err(err500)?;
+        let account_id = account.id;
+        let mut names = super::bills::account_display_names(
+            dek,
+            &[parent, account],
+            &parent_detail
+                .into_iter()
+                .chain(detail)
+                .map(|detail| (detail.account_id, detail))
+                .collect(),
+        );
+        names.remove(&account_id).unwrap_or_default()
     } else {
         super::bills::account_display_name(dek, &account, detail.as_ref())
     };

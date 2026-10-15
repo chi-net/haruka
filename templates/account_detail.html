@@ -14,7 +14,7 @@
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium mb-3">账户信息</h2>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-    <button type="button" data-copy-row data-copy-label="账户名" class="text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
+    <button type="button" data-copy-row data-copy-label="账户名" data-copy-text="{{ raw_name }}" class="text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
       <span class="block text-xs text-gray-500">账户名</span><span data-copy-value class="block mt-1 font-medium break-all">{{ name }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制账户名</span>
     </button>
     {% if !card_number_masked.is_empty() %}
@@ -23,8 +23,8 @@
     </button>
     {% endif %}
     {% if !account_username.is_empty() %}
-    <button type="button" data-copy-row data-copy-label="用户名" class="text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
-      <span class="block text-xs text-gray-500">完整用户名</span><span data-copy-value class="block mt-1 break-all">{{ account_username }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制用户名</span>
+    <button type="button" data-copy-row data-copy-label="用户名" data-copy-card-url="/accounts/{{ id }}/account-username" data-copy-field="account_username" class="text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
+      <span class="block text-xs text-gray-500">账户用户名末尾</span><span class="block mt-1 break-all">{{ account_username }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">点击复制完整用户名</span>
     </button>
     {% endif %}
     {% if !credit_summary.is_empty() %}<div class="rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">授信设置</div><div class="mt-1">{{ credit_summary }}</div></div>{% endif %}
@@ -54,7 +54,7 @@
     <thead class="bg-gray-50 text-gray-500"><tr><th class="text-left px-4 py-2 font-medium">时间</th><th class="text-left px-4 py-2 font-medium">类型</th><th class="text-left px-4 py-2 font-medium">分类 / 对方</th><th class="text-left px-4 py-2 font-medium">备注</th><th class="text-right px-4 py-2 font-medium">金额</th><th class="px-4 py-2"></th></tr></thead>
     <tbody class="divide-y divide-gray-100">
       {% for record in records %}
-      <tr><td class="px-4 py-2 text-gray-500 whitespace-nowrap"><time data-utc-time="{{ record.happened_at }}">{{ record.happened_at }}</time></td><td class="px-4 py-2 whitespace-nowrap">{{ record.record_type }}</td><td class="px-4 py-2">{{ record.subject }}</td><td class="px-4 py-2 text-gray-500">{{ record.note }}</td><td class="px-4 py-2 text-right font-mono whitespace-nowrap {{ record.money_class }}">{{ record.amount }}</td><td class="px-4 py-2 text-right whitespace-nowrap">{% if !record.detail_url.is_empty() %}<a href="{{ record.detail_url }}" class="text-blue-600 hover:underline">查看分期</a>{% endif %}</td></tr>
+      <tr><td class="px-4 py-2 text-gray-500 whitespace-nowrap"><time data-utc-time="{{ record.happened_at }}">{{ record.happened_at }}</time></td><td class="px-4 py-2 whitespace-nowrap">{{ record.record_type }}</td><td class="px-4 py-2">{{ record.subject }}</td><td class="px-4 py-2 text-gray-500">{{ record.note }}</td><td class="px-4 py-2 text-right font-mono whitespace-nowrap {{ record.money_class }}">{{ record.amount }}</td><td class="px-4 py-2 text-right whitespace-nowrap">{% if !record.detail_url.is_empty() %}<a href="{{ record.detail_url }}" class="text-blue-600 hover:underline">{% if record.detail_url.starts_with("/debt-requests") %}借还请求与证明{% else %}查看分期{% endif %}</a>{% endif %}</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -84,21 +84,21 @@
     try {
       let value;
       if (row.dataset.copyCardUrl) {
-        status.textContent = '正在读取卡号…';
+        status.textContent = '正在读取标识…';
         const response = await fetch(row.dataset.copyCardUrl, {
           method: 'POST',
           headers: { Accept: 'application/json' }
         });
         if (!response.ok) throw new Error(await window.harukaReadErrorResponse(response));
-        value = (await response.json()).card_number;
+        value = (await response.json())[row.dataset.copyField || 'card_number'];
       } else {
-        value = row.querySelector('[data-copy-value]').textContent.trim();
+        value = row.dataset.copyText ?? row.querySelector('[data-copy-value]').textContent.trim();
       }
       if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(value);
       else fallbackCopy(value);
       status.textContent = `${row.dataset.copyLabel}已复制`;
       window.setTimeout(() => {
-        status.textContent = row.dataset.copyCardUrl ? '点击复制完整卡号' : `复制${row.dataset.copyLabel}`;
+        status.textContent = row.dataset.copyCardUrl ? `点击复制完整${row.dataset.copyLabel}` : `复制${row.dataset.copyLabel}`;
       }, 1600);
     } catch (error) {
       window.harukaShowError(error.message || '复制失败，请手动选择文本复制。');

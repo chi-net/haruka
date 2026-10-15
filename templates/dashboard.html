@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block title %}仪表板 - Haruka{% endblock %}
 {% block content %}
-<div class="mb-5">
+<div class="mb-5 flex items-center justify-between gap-3">
   <h1 class="text-xl font-bold">仪表板</h1>
+  <a href="/bills/new" class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">记一笔</a>
 </div>
 
 <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
@@ -166,8 +167,6 @@
     {% endfor %}
   </div>
 </section>{% endif %}
-
-{% include "quick_entry.html" %}
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <div class="flex flex-wrap items-center justify-between gap-3 mb-4">

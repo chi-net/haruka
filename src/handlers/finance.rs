@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     crypto, currency,
-    entity::{account, bill, financial_plan, recurring_investment},
+    entity::{account, account_detail, bill, financial_plan, recurring_investment},
     financial_planning::{self as planning, Config, LinkedPlan, Saved},
     investment_funds, AppState, SessionDek,
 };
@@ -359,7 +359,14 @@ async fn proposal(
         }
         Err(error) => return Err(error),
     };
-    let names = investment_funds::display_names(dek, &accounts);
+    let details = account_detail::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|detail| (detail.account_id, detail))
+        .collect();
+    let names = super::bills::account_display_names(dek, &accounts, &details);
     let (income, inferred) = infer_income(state, dek, zone, config, &by_id).await?;
     let basis = if config.manual_monthly_income.is_empty() {
         inferred

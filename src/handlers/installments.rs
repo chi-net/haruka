@@ -698,7 +698,7 @@ pub async fn detail(
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let mut repayment_account_names =
+    let repayment_account_names =
         super::bills::account_display_names(&dek, &account_models, &account_details);
     let repayment_account_models = account_models.into_iter().filter(|candidate| {
         crate::investment_funds::is_money_account(candidate)
@@ -710,7 +710,8 @@ pub async fn detail(
         .map(|candidate| RepaymentAccountOption {
             id: candidate.id,
             name: repayment_account_names
-                .remove(&candidate.id)
+                .get(&candidate.id)
+                .cloned()
                 .unwrap_or_default(),
         })
         .collect();

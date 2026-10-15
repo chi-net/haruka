@@ -2,11 +2,10 @@
   <h2 class="mb-4 text-lg font-semibold">{{ quick_entry_heading }}</h2>
   <noscript>{% include "quick_entry_fallback.html" %}</noscript>
   <div id="quick-entry-enhanced" hidden>
-    <div class="mb-5 grid grid-cols-4 gap-2" role="group" aria-label="记账类型">
+    <div class="mb-5 grid grid-cols-3 gap-2" role="group" aria-label="记账类型">
       <button type="button" data-quick-mode="expense" aria-pressed="true" class="rounded-lg border border-blue-600 bg-blue-50 px-2 py-2 text-sm font-medium text-blue-700">支出</button>
       <button type="button" data-quick-mode="income" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">收入</button>
       <button type="button" data-quick-mode="transfer" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">转账</button>
-      <button type="button" data-quick-mode="debt" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">借还</button>
     </div>
     <form id="quick-form" method="post" action="/bills" data-quick-form="bill" hx-boost="false" class="space-y-4">
       <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
@@ -18,10 +17,6 @@
       <fieldset data-quick-fields="transfer" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
         <div><label for="quick-transfer-from" class="mb-1 block text-xs text-gray-500">转出账户</label><select id="quick-transfer-from" name="from_account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in transfer_sources %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}" data-transfer-fee-rate="{{ a.transfer_fee_rate }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-from" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
         <div><label for="quick-transfer-to" class="mb-1 block text-xs text-gray-500">转入账户</label><select id="quick-transfer-to" name="to_account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-to" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
-      </fieldset>
-      <fieldset data-quick-fields="debt" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
-        <div><label for="quick-debt-account" class="mb-1 block text-xs text-gray-500">资金账户</label><select id="quick-debt-account" name="account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-debt-account" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
-        <div><div class="grid grid-cols-2 gap-2"><div><label for="quick-debt-person" class="mb-1 block text-xs text-gray-500">借贷对象</label><select id="quick-debt-person" name="person_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for p in people %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></div><div><label for="quick-debt-kind" class="mb-1 block text-xs text-gray-500">操作</label><select id="quick-debt-kind" name="kind" class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"><option value="lend">借给对方</option><option value="borrow">向对方借入</option><option value="repayment_received">对方还我</option><option value="repayment_paid">我还对方</option></select></div></div><p class="mt-1 text-xs"><a href="/debt-people" class="text-blue-600 hover:underline">管理借贷对象</a></p></div>
       </fieldset>
       <p id="quick-entry-unavailable" class="hidden text-sm text-amber-700" role="status"></p>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -114,10 +109,9 @@
   const unavailable = document.getElementById('quick-entry-unavailable');
   const updateAvailable = () => {
     const family = form.dataset.quickForm;
-    const account = document.getElementById(family === 'transfer' ? 'quick-transfer-from' : family === 'debt' ? 'quick-debt-account' : 'quick-bill-account');
+    const account = document.getElementById(family === 'transfer' ? 'quick-transfer-from' : 'quick-bill-account');
     let message = account.options.length ? '' : '请先创建可用的资金账户。';
     if (family === 'transfer' && document.getElementById('quick-transfer-to').options.length < 2) message = '转账至少需要两个账户。';
-    if (family === 'debt' && !document.getElementById('quick-debt-person').options.length) message = '请先通过“管理借贷对象”添加借款人或出借人。';
     if (family === 'bill' && !Array.from(document.getElementById('quick-bill-category').options).some(option => !option.disabled)) message = '请先在“分类”页面添加对应的收支分类。';
     unavailable.textContent = message;
     unavailable.classList.toggle('hidden', !message);
@@ -125,17 +119,17 @@
     const editing = root.dataset.editingDraft === 'true';
     submit.disabled = busy || !!message || editing;
     batch.disabled = busy || !!message;
-    buttons.forEach(button => button.disabled = busy || (editing && ['transfer', 'debt'].includes(button.dataset.quickMode)));
+    buttons.forEach(button => button.disabled = busy || (editing && button.dataset.quickMode === 'transfer'));
     const currency = account.selectedOptions[0]?.dataset.currency || '';
     amountLabel.textContent = `${family === 'transfer' ? '转出金额' : '金额'}${currency ? `（${currency}）` : ''}`;
   };
   const selectMode = mode => {
-    if (root.dataset.submitting === 'true' || !['expense', 'income', 'transfer', 'debt'].includes(mode)) return;
-    if (root.dataset.editingDraft === 'true' && ['transfer', 'debt'].includes(mode)) return;
+    if (root.dataset.submitting === 'true' || !['expense', 'income', 'transfer'].includes(mode)) return;
+    if (root.dataset.editingDraft === 'true' && mode === 'transfer') return;
     const family = mode === 'expense' || mode === 'income' ? 'bill' : mode;
     root.dataset.mode = mode;
     form.dataset.quickForm = family;
-    form.action = family === 'bill' ? '/bills' : family === 'transfer' ? '/transfers' : '/debts';
+    form.action = family === 'bill' ? '/bills' : '/transfers';
     root.querySelectorAll('[data-quick-fields]').forEach(fieldset => {
       const active = fieldset.dataset.quickFields === family;
       fieldset.disabled = !active;
@@ -153,7 +147,7 @@
     });
     document.getElementById('quick-bill-tools').classList.toggle('hidden', family !== 'bill');
     batch.classList.toggle('hidden', family !== 'bill');
-    submit.textContent = ({ expense: '保存支出', income: '保存收入', transfer: '确认转账', debt: '保存借还记录' })[mode];
+    submit.textContent = ({ expense: '保存支出', income: '保存收入', transfer: '确认转账' })[mode];
     if (family === 'bill') {
       kind.value = mode;
       kind.dispatchEvent(new Event('change', { bubbles: true }));

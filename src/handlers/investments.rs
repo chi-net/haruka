@@ -108,8 +108,9 @@ fn parse_nonnegative_amount(value: &str, field: &str) -> HandlerResult<i64> {
     if decimal < Decimal::ZERO {
         return Err(bad_request(format!("{field}不能小于 0")));
     }
-    (decimal * Decimal::from(100))
-        .to_i64()
+    decimal
+        .checked_mul(Decimal::from(100))
+        .and_then(|value| value.to_i64())
         .ok_or_else(|| bad_request(format!("{field}超出范围")))
 }
 
@@ -297,8 +298,9 @@ fn parse_amount(value: &str) -> HandlerResult<i64> {
     if decimal <= Decimal::ZERO {
         return Err(bad_request("定投金额必须大于 0"));
     }
-    (decimal * Decimal::from(100))
-        .to_i64()
+    decimal
+        .checked_mul(Decimal::from(100))
+        .and_then(|value| value.to_i64())
         .ok_or_else(|| bad_request("定投金额超出范围"))
 }
 
@@ -604,7 +606,14 @@ async fn account_options(state: &AppState, dek: &crypto::Dek) -> HandlerResult<V
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let mut names = investment_funds::display_names(dek, &accounts);
+    let details = account_detail::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|detail| (detail.account_id, detail))
+        .collect();
+    let mut names = super::bills::account_display_names(dek, &accounts, &details);
     Ok(accounts
         .into_iter()
         .filter(investment_funds::is_money_account)
@@ -622,7 +631,16 @@ async fn account_names(state: &AppState, dek: &crypto::Dek) -> HandlerResult<Has
         .all(&state.db)
         .await
         .map_err(err500)?;
-    Ok(investment_funds::display_names(dek, &accounts))
+    let details = account_detail::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|detail| (detail.account_id, detail))
+        .collect();
+    Ok(super::bills::account_display_names(
+        dek, &accounts, &details,
+    ))
 }
 
 pub(crate) async fn validate_plan_accounts(
@@ -2836,4 +2854,160 @@ pub async fn delete_closed_day(
         .await
         .map_err(err500)?;
     Ok(Redirect::to("/investments"))
+}
+
+#[cfg(test)]
+mod builtin_sms_tests {
+    use super::*;
+
+    fn parse_builtin(raw: &str, time: &str) -> HandlerResult<PendingSms> {
+        let envelope = parse_sms(SmsWebhookData {
+            time: time.into(),
+            raw: raw.into(),
+            sender: "95555".into(),
+        })?;
+        parse_builtin_sms(&envelope)
+    }
+
+    fn money_messages(amount: &str, balance: &str) -> [String; 3] {
+        [
+            format!(
+                "【招商银行】您尾号1234的账户于10月08日执行「示例基金」的定投计划，扣款{amount}元，活期余额{balance}元。"
+            ),
+            format!(
+                "【招商银行】您账户1234于10月08日12:30实时转至他行人民币{amount}元，余额{balance}元，收款人张三。"
+            ),
+            format!(
+                "【招商银行】您账户1234于10月08日12:30在信用卡还款-张三快捷支付{amount}元，余额{balance}元。"
+            ),
+        ]
+    }
+
+    fn money(sms: &PendingSms) -> (i64, Option<i64>) {
+        match &sms.kind {
+            SmsKind::Success { amount, balance } => (*amount, *balance),
+            SmsKind::BankTransfer {
+                amount, balance, ..
+            }
+            | SmsKind::QuickPayment {
+                amount, balance, ..
+            } => (*amount, Some(*balance)),
+            _ => panic!("expected a money-bearing built-in SMS"),
+        }
+    }
+
+    #[test]
+    fn builtin_templates_parse_expected_fields() {
+        let messages = money_messages("100.00", "900.00");
+        let parsed: Vec<_> = messages
+            .iter()
+            .map(|raw| parse_builtin(raw, "2026-10-08T12:30:00+08:00").unwrap())
+            .collect();
+        for sms in &parsed {
+            assert_eq!(sms.card_last4, "1234");
+            assert_eq!(sms.sms_date, NaiveDate::from_ymd_opt(2026, 10, 8).unwrap());
+            assert_eq!(money(sms), (10_000, Some(90_000)));
+        }
+        assert_eq!(parsed[0].fund_name, "示例基金");
+        assert!(matches!(parsed[0].kind, SmsKind::Success { .. }));
+        assert!(matches!(
+            &parsed[1].kind,
+            SmsKind::BankTransfer { recipient, .. } if recipient == "张三"
+        ));
+        assert!(matches!(
+            &parsed[2].kind,
+            SmsKind::QuickPayment { description, .. } if description == "信用卡还款-张三"
+        ));
+
+        let smart = messages[0].replace("的定投计划", "的聪明定投计划");
+        assert_eq!(
+            money(&parse_builtin(&smart, "2026-10-08T12:30:00+08:00").unwrap()),
+            (10_000, Some(90_000))
+        );
+        let failure = parse_builtin(
+            "【招商银行】您尾号1234的账户于10月08日存在1笔定投计划执行失败，原因：余额不足，涉及示例基金。",
+            "2026-10-08T12:30:00+08:00",
+        )
+        .unwrap();
+        assert_eq!(failure.card_last4, "1234");
+        assert_eq!(failure.fund_name, "示例基金");
+        assert!(matches!(
+            failure.kind,
+            SmsKind::Failure { reason } if reason == "余额不足，涉及示例基金"
+        ));
+    }
+
+    #[test]
+    fn builtin_money_preserves_cent_boundaries() {
+        for (amount, balance, expected) in [
+            ("0.01", "0", (1, Some(0))),
+            (
+                "92233720368547758.07",
+                "92233720368547758.07",
+                (i64::MAX, Some(i64::MAX)),
+            ),
+        ] {
+            for raw in money_messages(amount, balance) {
+                let sms = parse_builtin(&raw, "2026-10-08T12:30:00+08:00").unwrap();
+                assert_eq!(money(&sms), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn builtin_out_of_range_money_returns_bad_request_without_panicking() {
+        for out_of_range in [
+            "92233720368547758.08",
+            "79228162514264337593543950335",
+            "79228162514264337593543950336",
+        ] {
+            for (amount, balance) in [(out_of_range, "0"), ("1", out_of_range)] {
+                for raw in money_messages(amount, balance) {
+                    let error = match parse_builtin(&raw, "2026-10-08T12:30:00+08:00") {
+                        Ok(_) => panic!("out-of-range money must be rejected"),
+                        Err(error) => error,
+                    };
+                    assert_eq!(error.0, StatusCode::BAD_REQUEST);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn builtin_templates_retain_strict_amount_and_date_contract() {
+        for invalid_amount in ["0", "-1", "1.001"] {
+            for raw in money_messages(invalid_amount, "0") {
+                assert!(parse_builtin(&raw, "2026-10-08T12:30:00+08:00").is_err());
+            }
+        }
+        for raw in money_messages("1", "0") {
+            for invalid in [
+                raw.replace("【招商银行】", "【其他银行】"),
+                raw.replace("10月08日", "10月09日"),
+                raw.replace("10月08日", "02月30日"),
+            ] {
+                assert!(parse_builtin(&invalid, "2026-10-08T12:30:00+08:00").is_err());
+            }
+            assert!(parse_builtin(&raw, "2026-10-08T12:30:00").is_err());
+        }
+        for raw in &money_messages("1", "0")[1..] {
+            for invalid in [
+                raw.replace("12:30", "12:31"),
+                raw.replace("12:30", "24:30"),
+                raw.replace("12:30", "12:60"),
+            ] {
+                assert!(parse_builtin(&invalid, "2026-10-08T12:30:00+08:00").is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn builtin_dates_use_beijing_day_instead_of_utc_day() {
+        for raw in money_messages("1", "0") {
+            let raw = raw.replace("12:30", "00:30");
+            let sms = parse_builtin(&raw, "2026-10-07T16:30:00Z").unwrap();
+            assert_eq!(sms.sms_date, NaiveDate::from_ymd_opt(2026, 10, 8).unwrap());
+            assert!(parse_builtin(&raw, "2026-10-08T16:30:00Z").is_err());
+        }
+    }
 }

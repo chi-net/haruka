@@ -1,7 +1,7 @@
 use super::accounts;
 use crate::{
     crypto, currency,
-    entity::{account, balance_adjustment},
+    entity::{account, account_detail, balance_adjustment},
     investment_funds, AppState, SessionDek,
 };
 use askama::Template;
@@ -28,6 +28,22 @@ fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
 }
 fn bad(msg: &str) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, msg.into())
+}
+
+async fn root_display_name(
+    state: &AppState,
+    dek: &crypto::Dek,
+    root: &account::Model,
+) -> HandlerResult<String> {
+    let detail = account_detail::Entity::find_by_id(root.id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?;
+    Ok(super::bills::account_display_name(
+        dek,
+        root,
+        detail.as_ref(),
+    ))
 }
 
 async fn group(state: &AppState, id: i64) -> HandlerResult<account::Model> {
@@ -93,6 +109,13 @@ async fn rows(
 ) -> HandlerResult<(Vec<FundRow>, i64)> {
     let mut rows = Vec::new();
     let mut total = 0i64;
+    let details: HashMap<_, _> = account_detail::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .map(|detail| (detail.account_id, detail))
+        .collect();
     for a in children(state, root).await? {
         let value = accounts::current_balance(state, dek, a.id).await?;
         total = total
@@ -103,7 +126,7 @@ async fn rows(
         aliases.remove(0);
         rows.push(FundRow {
             id: a.id,
-            name: crypto::decrypt_string(dek, &a.name),
+            name: super::bills::account_display_name(dek, &a, details.get(&a.id)),
             value: currency::format(value, &a.currency),
             target: super::fmt_cents(value),
             baseline: value,
@@ -134,7 +157,7 @@ pub async fn list(
     Ok(Html(
         FundsTemplate {
             id,
-            name: crypto::decrypt_string(&dek, &root.name),
+            name: root_display_name(&state, &dek, &root).await?,
             currency: root.currency.clone(),
             total: currency::format(total, &root.currency),
             funds,
@@ -191,7 +214,7 @@ pub async fn new_form(
             heading: "添加基金".into(),
             action: format!("/accounts/{id}/funds"),
             parent_id: id,
-            parent_name: crypto::decrypt_string(&dek, &root.name),
+            parent_name: root_display_name(&state, &dek, &root).await?,
             currency: root.currency,
             name: String::new(),
             aliases: String::new(),
@@ -245,7 +268,7 @@ pub async fn edit_form(
             heading: "编辑基金".into(),
             action: format!("/funds/{id}/edit"),
             parent_id: root.id,
-            parent_name: crypto::decrypt_string(&dek, &root.name),
+            parent_name: root_display_name(&state, &dek, &root).await?,
             currency: root.currency,
             name: crypto::decrypt_string(&dek, &a.name),
             aliases: aliases.join("\n"),
@@ -316,7 +339,7 @@ pub async fn valuation_form(
     Ok(Html(
         ValuationTemplate {
             id,
-            name: crypto::decrypt_string(&dek, &root.name),
+            name: root_display_name(&state, &dek, &root).await?,
             currency: root.currency.clone(),
             total: currency::format(total, &root.currency),
             funds,
