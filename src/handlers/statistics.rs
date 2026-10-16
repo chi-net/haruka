@@ -85,7 +85,10 @@ struct StatisticsTemplate {
     expense_active_days: usize,
     calendar_days: i64,
     food_expense: String,
-    food_share: String,
+    engel_coefficient: String,
+    public_expense: String,
+    surplus_rate: String,
+    expense_income_ratio: String,
     income_category_rankings: Vec<RankingRow>,
     expense_category_rankings: Vec<RankingRow>,
     income_account_rankings: Vec<RankingRow>,
@@ -96,6 +99,7 @@ struct StatisticsTemplate {
     has_cashflow: bool,
     has_income: bool,
     has_expense: bool,
+    has_public_expense: bool,
     trend_label: String,
     charts_json: String,
     default_currency: String,
@@ -199,6 +203,14 @@ fn percentage(part: i64, total: i64) -> String {
     (Decimal::from(part) * Decimal::from(100) / Decimal::from(total))
         .round_dp(1)
         .to_string()
+}
+
+fn financial_ratio(part: i64, total: i64) -> String {
+    if total <= 0 {
+        "—".into()
+    } else {
+        format!("{}%", percentage(part, total))
+    }
 }
 
 fn median(values: &mut [i64]) -> HandlerResult<i64> {
@@ -359,6 +371,7 @@ pub async fn show(
     let mut expense_amounts = Vec::new();
     let mut expense_orders = Vec::new();
     let mut food_expense = 0i64;
+    let mut public_expense = 0i64;
     for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
         let date = time_zone.date(bill.happened_at);
         if date < start_date || date > end_date {
@@ -422,12 +435,15 @@ pub async fn show(
                 .ok_or_else(|| err500("统计金额超出范围"))?;
             expense_active_dates.insert(date);
             expense_amounts.push(amount);
-            if !bill.is_private && bill.is_food {
-                food_expense = food_expense
+            if !bill.is_private {
+                public_expense = public_expense
                     .checked_add(amount)
                     .ok_or_else(|| err500("统计金额超出范围"))?;
-            }
-            if !bill.is_private {
+                if bill.is_food {
+                    food_expense = food_expense
+                        .checked_add(amount)
+                        .ok_or_else(|| err500("统计金额超出范围"))?;
+                }
                 expense_orders.push(ExpenseOrderValue {
                     id: bill.id,
                     amount,
@@ -512,7 +528,7 @@ pub async fn show(
         expense_accounts: chart_series(&expense_accounts),
         food_expenses: ChartSeries {
             labels: vec!["食品支出".into(), "其他支出".into()],
-            values: vec![food_expense, total_expense - food_expense],
+            values: vec![food_expense, public_expense - food_expense],
         },
         expense_weekdays: expense_weekday_chart,
         trend,
@@ -540,7 +556,10 @@ pub async fn show(
         expense_active_days: expense_active_dates.len(),
         calendar_days,
         food_expense: currency::format(food_expense, &default_currency),
-        food_share: percentage(food_expense, total_expense),
+        engel_coefficient: financial_ratio(food_expense, public_expense),
+        public_expense: currency::format(public_expense, &default_currency),
+        surplus_rate: financial_ratio(net, total_income),
+        expense_income_ratio: financial_ratio(total_expense, total_income),
         income_category_rankings: ranking_rows(income_categories, total_income, &default_currency),
         expense_category_rankings: ranking_rows(
             expense_categories,
@@ -555,6 +574,7 @@ pub async fn show(
         has_cashflow: total_income > 0 || total_expense > 0,
         has_income: total_income > 0,
         has_expense: total_expense > 0,
+        has_public_expense: public_expense > 0,
         trend_label,
         charts_json,
         default_currency,
@@ -563,4 +583,19 @@ pub async fn show(
     .render()
     .map_err(err500)?;
     Ok(Html(html))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::financial_ratio;
+
+    #[test]
+    fn financial_ratios_distinguish_missing_basis_and_preserve_deficits() {
+        assert_eq!(financial_ratio(0, 0), "—");
+        assert_eq!(financial_ratio(200, 0), "—");
+        assert_eq!(financial_ratio(0, 100), "0%");
+        assert_eq!(financial_ratio(-100, 100), "-100%");
+        assert_eq!(financial_ratio(200, 100), "200%");
+        assert_eq!(financial_ratio(1, 3), "33.3%");
+    }
 }
