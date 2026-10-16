@@ -4,8 +4,7 @@ use axum::{
     http::StatusCode,
     response::{Html, Redirect},
 };
-use chrono::{Datelike, Duration, NaiveDate, Timelike};
-use rust_decimal::Decimal;
+use chrono::{Duration, NaiveDate, Timelike};
 use sea_orm::{EntityTrait, QueryOrder};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -96,7 +95,6 @@ struct BillValue {
     happened_at: chrono::DateTime<chrono_tz::Tz>,
     kind: String,
     amount: i64,
-    is_food: bool,
 }
 
 struct FundValuationReminder {
@@ -114,12 +112,10 @@ struct DashboardTemplate {
     credit_accounts: Vec<CreditAccountSummary>,
     auto_debit_warnings: Vec<AutoDebitWarning>,
     net_assets: String,
-    month_income: String,
-    month_expense: String,
+    total_income: String,
+    total_expense: String,
     receivable: String,
     payable: String,
-    engel_coefficient: String,
-    food_expense: String,
     reports_json: String,
     default_currency: String,
     time_zone: String,
@@ -653,41 +649,21 @@ pub async fn show(
                 amount: rates
                     .convert(native_amount, bill_currency)
                     .map_err(err500)?,
-                is_food: !bill.is_private && bill.is_food,
             })
         })
         .collect::<HandlerResult<Vec<_>>>()?;
-    let mut month_income = 0i64;
-    let mut month_expense = 0i64;
-    let mut food_expense = 0i64;
+    let mut total_income = 0i64;
+    let mut total_expense = 0i64;
     for bill in &bill_values {
-        let date = bill.happened_at.date_naive();
-        if date <= today && date.year() == today.year() && date.month() == today.month() {
-            if bill.kind == "income" {
-                month_income = month_income
-                    .checked_add(bill.amount)
-                    .ok_or_else(|| err500("报表金额超出范围"))?;
-            } else {
-                month_expense = month_expense
-                    .checked_add(bill.amount)
-                    .ok_or_else(|| err500("报表金额超出范围"))?;
-                if bill.is_food {
-                    food_expense = food_expense
-                        .checked_add(bill.amount)
-                        .ok_or_else(|| err500("报表金额超出范围"))?;
-                }
-            }
-        }
+        let target = if bill.kind == "income" {
+            &mut total_income
+        } else {
+            &mut total_expense
+        };
+        *target = target
+            .checked_add(bill.amount)
+            .ok_or_else(|| err500("报表金额超出范围"))?;
     }
-    let engel_coefficient = if month_expense == 0 {
-        "—".into()
-    } else {
-        format!(
-            "{}%",
-            (Decimal::from(food_expense) * Decimal::from(100) / Decimal::from(month_expense))
-                .round_dp(1)
-        )
-    };
     let reports_json =
         serde_json::to_string(&build_reports(today, &bill_values)?).map_err(err500)?;
     let budget_statuses = super::budgets::current_statuses(&state, &dek, time_zone).await?;
@@ -696,12 +672,10 @@ pub async fn show(
         credit_accounts,
         auto_debit_warnings,
         net_assets: currency::format(net_assets, &default_currency),
-        month_income: currency::format(month_income, &default_currency),
-        month_expense: currency::format(month_expense, &default_currency),
+        total_income: currency::format(total_income, &default_currency),
+        total_expense: currency::format(total_expense, &default_currency),
         receivable: currency::format(receivable, &default_currency),
         payable: currency::format(payable, &default_currency),
-        engel_coefficient,
-        food_expense: currency::format(food_expense, &default_currency),
         reports_json,
         default_currency,
         time_zone: time_zone.0.name().into(),

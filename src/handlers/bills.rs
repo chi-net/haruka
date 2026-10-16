@@ -5,7 +5,7 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     Form, Json,
 };
-use chrono::NaiveDateTime;
+use chrono::{Datelike, NaiveDateTime};
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
@@ -54,6 +54,7 @@ pub(crate) struct LedgerRow {
     pub(crate) bill_kind: String,
     pub(crate) amount_cents: i64,
     pub(crate) is_expense: bool,
+    pub(crate) is_food: bool,
 }
 
 #[derive(Clone)]
@@ -79,9 +80,9 @@ struct BillsTemplate {
     search_action: String,
     export_action: String,
     records: Vec<LedgerRow>,
-    total_income: String,
-    total_expense: String,
-    net: String,
+    month_income: String,
+    month_expense: String,
+    engel_coefficient: String,
     search_mode: String,
     start_date: String,
     end_date: String,
@@ -710,6 +711,7 @@ pub(crate) async fn ledger_rows(
             bill_kind: bill.kind,
             amount_cents: converted,
             is_expense: !incoming,
+            is_food: bill.is_food,
         });
     }
     if private_mode {
@@ -780,6 +782,7 @@ pub(crate) async fn ledger_rows(
             bill_kind: String::new(),
             amount_cents: rates.convert(amount, from_currency).map_err(err500)?,
             is_expense: false,
+            is_food: false,
         });
     }
 
@@ -836,6 +839,7 @@ pub(crate) async fn ledger_rows(
             bill_kind: String::new(),
             amount_cents: converted,
             is_expense: false,
+            is_food: false,
         });
     }
 
@@ -875,6 +879,7 @@ pub(crate) async fn ledger_rows(
             bill_kind: String::new(),
             amount_cents: 0,
             is_expense: false,
+            is_food: false,
         });
     }
 
@@ -1095,28 +1100,44 @@ async fn render_list(
     let filter = LedgerFilter::from_query(&query, time_zone)?;
     let has_filters = filter.is_active();
     let default_currency = currency::default_currency(state).await.map_err(err500)?;
-    let all_records = ledger_rows(state, dek, time_zone, private_mode)
-        .await?
-        .into_iter()
-        .filter(|row| filter.matches(row))
-        .collect::<Vec<_>>();
-    let mut total_income: i64 = 0;
-    let mut total_expense: i64 = 0;
-    for row in &all_records {
+    let mut all_records = ledger_rows(state, dek, time_zone, private_mode).await?;
+    let today = time_zone.today();
+    let month_start = today
+        .with_day(1)
+        .ok_or_else(|| err500("无法计算本月起始日"))?;
+    let mut month_income = 0i64;
+    let mut month_expense = 0i64;
+    let mut food_expense = 0i64;
+    for row in all_records.iter().filter(|row| !row.bill_kind.is_empty()) {
+        let date = time_zone.date(row.sort_key);
+        if date < month_start || date > today {
+            continue;
+        }
         if row.bill_kind == "income" {
-            total_income = total_income
+            month_income = month_income
                 .checked_add(row.amount_cents)
                 .ok_or_else(|| err500("汇总金额超出范围"))?;
         } else if row.bill_kind == "expense" {
-            total_expense = total_expense
+            month_expense = month_expense
                 .checked_add(row.amount_cents)
                 .ok_or_else(|| err500("汇总金额超出范围"))?;
+            if row.is_food {
+                food_expense = food_expense
+                    .checked_add(row.amount_cents)
+                    .ok_or_else(|| err500("汇总金额超出范围"))?;
+            }
         }
     }
-
-    let net = total_income
-        .checked_sub(total_expense)
-        .ok_or_else(|| err500("汇总金额超出范围"))?;
+    let engel_coefficient = if month_expense == 0 {
+        "—".into()
+    } else {
+        format!(
+            "{}%",
+            (Decimal::from(food_expense) * Decimal::from(100) / Decimal::from(month_expense))
+                .round_dp(1)
+        )
+    };
+    all_records.retain(|row| filter.matches(row));
     let total_records = all_records.len();
     let pagination = super::pagination(total_records, query.page, query.per_page);
     let records = all_records
@@ -1153,9 +1174,9 @@ async fn render_list(
             "/bills/export.csv".into()
         },
         records,
-        total_income: currency::format(total_income, &default_currency),
-        total_expense: currency::format(total_expense, &default_currency),
-        net: currency::format(net, &default_currency),
+        month_income: currency::format(month_income, &default_currency),
+        month_expense: currency::format(month_expense, &default_currency),
+        engel_coefficient,
         search_mode: if query.mode == "or" { "or" } else { "and" }.into(),
         start_date: query.start_date.clone(),
         end_date: query.end_date.clone(),

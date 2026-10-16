@@ -5,13 +5,12 @@
   <h1 class="text-xl font-bold">仪表板</h1>
 </div>
 
-<div class="grid grid-cols-2 lg:grid-cols-6 gap-3 mb-5">
+<div class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
   <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">账户净额</div><div class="font-mono mt-1">{{ net_assets }}</div></div>
-  <div class="bg-green-50 rounded-lg border border-green-200 p-3"><div class="text-xs text-green-700">本月收入</div><div class="font-mono text-green-700 mt-1">+{{ month_income }}</div></div>
-  <div class="bg-red-50 rounded-lg border border-red-200 p-3"><div class="text-xs text-red-700">本月支出</div><div class="font-mono text-red-700 mt-1">-{{ month_expense }}</div></div>
+  <div class="bg-green-50 rounded-lg border border-green-200 p-3"><div class="text-xs text-green-700">总收入</div><div class="font-mono text-green-700 mt-1">+{{ total_income }}</div></div>
+  <div class="bg-red-50 rounded-lg border border-red-200 p-3"><div class="text-xs text-red-700">总支出</div><div class="font-mono text-red-700 mt-1">-{{ total_expense }}</div></div>
   <div class="bg-blue-50 rounded-lg border border-blue-200 p-3"><div class="text-xs text-blue-700">待收回</div><div class="font-mono text-blue-700 mt-1">{{ receivable }}</div></div>
   <div class="bg-amber-50 rounded-lg border border-amber-200 p-3"><div class="text-xs text-amber-700">待归还</div><div class="font-mono text-amber-700 mt-1">{{ payable }}</div></div>
-  <div class="bg-white rounded-lg border border-gray-200 p-3" title="本月食品类支出 {{ food_expense }} ÷ 本月总支出 {{ month_expense }}"><div class="text-xs text-gray-500">恩格尔系数</div><div class="font-mono mt-1">{{ engel_coefficient }}</div></div>
 </div>
 
 <div id="auto-debit-run-status" class="hidden mb-5 rounded-lg border p-4 text-sm" role="status" aria-live="polite"></div>

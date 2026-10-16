@@ -32,18 +32,19 @@
 </div>
 <div class="grid grid-cols-3 gap-3 mb-4 text-center">
   <div class="bg-white rounded-lg border border-gray-200 py-3">
-    <div class="text-xs text-gray-500">总收入</div>
-    <div class="font-mono text-green-600">+{{ total_income }}</div>
+    <div class="text-xs text-gray-500">本月收入</div>
+    <div class="font-mono text-green-600">+{{ month_income }}</div>
   </div>
   <div class="bg-white rounded-lg border border-gray-200 py-3">
-    <div class="text-xs text-gray-500">总支出</div>
-    <div class="font-mono text-red-600">-{{ total_expense }}</div>
+    <div class="text-xs text-gray-500">本月支出</div>
+    <div class="font-mono text-red-600">-{{ month_expense }}</div>
   </div>
-  <div class="bg-white rounded-lg border border-gray-200 py-3">
-    <div class="text-xs text-gray-500">结余</div>
-    <div class="font-mono">{{ net }}</div>
+  <div class="bg-white rounded-lg border border-gray-200 py-3" title="本月食品类支出 ÷ 本月总支出">
+    <div class="text-xs text-gray-500">本月恩格尔系数</div>
+    <div class="font-mono">{{ engel_coefficient }}</div>
   </div>
 </div>
+<p class="text-xs text-gray-500 mb-4">按 {{ time_zone }} 本月截至今日统计，不随下方筛选或分页变化；{% if private_mode %}仅统计隐私账单{% else %}不含隐私账单{% endif %}，不计转账和借还。</p>
 <form method="get" action="{{ search_action }}" class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
   <input type="hidden" name="time_zone" value="{{ time_zone }}">
   <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
