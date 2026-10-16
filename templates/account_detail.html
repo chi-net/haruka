@@ -14,17 +14,17 @@
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium mb-3">账户信息</h2>
   <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-    <button type="button" data-copy-row data-copy-label="账户名" data-copy-text="{{ raw_name }}" class="text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
-      <span class="block text-xs text-gray-500">账户名</span><span data-copy-value class="block mt-1 font-medium break-all">{{ name }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制账户名</span>
+    <button type="button" data-copy-row data-copy-label="账户名" class="min-h-11 text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
+      <span class="block text-xs text-gray-500">账户名</span><span data-copy-value class="block mt-1 font-medium break-all select-text">{{ raw_name }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制账户名</span>
     </button>
-    {% if !card_number_masked.is_empty() %}
-    <button type="button" data-copy-row data-copy-label="卡号" data-copy-card-url="/accounts/{{ id }}/card-number" class="text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
-      <span class="block text-xs text-gray-500">银行卡号</span><span class="block mt-1 font-mono break-all">{{ card_number_masked }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">点击复制完整卡号</span>
+    {% if !card_number.is_empty() %}
+    <button type="button" data-copy-row data-copy-label="卡号" class="min-h-11 text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
+      <span class="block text-xs text-gray-500">银行卡号</span><span data-copy-value class="block mt-1 font-mono break-all select-text">{{ card_number }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制完整卡号</span>
     </button>
     {% endif %}
     {% if !account_username.is_empty() %}
-    <button type="button" data-copy-row data-copy-label="用户名" data-copy-card-url="/accounts/{{ id }}/account-username" data-copy-field="account_username" class="text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
-      <span class="block text-xs text-gray-500">账户用户名末尾</span><span class="block mt-1 break-all">{{ account_username }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">点击复制完整用户名</span>
+    <button type="button" data-copy-row data-copy-label="用户名" class="min-h-11 text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
+      <span class="block text-xs text-gray-500">账户用户名</span><span data-copy-value class="block mt-1 break-all select-text">{{ account_username }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制完整用户名</span>
     </button>
     {% endif %}
     {% if !credit_summary.is_empty() %}<div class="rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">授信设置</div><div class="mt-1">{{ credit_summary }}</div></div>{% endif %}
@@ -67,41 +67,45 @@
   if (window.harukaAccountCopyBound) return;
   window.harukaAccountCopyBound = true;
   const fallbackCopy = text => {
+    const active = document.activeElement;
     const area = document.createElement('textarea');
     area.value = text;
-    area.style.position = 'fixed';
-    area.style.opacity = '0';
+    area.readOnly = true;
+    area.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;font-size:16px;';
     document.body.appendChild(area);
-    area.select();
-    const copied = document.execCommand('copy');
-    area.remove();
-    if (!copied) throw new Error('浏览器拒绝了复制操作');
+    try {
+      area.focus({ preventScroll: true });
+      area.select();
+      area.setSelectionRange(0, text.length);
+      if (!document.execCommand('copy')) throw new Error('浏览器拒绝了复制操作，请长按完整内容手动复制。');
+    } finally {
+      area.remove();
+      if (active instanceof HTMLElement && active.isConnected) active.focus({ preventScroll: true });
+    }
   };
   document.addEventListener('click', async event => {
     const row = event.target.closest('[data-copy-row]');
     if (!row) return;
     const status = row.querySelector('[data-copy-status]');
+    const value = row.querySelector('[data-copy-value]').textContent.trim();
     try {
-      let value;
-      if (row.dataset.copyCardUrl) {
-        status.textContent = '正在读取标识…';
-        const response = await fetch(row.dataset.copyCardUrl, {
-          method: 'POST',
-          headers: { Accept: 'application/json' }
-        });
-        if (!response.ok) throw new Error(await window.harukaReadErrorResponse(response));
-        value = (await response.json())[row.dataset.copyField || 'card_number'];
+      // Invoke the Clipboard API inside the tap gesture, without a preceding fetch.
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(value);
+        } catch (_) {
+          fallbackCopy(value);
+        }
       } else {
-        value = row.dataset.copyText ?? row.querySelector('[data-copy-value]').textContent.trim();
+        fallbackCopy(value);
       }
-      if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(value);
-      else fallbackCopy(value);
       status.textContent = `${row.dataset.copyLabel}已复制`;
       window.setTimeout(() => {
-        status.textContent = row.dataset.copyCardUrl ? `点击复制完整${row.dataset.copyLabel}` : `复制${row.dataset.copyLabel}`;
+        if (status.isConnected) status.textContent = `复制${row.dataset.copyLabel === '账户名' ? '' : '完整'}${row.dataset.copyLabel}`;
       }, 1600);
     } catch (error) {
-      window.harukaShowError(error.message || '复制失败，请手动选择文本复制。');
+      status.textContent = '复制失败，可长按上方完整内容手动复制';
+      window.harukaShowError(error.message || '复制失败，请长按完整内容手动复制。');
     }
   });
 })();

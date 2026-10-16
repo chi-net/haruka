@@ -381,14 +381,6 @@ async fn main() {
         )
         .route("/accounts/new", get(handlers::accounts::new_form))
         .route(
-            "/accounts/{id}/card-number",
-            post(handlers::accounts::card_number),
-        )
-        .route(
-            "/accounts/{id}/account-username",
-            post(handlers::accounts::account_username),
-        )
-        .route(
             "/accounts/{id}/balance-summary",
             get(handlers::accounts::balance_summary),
         )

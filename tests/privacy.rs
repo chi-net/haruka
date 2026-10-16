@@ -501,3 +501,49 @@ async fn private_money_is_included_in_summaries_without_exposing_private_rows() 
         .unwrap();
     assert_eq!(balance["balance"], "CNY 875.00");
 }
+
+#[tokio::test]
+async fn full_account_identifiers_are_visible_only_in_unlocked_uncached_details() {
+    let app = App::start().await;
+    let mut ids = Vec::new();
+    for (kind, name, card, username) in [
+        ("bank", "完整银行卡账户", "6225888812345678", ""),
+        ("payment", "完整支付账户", "", "complete-account-user-1999"),
+    ] {
+        let created = app
+            .post(
+                "/accounts",
+                &[
+                    ("name", name),
+                    ("account_kind", kind),
+                    ("currency", "CNY"),
+                    ("card_number", card),
+                    ("account_username", username),
+                    ("note", ""),
+                    ("credit_limit", "0"),
+                    ("billing_day", "1"),
+                ],
+                None,
+            )
+            .await;
+        assert_eq!(created.status(), StatusCode::SEE_OTHER);
+        let id = app.scalar("SELECT MAX(id) AS value FROM accounts").await;
+        ids.push(id);
+        let response = app.get(&format!("/accounts/{id}"), None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(response.headers()[header::PRAGMA], "no-cache");
+        let html = response.text().await.unwrap();
+        assert!(html.contains(name));
+        let identifier = if card.is_empty() { username } else { card };
+        assert!(html.contains(identifier));
+        let list = app.get("/accounts", None).await.text().await.unwrap();
+        assert!(!list.contains(identifier));
+    }
+    assert!(app.post("/lock", &[], None).await.status().is_redirection());
+    for id in ids {
+        let locked = app.get(&format!("/accounts/{id}"), None).await;
+        assert!(locked.status().is_redirection());
+        assert_eq!(locked.headers()[header::LOCATION], "/unlock");
+    }
+}

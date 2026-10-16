@@ -143,7 +143,10 @@ document.addEventListener('htmx:beforeCleanupElement', event => {
     });
     document.addEventListener('click', event => {
       const nav = currentNav();
-      if (nav && (!nav.contains(event.target) || event.target.closest('a'))) closeNavigation(nav);
+      if (!nav) return;
+      if (!nav.contains(event.target)) closeNavigation(nav);
+      // Keep the tapped link visible until WebKit has dispatched its navigation.
+      else if (event.target.closest('a')) window.setTimeout(() => closeNavigation(nav), 0);
     }, true);
     document.addEventListener('focusin', event => {
       const nav = currentNav();

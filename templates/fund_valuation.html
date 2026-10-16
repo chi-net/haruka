@@ -9,12 +9,19 @@
 <section class="bg-white rounded border border-gray-200 p-4" aria-labelledby="group-{{ g.id }}">
 <div class="flex flex-wrap justify-between gap-2 mb-3"><div><h2 id="group-{{ g.id }}" class="font-bold">{{ g.name }}</h2><p class="text-sm text-gray-500">{{ g.currency }} · 当前总价值：<span class="font-mono">{{ g.total }}</span></p></div><div class="flex gap-3 text-sm"><a href="/accounts/{{ g.id }}/funds" hx-confirm="unset" class="text-blue-600">管理本组基金</a>{% if all_groups %}<a href="/accounts/{{ g.id }}/funds/valuation" hx-confirm="unset" class="text-blue-600">仅校准本组</a>{% endif %}</div></div>
 {% if g.funds.is_empty() %}<p class="text-sm text-gray-500">本组尚无基金。</p>{% else %}
-<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th class="text-left p-2">基金 / 最近核对</th><th class="text-right p-2">当前价值（只读）</th><th class="text-left p-2">实际持仓价值（{{ g.currency }}）</th><th class="p-2">已核对</th></tr></thead><tbody>
-{% for f in g.funds %}<tr class="border-t border-gray-100"><td class="p-2">{{ f.name }}<span class="block text-xs text-gray-500">{{ f.last_calibrated }}</span>{% if f.overdue %}<span class="block text-xs text-amber-700">超过 30 天未核对</span>{% endif %}</td><td class="p-2 text-right font-mono">{{ f.value }}</td><td class="p-2"><input type="hidden" name="baseline_{{ f.id }}" value="{{ f.baseline }}"><input aria-label="{{ g.name }} / {{ f.name }} 实际持仓价值（{{ g.currency }}）" name="target_{{ f.id }}" value="{{ f.target }}" type="number" min="0" step="0.01" inputmode="decimal" class="w-full border rounded px-3 py-2 font-mono"></td><td class="p-2 text-center"><input type="checkbox" name="reviewed_{{ f.id }}" value="1" aria-label="{{ g.name }} / {{ f.name }} 已核对"></td></tr>{% endfor %}
+<div><table class="block w-full text-sm md:table"><thead class="hidden md:table-header-group"><tr><th class="text-left p-2">基金 / 最近核对</th><th class="text-right p-2">当前价值（只读）</th><th class="text-left p-2">实际持仓价值（{{ g.currency }}）</th><th class="p-2">已核对</th></tr></thead><tbody class="block md:table-row-group">
+{% for f in g.funds %}
+<tr class="grid grid-cols-2 items-start gap-3 border-t border-gray-100 py-4 md:table-row md:py-0">
+  <td class="col-span-2 min-w-0 break-words md:p-2">{{ f.name }}<span class="block text-xs text-gray-500">{{ f.last_calibrated }}</span>{% if f.overdue %}<span class="block text-xs text-amber-700">超过 30 天未核对</span>{% endif %}</td>
+  <td class="min-w-0 font-mono md:p-2 md:text-right"><span class="mb-1 block text-xs text-gray-500 md:hidden">当前价值（只读）</span>{{ f.value }}</td>
+  <td class="min-w-0 md:p-2"><label class="mb-1 block text-xs text-gray-500 md:hidden" for="target-{{ f.id }}">实际价值（{{ g.currency }}）</label><input type="hidden" name="baseline_{{ f.id }}" value="{{ f.baseline }}"><input id="target-{{ f.id }}" aria-label="{{ g.name }} / {{ f.name }} 实际持仓价值（{{ g.currency }}）" name="target_{{ f.id }}" value="{{ f.target }}" type="number" min="0" step="0.01" inputmode="decimal" class="min-h-11 w-full min-w-0 border rounded px-3 py-2 text-base font-mono md:text-sm"></td>
+  <td class="col-span-2 md:p-2 md:text-center"><label class="inline-flex min-h-11 min-w-11 cursor-pointer touch-manipulation items-center gap-2 px-2"><input type="checkbox" name="reviewed_{{ f.id }}" value="1" aria-label="{{ g.name }} / {{ f.name }} 已核对" class="size-5"><span class="md:sr-only">已核对</span></label></td>
+</tr>
+{% endfor %}
 </tbody></table></div>
 {% endif %}
 </section>
 {% endfor %}
-<div class="flex gap-3"><button class="bg-blue-600 text-white rounded px-4 py-2">保存本批次校准</button><a href="{{ back }}" hx-confirm="unset" class="text-gray-600 px-4 py-2">返回{% if all_groups %}账户{% else %}基金{% endif %}</a></div>
+<div class="flex flex-wrap items-center gap-3"><button type="submit" class="min-h-11 touch-manipulation bg-blue-600 text-white rounded px-4 py-2">保存本批次校准</button><a href="{{ back }}" hx-confirm="unset" class="inline-flex min-h-11 items-center text-gray-600 px-4 py-2">返回{% if all_groups %}账户{% else %}基金{% endif %}</a></div>
 </form>
 {% endblock %}

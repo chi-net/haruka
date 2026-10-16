@@ -87,7 +87,7 @@ struct AccountDetailTemplate {
     kind_label: String,
     is_investment: bool,
     currency: String,
-    card_number_masked: String,
+    card_number: String,
     account_username: String,
     credit_summary: String,
     note: String,
@@ -104,16 +104,6 @@ struct AccountDetailTemplate {
     records: Vec<AccountLedgerRow>,
     per_page: usize,
     pagination: super::PaginationView,
-}
-
-#[derive(Serialize)]
-pub struct CardNumberResponse {
-    card_number: String,
-}
-
-#[derive(Serialize)]
-pub struct AccountUsernameResponse {
-    account_username: String,
 }
 
 #[derive(Template)]
@@ -1029,9 +1019,7 @@ pub async fn detail(
         .unwrap_or_default();
     let account_username = detail
         .as_ref()
-        .map(|item| {
-            super::mask_account_username(&crypto::decrypt_string(&dek, &item.account_username))
-        })
+        .map(|item| crypto::decrypt_string(&dek, &item.account_username))
         .unwrap_or_default();
     let credit_summary = detail
         .as_ref()
@@ -1047,11 +1035,7 @@ pub async fn detail(
         kind_label: account_kind_label(&account.kind).into(),
         is_investment: account.kind == "investment_fund",
         currency: account.currency.clone(),
-        card_number_masked: if card_number.is_empty() {
-            String::new()
-        } else {
-            super::mask_card_number(&card_number)
-        },
+        card_number,
         account_username,
         credit_summary,
         transfer_fee_rate: super::fees::format_rate(crypto::decrypt_cents(
@@ -1080,57 +1064,11 @@ pub async fn detail(
     }
     .render()
     .map_err(err500)?;
-    Ok(Html(html).into_response())
-}
-
-pub async fn card_number(
-    State(state): State<AppState>,
-    Extension(SessionDek(dek)): Extension<SessionDek>,
-    Path(id): Path<i64>,
-) -> HandlerResult<impl IntoResponse> {
-    account::Entity::find_by_id(id)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
-    let detail = account_detail::Entity::find_by_id(id)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or((StatusCode::NOT_FOUND, "这个账户没有卡号".into()))?;
-    let card_number = crypto::decrypt_string(&dek, &detail.card_number);
-    if card_number.is_empty() {
-        return Err((StatusCode::NOT_FOUND, "这个账户没有卡号".into()));
-    }
     Ok((
         [("cache-control", "no-store"), ("pragma", "no-cache")],
-        Json(CardNumberResponse { card_number }),
-    ))
-}
-
-pub async fn account_username(
-    State(state): State<AppState>,
-    Extension(SessionDek(dek)): Extension<SessionDek>,
-    Path(id): Path<i64>,
-) -> HandlerResult<impl IntoResponse> {
-    account::Entity::find_by_id(id)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
-    let detail = account_detail::Entity::find_by_id(id)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or((StatusCode::NOT_FOUND, "这个账户没有用户名".into()))?;
-    let account_username = crypto::decrypt_string(&dek, &detail.account_username);
-    if account_username.is_empty() {
-        return Err((StatusCode::NOT_FOUND, "这个账户没有用户名".into()));
-    }
-    Ok((
-        [("cache-control", "no-store"), ("pragma", "no-cache")],
-        Json(AccountUsernameResponse { account_username }),
-    ))
+        Html(html),
+    )
+        .into_response())
 }
 
 pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<String>> {
