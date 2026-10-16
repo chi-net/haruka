@@ -402,6 +402,30 @@ fn chain(parts: &[&[u8]]) -> Vec<u8> {
     hash.finalize().to_vec()
 }
 
+fn assert_private_proof_policy(response: &Response) {
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(response.headers()[header::PRAGMA], "no-cache");
+    assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+    assert_eq!(
+        response.headers()["x-robots-tag"],
+        "noindex, nofollow, noarchive"
+    );
+    assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+    let policy = response.headers()[header::CONTENT_SECURITY_POLICY]
+        .to_str()
+        .unwrap();
+    assert!(policy.contains("default-src 'none'"));
+    assert!(policy.contains("form-action 'self'"));
+    assert!(policy.contains("frame-ancestors 'none'"));
+    let styles = policy
+        .split(';')
+        .map(str::trim)
+        .find(|directive| directive.starts_with("style-src "))
+        .unwrap();
+    assert!(styles.starts_with("style-src 'self' 'nonce-"));
+    assert!(!styles.contains("'unsafe-inline'"));
+}
+
 #[tokio::test]
 async fn unilateral_four_directions_bind_proof_and_cannot_become_counterparty_confirmation() {
     let app = App::start().await;
@@ -418,11 +442,21 @@ async fn unilateral_four_directions_bind_proof_and_cannot_become_counterparty_co
     assert_eq!(app.scalar("SELECT COUNT(*) AS value FROM debt_requests WHERE proof_version = 2 AND requires_confirmation = 0 AND status = 'recorded' AND confirmed_debt_record_id IS NOT NULL AND submission <> '' AND length(confirmation_digest) = 32 AND verified_at IS NULL").await, 4);
     assert_eq!(app.scalar("SELECT COUNT(*) AS value FROM debt_records d LEFT JOIN debt_requests r ON r.confirmed_debt_record_id = d.id WHERE r.id IS NULL").await, 0);
     let path = app.path(borrow).await;
-    let receipt = app.get(&path, false).await;
-    assert_eq!(receipt.headers()[header::CACHE_CONTROL], "no-store");
-    assert_eq!(receipt.headers()["referrer-policy"], "no-referrer");
+    let receipt = app
+        .client
+        .get(format!("{}{path}", app.url))
+        .header(header::COOKIE, "haruka_time_zone=Asia%2FShanghai")
+        .send()
+        .await
+        .unwrap();
+    assert_private_proof_policy(&receipt);
     let receipt = receipt.text().await.unwrap();
-    assert!(receipt.contains("单方借还记录"));
+    assert!(receipt.contains("单方记录，未经对方确认或认可"));
+    assert!(receipt.contains("Asia/Shanghai"));
+    assert!(receipt.contains("2026-10-10 08:00:00 UTC"));
+    assert!(receipt.contains("2026-10-10 16:00:00 +08:00"));
+    assert!(receipt.contains("CNY 100.00"));
+    assert!(receipt.contains("无。此为账主单方记录"));
     assert!(receipt.contains("未经对方确认"));
     assert!(!receipt.contains("/verify\""));
     assert!(!receipt.contains(CARD));
@@ -482,10 +516,16 @@ async fn confirmation_waits_for_owner_and_public_submission_and_owner_confirmati
     let public = app.get(&path, false).await.text().await.unwrap();
     assert!(public.contains("回归账户(1234)"));
     assert!(!public.contains(CARD));
+    assert!(public.contains("未提交的借还请求（不是正式证明）"));
     let identifier = app.public_post(&format!("{path}/account"), &[]).await;
     assert_eq!(identifier.headers()[header::CACHE_CONTROL], "no-store");
     assert_eq!(identifier.json::<Value>().await.unwrap()["value"], CARD);
-    assert_eq!(app.submit(borrow, "100").await.status(), StatusCode::OK);
+    let submitted_receipt = app.submit(borrow, "100").await;
+    assert_eq!(submitted_receipt.status(), StatusCode::OK);
+    assert_private_proof_policy(&submitted_receipt);
+    let submitted_receipt = submitted_receipt.text().await.unwrap();
+    assert!(submitted_receipt.contains("尚未核实入账"));
+    assert!(submitted_receipt.contains("账主尚未核实"));
     let submitted: Vec<u8> = app
         .row(borrow)
         .await
@@ -509,6 +549,13 @@ async fn confirmation_waits_for_owner_and_public_submission_and_owner_confirmati
     assert_eq!(second.status(), StatusCode::SEE_OTHER);
     assert_eq!(app.counts().await, (1, 1));
     assert_eq!(app.balance(account).await, "CNY 100.00");
+    let confirmed_receipt = app.get(&path, false).await;
+    assert_private_proof_policy(&confirmed_receipt);
+    let confirmed_receipt = confirmed_receipt.text().await.unwrap();
+    assert!(confirmed_receipt.contains("账主已核实到账并入账"));
+    assert!(confirmed_receipt.contains("CNY 100.00"));
+    assert!(confirmed_receipt.contains("对方提交 / 确认收付"));
+    assert!(confirmed_receipt.contains("账主核实入账"));
     let borrowed = app.record_id(borrow).await;
     let person = app
         .scalar(&format!(
@@ -593,7 +640,8 @@ async fn confirmation_waits_for_owner_and_public_submission_and_owner_confirmati
     let unavailable = app.get(&revoked_path, false).await;
     assert_eq!(unavailable.headers()[header::CACHE_CONTROL], "no-store");
     assert_eq!(unavailable.headers()["referrer-policy"], "no-referrer");
-    assert!(unavailable.text().await.unwrap().contains("此分享不可用"));
+    let unavailable = unavailable.text().await.unwrap();
+    assert!(unavailable.contains("此分享不可用"));
     assert_eq!(
         app.public_post(&format!("{revoked_path}/account"), &[])
             .await
@@ -927,13 +975,13 @@ async fn legacy_digests_and_historical_public_verification_remain_readable_witho
         vec![repayment.into(), hash.into(), submitted_at.into(), account.into(), repayment_record.into(), borrow.into()]))
         .await.unwrap();
     let before = app.counts().await;
-    assert!(app
-        .get(&path, false)
-        .await
-        .text()
-        .await
-        .unwrap()
-        .contains("等待对方确认"));
+    let pending = app.get(&path, false).await;
+    assert_private_proof_policy(&pending);
+    let pending = pending.text().await.unwrap();
+    assert!(pending.contains("等待对方确认"));
+    assert!(pending.contains("不能视为对方已认可"));
+    assert!(pending.contains("历史还款金额"));
+    assert!(pending.contains("CNY 100.00"));
     assert_eq!(
         app.public_post(&format!("{path}/verify"), &[])
             .await
@@ -946,13 +994,11 @@ async fn legacy_digests_and_historical_public_verification_remain_readable_witho
             .status(),
         StatusCode::SEE_OTHER
     );
-    assert!(app
-        .get(&path, false)
-        .await
-        .text()
-        .await
-        .unwrap()
-        .contains("历史还款已由对方确认收到"));
+    let repaid = app.get(&path, false).await;
+    assert_private_proof_policy(&repaid);
+    let repaid = repaid.text().await.unwrap();
+    assert!(repaid.contains("历史还款已由对方确认收到"));
+    assert!(repaid.contains("对方确认收到历史还款"));
     assert_eq!(app.counts().await, before);
     assert_eq!(app.balance(account).await, "CNY 0.00");
     assert_eq!(

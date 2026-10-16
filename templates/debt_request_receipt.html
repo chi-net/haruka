@@ -1,12 +1,110 @@
 {% extends "public_share_base.html" %}
-{% block title %}借还证明 - Haruka{% endblock %}
+{% block title %}{% if confirmed %}借还账本证明{% else %}借还提交回执（待核实）{% endif %} - Haruka{% endblock %}
 {% block content %}
-<section class="bg-white rounded-lg border border-gray-200 p-5">
-  <div class="text-center"><h1 class="text-lg font-semibold">{% if !requires_confirmation %}单方借还记录{% else if repaid %}历史还款已由对方确认收到{% else if repayment_pending %}历史还款已登记，等待对方确认{% else if confirmed %}账主已核实{% if incoming %}到账{% else %}付出{% endif %}并入账{% else if incoming %}对方已提交打款资料，等待账主核实{% else %}对方已确认收到款项，等待账主核实{% endif %}</h1><p class="text-sm text-gray-500 mt-2">{% if !requires_confirmation %}本证明仅包含账主的单方陈述和入账记录，未经对方提交、确认或认可。不能通过此链接补成对方确认。{% else if repaid %}此历史证明保留原借款、登记还款及对方确认收到还款的追加记录，不会新增流水。{% else if repayment_pending %}这是历史还款登记，请对方核实实际到账后再确认。{% else if confirmed %}对方提交或确认与账主核实是两个不同阶段。{% if is_borrow %}借款入账不等于已经偿还。{% endif %}{% else %}公开提交不会改变账本余额；仍需账主核实实际收付。{% endif %}</p></div>
-  <dl class="mt-5 border-t border-gray-100 pt-4 space-y-2 text-sm"><div class="flex justify-between gap-4"><dt class="text-gray-500">请求</dt><dd>{{ request.kind_label }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">确认策略</dt><dd>{% if requires_confirmation %}需要对方提交或确认{% else %}单方记录，未经对方确认{% endif %}</dd></div>{% if origin_debt_record_id != 0 %}<div class="flex justify-between gap-4"><dt class="text-gray-500">关联原借款</dt><dd>#{{ origin_debt_record_id }}</dd></div>{% endif %}<div class="flex justify-between gap-4"><dt class="text-gray-500">账主{% if incoming %}收款{% else %}付款{% endif %}账户</dt><dd>{{ request.account_name }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">收款户名</dt><dd>{{ request.recipient_name }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">对方姓名{% if !requires_confirmation %}（账主填写）{% endif %}</dt><dd>{{ submission.payer_name }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">实际金额</dt><dd class="font-mono">{{ paid_amount }}</dd></div><div class="flex justify-between gap-4"><dt class="text-gray-500">实际收付时间</dt><dd><time data-utc-time="{{ submission.paid_at }}">{{ submission.paid_at }}</time></dd></div></dl>
-  {% if repayment_pending || repaid %}<div class="mt-5 rounded-lg border border-amber-200 bg-amber-50 p-4"><h2 class="font-semibold text-amber-950">还款登记</h2><dl class="mt-2 space-y-2 text-sm"><div class="flex justify-between gap-4"><dt class="text-amber-800">还款金额</dt><dd class="font-mono">{{ paid_amount }}</dd></div><div class="flex justify-between gap-4"><dt class="text-amber-800">还款时间</dt><dd><time data-utc-time="{{ repayment_at }}">{{ repayment_at }}</time></dd></div>{% if !repayment_note.is_empty() %}<div class="flex justify-between gap-4"><dt class="text-amber-800">说明</dt><dd class="whitespace-pre-wrap text-right">{{ repayment_note }}</dd></div>{% endif %}</dl></div>{% endif %}
-  {% if repayment_pending && requires_confirmation %}<form method="post" action="/r/{{ token }}/verify" class="mt-5 rounded-xl border-2 border-green-500 bg-green-50 p-4" onsubmit="return window.confirm('请核实你确已收到这笔历史登记的还款。继续确认？')"><p class="font-semibold text-green-900">由对方确认收到历史登记的还款</p><p class="mt-1 text-sm text-green-800">仅在实际收到还款后确认；此操作不会再次生成流水。</p><button class="mt-3 w-full rounded-lg bg-green-700 px-4 py-3 font-bold text-white">我已收到上述还款</button></form>{% endif %}
-  <div class="mt-5 rounded border border-gray-200 bg-gray-50 p-3"><p class="text-xs text-gray-500">当前验证指纹</p><code class="block mt-1 text-xs break-all select-all">{{ verification_code }}</code><p class="text-xs text-gray-500 mt-2">新证明摘要约束确认策略、原借款关联和加密资料，并追加记录提交与入账。单方记录不包含对方确认；历史证明按其原有规则验证，不重签、不补造确认。</p></div>
-  <p class="mt-4 text-xs text-gray-500">原链接有效期：<time data-utc-time="{{ expires_at }}">{{ expires_at }}</time>；已入账证明保留可读，撤销后不可访问。</p>
+<style nonce="{{ style_nonce }}">
+  .ledger-proof { background: #fff; color: #111; border: 1px solid #d1d5db; border-radius: .75rem; padding: 1.5rem; line-height: 1.65; overflow-wrap: anywhere; }
+  .ledger-proof h1 { font-size: 1.3rem; font-weight: 700; margin: 0 0 .75rem; }
+  .ledger-proof h2 { font-size: 1rem; font-weight: 700; margin: 1.4rem 0 .5rem; break-after: avoid; page-break-after: avoid; }
+  .ledger-proof p { margin: .5rem 0; }
+  .proof-state { border: 2px solid #374151; padding: .8rem; margin: 1rem 0; }
+  .proof-state strong { display: block; font-size: 1.05rem; }
+  .proof-details { margin: 0; }
+  .proof-details > div { display: grid; grid-template-columns: 9em minmax(0, 1fr); gap: .75rem; padding: .4rem 0; border-bottom: 1px solid #e5e7eb; }
+  .proof-details dt { font-weight: 600; }
+  .proof-details dd { margin: 0; min-width: 0; }
+  .proof-amount, .proof-fingerprint { font-family: ui-monospace, monospace; }
+  .proof-note { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .proof-small { font-size: .8rem; }
+  .proof-fingerprint { display: block; border: 1px solid #9ca3af; padding: .75rem; font-size: .85rem; overflow-wrap: anywhere; word-break: break-all; user-select: all; }
+  .proof-times { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: .8rem; }
+  .proof-times th, .proof-times td { border: 1px solid #9ca3af; padding: .45rem; vertical-align: top; text-align: left; overflow-wrap: anywhere; }
+  .proof-times th:first-child { width: 26%; }
+  .proof-screen-only { border: 1px solid #93c5fd; border-radius: .5rem; padding: .85rem; margin: 0 0 1rem; }
+  .proof-print-button { background: #1d4ed8; color: #fff; border: 0; border-radius: .4rem; padding: .65rem 1rem; font-weight: 700; cursor: pointer; }
+  .proof-confirm { border: 2px solid #15803d; padding: 1rem; margin-top: 1rem; }
+  .proof-confirm button { background: #15803d; color: #fff; border: 0; padding: .65rem 1rem; font-weight: 700; cursor: pointer; }
+  @page { size: A4; margin: 15mm; }
+  @media print {
+    html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; color: #000 !important; min-height: 0 !important; font-size: 10pt; }
+    body > main { max-width: none !important; width: auto !important; margin: 0 !important; padding: 0 !important; }
+    main > :not(.ledger-proof), .proof-screen-only, .ledger-proof form, .ledger-proof button, .ledger-proof input, .ledger-proof select, .ledger-proof textarea { display: none !important; }
+    .ledger-proof { border: 0; border-radius: 0; padding: 0; margin: 0; max-width: none; overflow: visible !important; }
+    .ledger-proof, .ledger-proof * { color: #000 !important; background: transparent !important; box-shadow: none !important; text-shadow: none !important; border-color: #000 !important; }
+    .ledger-proof h1 { font-size: 16pt; }
+    .ledger-proof h2 { font-size: 12pt; }
+    .ledger-proof p { orphans: 3; widows: 3; }
+    .proof-state, .proof-fingerprint { break-inside: avoid; page-break-inside: avoid; }
+    .proof-details > div { display: block; }
+    .proof-details dt { margin-bottom: .15rem; break-after: avoid; page-break-after: avoid; }
+    .proof-details dd, .proof-note { overflow: visible !important; max-height: none !important; break-inside: auto; }
+    .proof-times thead { display: table-header-group; }
+    .proof-times tr { break-inside: avoid; page-break-inside: avoid; }
+    .proof-small, .proof-times { font-size: 8.5pt; }
+  }
+</style>
+<section class="ledger-proof" aria-labelledby="proof-title">
+  <div class="proof-screen-only">
+    <button type="button" id="print-debt-proof" class="proof-print-button">打印 / 保存 PDF</button>
+    <p class="proof-small">点击后使用浏览器打印，或在目标打印机中选择“另存为 PDF”。建议纸张选 A4；保存前关闭“页眉和页脚”，避免把含秘密令牌的本页网址写入 PDF。打印预览不会包含此提示、按钮或确认表单。</p>
+    <noscript><p>脚本未启用时，可使用浏览器菜单中的“打印”或 Ctrl / ⌘ + P。</p></noscript>
+  </div>
+  <h1 id="proof-title">{% if confirmed %}Haruka 借还账本证明{% else %}Haruka 借还提交回执（尚未核实入账）{% endif %}</h1>
+  <p class="proof-small">本页记录账主账本及下列声明；“我”均指账主。它不是银行回单、实名电子签名或司法认定。保存为 PDF 不会使文件获得签名认证，也不单独证明真实资金已收付或对方真实身份。</p>
+  <div class="proof-state">
+    <strong>{% if !requires_confirmation %}单方记录，未经对方确认或认可{% else if repaid %}历史还款已由对方确认收到{% else if repayment_pending %}历史还款已登记，等待对方确认{% else if confirmed %}账主已核实{% if incoming %}到账{% else %}付出{% endif %}并入账{% else %}仅对方已提交 / 确认，等待账主核实，尚未入账{% endif %}</strong>
+    <p>{% if !requires_confirmation %}以下对方姓名、收付金额、时间和说明均为账主单方填写；本记录不包含对方提交、确认或认可，不能通过此链接补成对方确认。{% else if repaid %}此历史证明保留原借款、登记还款及对方确认收到还款的追加记录；确认操作不会新增流水。{% else if repayment_pending %}此历史还款仅由账主登记；尚无对方确认收到还款。请对方核实实际到账后再确认。{% else if confirmed %}对方提交 / 确认与账主核实入账是两个不同阶段。{% else %}此回执只是提交记录，不是已入账证明；公开提交不会改变账本余额，仍需账主核实实际收付。{% endif %}</p>
+    {% if is_loan && !repayment_pending && !repaid %}<p>本页借款记录不表示已经偿还；如有后续还款，请另核对关联还款证明及其状态。</p>{% endif %}
+  </div>
+
+  <h2>借还方向与实际收付</h2>
+  <dl class="proof-details">
+    <div><dt>借还方向</dt><dd>{{ request.kind_label }}（账主{% if incoming %}收款{% else %}付款{% endif %}）</dd></div>
+    <div><dt>确认策略</dt><dd>{% if requires_confirmation %}需要对方提交 / 确认，再由账主核实入账{% else %}单方记录，未经对方确认{% endif %}</dd></div>
+    {% if origin_debt_record_id != 0 %}<div><dt>关联原借款</dt><dd>原借款流水 #{{ origin_debt_record_id }}</dd></div>{% endif %}
+    <div><dt>账主{% if incoming %}收款{% else %}付款{% endif %}账户</dt><dd>{{ request.account_name }}</dd></div>
+    <div><dt>收款户名</dt><dd>{{ request.recipient_name }}</dd></div>
+    <div><dt>对方姓名</dt><dd>{{ submission.payer_name }}{% if !requires_confirmation %}（账主单方填写）{% endif %}</dd></div>
+    <div><dt>请求金额</dt><dd class="proof-amount">{{ requested_amount }}</dd></div>
+    <div><dt>实际{% if incoming %}收款{% else %}付款{% endif %}金额</dt><dd class="proof-amount">{{ paid_amount }}{% if !requires_confirmation %}（账主单方陈述）{% else %}（对方声明，{% if confirmed %}账主已核实入账{% else %}账主尚未核实{% endif %}）{% endif %}</dd></div>
+    <div><dt>对方声明</dt><dd>{% if !requires_confirmation %}无。此为账主单方记录，未经对方确认或认可。{% else if incoming %}通过链接提交自己已打款的资料；不等于实名签署。{% else %}通过链接确认自己已收到款项；不等于实名签署。{% endif %}</dd></div>
+    <div><dt>账主声明 / 入账</dt><dd>{% if confirmed %}账主已核实实际{% if incoming %}到账{% else %}付出{% endif %}并写入账本{% if confirmed_debt_record_id != 0 %}，流水 #{{ confirmed_debt_record_id }}{% endif %}。{% else %}尚未核实入账，不能视为账主已认可。{% endif %}</dd></div>
+    {% if !request.note.is_empty() %}<div><dt>账主请求说明</dt><dd class="proof-note">{{ request.note }}</dd></div>{% endif %}
+    {% if !submission.note.is_empty() %}<div><dt>{% if requires_confirmation %}对方提交说明{% else %}账主单方说明{% endif %}</dt><dd class="proof-note">{{ submission.note }}</dd></div>{% endif %}
+  </dl>
+
+  {% if repayment_pending || repaid %}
+  <h2>原借款的历史还款追加记录</h2>
+  <dl class="proof-details">
+    <div><dt>还款方向</dt><dd>账主向原出借方还款（原借款为“我向对方借款”）</dd></div>
+    <div><dt>历史还款金额</dt><dd class="proof-amount">{{ repayment_amount }}</dd></div>
+    <div><dt>还款状态</dt><dd>{% if repaid %}对方已通过链接确认收到登记的还款；不等于实名签署。{% else %}账主已登记，等待对方确认收到；不能视为对方已认可。{% endif %}{% if repayment_debt_record_id != 0 %} 账本还款流水 #{{ repayment_debt_record_id }}。{% endif %}</dd></div>
+    {% if !repayment_note.is_empty() %}<div><dt>账主还款说明</dt><dd class="proof-note">{{ repayment_note }}</dd></div>{% endif %}
+  </dl>
+  {% endif %}
+
+  <h2>收付与验证链事件时间</h2>
+  <p class="proof-small">本地列使用访问者 ClientTimeZone：{{ time_zone }}（含 UTC 偏移）；UTC 列用于双方跨时区核对。实际收付时间来自上述声明，事件时间来自账本记录。</p>
+  <table class="proof-times">
+    <thead><tr><th scope="col">事件</th><th scope="col">UTC 时间</th><th scope="col">本地时间 · {{ time_zone }}</th></tr></thead>
+    <tbody>{% for time in times %}<tr><th scope="row">{{ time.label }}</th><td>{{ time.utc }}</td><td>{{ time.local }}</td></tr>{% endfor %}</tbody>
+  </table>
+  <p class="proof-small">已入账证明在原链接到期后仍保留可读；撤销后不可访问。本文件是保存时的记录，不能保证链接此后仍有效或状态不再变化。</p>
+
+  <h2>验证链指纹</h2>
+  <p class="proof-small">SHA-256 · 证明版本 v{{ proof_version }} · 当前验证链完整</p>
+  <code class="proof-fingerprint">{{ verification_code }}</code>
+  <p class="proof-small">双方可分别打印或另存 PDF，并通过可信渠道逐字核对同一状态的验证指纹；状态追加后指纹会变化。新证明摘要约束确认策略、原借款关联和加密资料，并追加提交与入账记录。历史证明按其原有规则验证，不重签、不补造确认；单方记录不包含对方确认。</p>
+  <p class="proof-small">此指纹用于核对账本验证链，并非 PDF 文件哈希、数字签名或第三方认证。PDF 可被编辑；核对时应使用当前有效的原证明页面，但不要公开分享含秘密令牌的网址。</p>
+
+  {% if repayment_pending && requires_confirmation %}
+  <form method="post" action="/r/{{ token }}/verify" class="proof-confirm" onsubmit="return window.confirm('请核实你确已收到这笔历史登记的还款。继续确认？')">
+    <p><strong>由对方确认收到历史登记的还款</strong></p>
+    <p>仅在实际收到还款后确认；此操作不会再次生成流水。</p>
+    <button>我已收到上述还款</button>
+  </form>
+  {% endif %}
 </section>
+<script>
+document.getElementById('print-debt-proof').addEventListener('click', () => window.print());
+</script>
 {% endblock %}

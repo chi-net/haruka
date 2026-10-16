@@ -54,7 +54,13 @@ pub(crate) struct LedgerRow {
     pub(crate) bill_kind: String,
     pub(crate) amount_cents: i64,
     pub(crate) is_expense: bool,
-    pub(crate) is_food: bool,
+}
+
+#[derive(Default)]
+struct MonthSummary {
+    income: i64,
+    expense: i64,
+    food_expense: i64,
 }
 
 #[derive(Clone)]
@@ -546,11 +552,12 @@ fn debt_kind_label(kind: &str) -> &'static str {
     }
 }
 
-pub(crate) async fn ledger_rows(
+async fn ledger_rows(
     state: &AppState,
     dek: &crypto::Dek,
     time_zone: super::ClientTimeZone,
     private_mode: bool,
+    mut monthly_summary: Option<&mut MonthSummary>,
 ) -> HandlerResult<Vec<LedgerRow>> {
     let accounts = account::Entity::find()
         .all(&state.db)
@@ -631,19 +638,45 @@ pub(crate) async fn ledger_rows(
 
     let mut rows = Vec::new();
     for bill in bills {
-        if bill.is_private != private_mode {
+        let visible = bill.is_private == private_mode;
+        let summarize = monthly_summary.is_some() && (!private_mode || bill.is_private) && {
+            let date = time_zone.date(bill.happened_at);
+            date <= today && date.year() == today.year() && date.month() == today.month()
+        };
+        if !visible && !summarize {
             continue;
         }
         let incoming = bill.kind == "income";
-        let automatic_fee = transfer_fee_bill_ids.contains(&bill.id)
-            || investment_fee_bill_ids.contains(&bill.id)
-            || installment_fee_bill_ids.contains(&bill.id);
         let amount = crypto::decrypt_cents(dek, &bill.amount);
         let bill_currency = account_currencies
             .get(&bill.account_id)
             .map(String::as_str)
             .unwrap_or(&default_currency);
         let converted = rates.convert(amount, bill_currency).map_err(err500)?;
+        if summarize {
+            if let Some(summary) = monthly_summary.as_deref_mut() {
+                let total = if incoming {
+                    &mut summary.income
+                } else {
+                    &mut summary.expense
+                };
+                *total = total
+                    .checked_add(converted)
+                    .ok_or_else(|| err500("汇总金额超出范围"))?;
+                if !incoming && bill.is_food {
+                    summary.food_expense = summary
+                        .food_expense
+                        .checked_add(converted)
+                        .ok_or_else(|| err500("汇总金额超出范围"))?;
+                }
+            }
+        }
+        if !visible {
+            continue;
+        }
+        let automatic_fee = transfer_fee_bill_ids.contains(&bill.id)
+            || investment_fee_bill_ids.contains(&bill.id)
+            || installment_fee_bill_ids.contains(&bill.id);
         rows.push(LedgerRow {
             happened_at: bill.happened_at.format(TIME_FMT).to_string(),
             record_type: if bill.refund_of_bill_id.is_some() {
@@ -711,7 +744,6 @@ pub(crate) async fn ledger_rows(
             bill_kind: bill.kind,
             amount_cents: converted,
             is_expense: !incoming,
-            is_food: bill.is_food,
         });
     }
     if private_mode {
@@ -782,7 +814,6 @@ pub(crate) async fn ledger_rows(
             bill_kind: String::new(),
             amount_cents: rates.convert(amount, from_currency).map_err(err500)?,
             is_expense: false,
-            is_food: false,
         });
     }
 
@@ -839,7 +870,6 @@ pub(crate) async fn ledger_rows(
             bill_kind: String::new(),
             amount_cents: converted,
             is_expense: false,
-            is_food: false,
         });
     }
 
@@ -879,7 +909,6 @@ pub(crate) async fn ledger_rows(
             bill_kind: String::new(),
             amount_cents: 0,
             is_expense: false,
-            is_food: false,
         });
     }
 
@@ -1013,7 +1042,7 @@ async fn export_csv_response(
     normalize_query(&mut query, advanced_search);
     let time_zone = time_zone.from_query(&query.time_zone)?;
     let filter = LedgerFilter::from_query(&query, time_zone)?;
-    let rows = ledger_rows(state, dek, time_zone, false)
+    let rows = ledger_rows(state, dek, time_zone, false, None)
         .await?
         .into_iter()
         .filter(|row| filter.matches(row))
@@ -1100,34 +1129,14 @@ async fn render_list(
     let filter = LedgerFilter::from_query(&query, time_zone)?;
     let has_filters = filter.is_active();
     let default_currency = currency::default_currency(state).await.map_err(err500)?;
-    let mut all_records = ledger_rows(state, dek, time_zone, private_mode).await?;
-    let today = time_zone.today();
-    let month_start = today
-        .with_day(1)
-        .ok_or_else(|| err500("无法计算本月起始日"))?;
-    let mut month_income = 0i64;
-    let mut month_expense = 0i64;
-    let mut food_expense = 0i64;
-    for row in all_records.iter().filter(|row| !row.bill_kind.is_empty()) {
-        let date = time_zone.date(row.sort_key);
-        if date < month_start || date > today {
-            continue;
-        }
-        if row.bill_kind == "income" {
-            month_income = month_income
-                .checked_add(row.amount_cents)
-                .ok_or_else(|| err500("汇总金额超出范围"))?;
-        } else if row.bill_kind == "expense" {
-            month_expense = month_expense
-                .checked_add(row.amount_cents)
-                .ok_or_else(|| err500("汇总金额超出范围"))?;
-            if row.is_food {
-                food_expense = food_expense
-                    .checked_add(row.amount_cents)
-                    .ok_or_else(|| err500("汇总金额超出范围"))?;
-            }
-        }
-    }
+    let mut summary = MonthSummary::default();
+    let mut all_records =
+        ledger_rows(state, dek, time_zone, private_mode, Some(&mut summary)).await?;
+    let MonthSummary {
+        income: month_income,
+        expense: month_expense,
+        food_expense,
+    } = summary;
     let engel_coefficient = if month_expense == 0 {
         "—".into()
     } else {

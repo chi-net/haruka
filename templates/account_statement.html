@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} 对账单 - Haruka{% endblock %}
+{% block content %}
+<style>
+.statement-sheet { font-size: 14px; line-height: 1.6; }
+.statement-sheet h1 { font-size: 24px; font-weight: 700; }
+.statement-sheet h2 { font-size: 17px; font-weight: 600; margin-bottom: 10px; }
+.statement-sheet .statement-muted { color: #6b7280; }
+.statement-controls { margin-bottom: 20px; }
+.statement-controls form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin: 12px 0; }
+.statement-controls label { display: flex; flex-direction: column; gap: 4px; }
+.statement-controls input { border: 1px solid #9ca3af; border-radius: 4px; padding: 6px 8px; background: transparent; max-width: 100%; }
+.statement-controls button, .statement-controls a { display: inline-block; border: 1px solid #9ca3af; border-radius: 4px; padding: 6px 12px; }
+.statement-section { border: 1px solid #d1d5db; border-radius: 6px; padding: 16px; margin: 16px 0; }
+.statement-balances { display: flex; flex-wrap: wrap; gap: 16px 36px; }
+.statement-balances dt { color: #6b7280; }
+.statement-money { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.statement-balances dd { font-size: 18px; }
+.statement-scroll { overflow-x: auto; }
+.statement-table { width: 100%; border-collapse: collapse; table-layout: fixed; min-width: 920px; }
+.statement-table th, .statement-table td { padding: 8px; border: 1px solid #d1d5db; vertical-align: top; text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }
+.statement-table th { font-weight: 600; }
+.statement-table .statement-numeric { text-align: right; }
+.statement-table .statement-reference { font-size: 11px; color: #6b7280; }
+.statement-summary { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 14px; }
+.statement-comparison { border-left: 4px solid #2563eb; }
+@media print {
+  @page { size: A4 landscape; margin: 12mm; }
+  html, body, main, .statement-sheet, .statement-sheet * { background: white !important; color: black !important; box-shadow: none !important; text-shadow: none !important; }
+  body > :not(main), .statement-controls, #haruka-error-notice { display: none !important; }
+  body, main { margin: 0 !important; padding: 0 !important; max-width: none !important; min-height: 0 !important; }
+  .statement-sheet { font-size: 9pt; }
+  .statement-sheet h1 { font-size: 17pt; }
+  .statement-section { padding: 8px; margin: 10px 0; break-inside: avoid; }
+  .statement-scroll { overflow: visible !important; }
+  .statement-table { min-width: 0; width: 100%; font-size: 8pt; }
+  .statement-table th, .statement-table td { padding: 5px; }
+  .statement-table thead { display: table-header-group; }
+  .statement-table tr { break-inside: avoid; }
+  .statement-table .statement-reference { font-size: 7pt; }
+  .statement-balances dd { font-size: 12pt; }
+  h2 { break-after: avoid; }
+}
+</style>
+<article class="statement-sheet" data-business-time-zone="{{ time_zone }}" hx-boost="false" hx-history="false">
+  <div class="statement-controls">
+    <div class="flex flex-wrap gap-3"><a href="/accounts/{{ id }}">返回账户详情</a><button type="button" onclick="window.print()">打印 / 保存 PDF</button></div>
+    <form method="get" action="/accounts/{{ id }}/statement" autocomplete="off">
+      <label>开始日期（含）<input type="date" name="start" value="{{ start }}" required></label>
+      <label>结束日期（含）<input type="date" name="end" value="{{ end }}" required></label>
+      <label>IANA 时区<input name="time_zone" value="{{ time_zone }}" required placeholder="Asia/Shanghai" spellcheck="false"></label>
+      <button type="submit">生成对账单</button>
+    </form>
+    <form method="post" action="/accounts/{{ id }}/statement?time_zone={{ time_zone|urlencode }}" autocomplete="off">
+      <input type="hidden" name="start" value="{{ start }}">
+      <input type="hidden" name="end" value="{{ end }}">
+      <input type="hidden" name="time_zone" value="{{ time_zone }}">
+      <label>银行 / 平台实际期末余额（{{ currency }}）<input name="actual_balance" inputmode="decimal" required placeholder="0.00" autocomplete="off"></label>
+      <button type="submit">只读比较</button>
+    </form>
+    <p class="statement-muted">实际余额请对应下方所示区间的期末时点，可为负数，最多两位小数。比较仅用于本次页面，不会设置余额、写入账本或保存结果。打印窗口可选择“另存为 PDF”；无脚本时也可使用浏览器打印菜单。导出的文件含金额，请妥善保管。</p>
+  </div>
+
+  <header>
+    <h1>账户对账单</h1>
+    <p class="text-lg font-medium">{{ name }}</p>
+    <p>原币：{{ currency }} · 区间：{{ start }} 至 {{ end }}（含首尾自然日）· 时区：{{ time_zone }}</p>
+    <p class="statement-muted">生成时间：{{ generated_at }}（{{ time_zone }}）。本单依据生成时的当前账本记录推算，不是银行或平台出具的凭证；后续补录、修改或删除记录会改变历史推算。</p>
+  </header>
+
+  <section class="statement-section">
+    <h2>余额与区间净变动</h2>
+    <dl class="statement-balances">
+      <div><dt>期初余额（开始日前）</dt><dd class="statement-money">{{ opening }}</dd></div>
+      <div><dt>区间净变动</dt><dd class="statement-money">{{ net }}</dd></div>
+      <div><dt>期末余额（结束日后）</dt><dd class="statement-money">{{ closing }}</dd></div>
+    </dl>
+    <div class="statement-summary">{% for summary in summaries %}<div>{{ summary.label }}：<span class="statement-money">{{ summary.amount }}</span></div>{% endfor %}</div>
+    <p class="statement-muted mt-3">期初余额 + 区间净变动 = 期末余额。所有已入账收支均计入，包括隐私账单、退款与自动费用；转账按本账户原币的实际收付金额计入，手续费只通过相应支出账单计入一次。余额校准按“调整后 − 调整前”计入，不将目标余额重复累加。</p>
+    <p class="mt-2">生成时当前账本余额：<span class="statement-money">{{ current }}</span>。{% if ending_is_current %}本期期末与当前账本余额相符。{% else %}本期期末与当前账本余额不同：当前余额包含区间结束之后的全部已入账流水（含未来日期记录）。{% endif %}</p>
+  </section>
+
+  {% if compared %}
+  <section class="statement-section statement-comparison" aria-live="polite">
+    <h2>{% if matches %}核对结果：相符{% else %}核对结果：存在差额{% endif %}</h2>
+    <p>实际期末余额：<span class="statement-money">{{ actual }}</span> · 账本推算期末余额：<span class="statement-money">{{ closing }}</span></p>
+    <p>差额（实际 − 账本）：<strong class="statement-money">{{ difference }}</strong></p>
+    <p class="statement-muted">正差额表示实际余额较高，负差额表示实际余额较低。本次比较未修改账户余额或任何业务记录。</p>
+  </section>
+  {% endif %}
+
+  <h2>完整区间流水（{{ rows.len() }} 笔）</h2>
+  <p class="statement-muted mb-3">按发生时间升序；同一发生时间依次按创建时间、记录类型（账单 / 转账 / 借还 / 校准）、记录编号排序。逐笔余额仅表示此稳定顺序下的账本推算值。时间均显示 {{ time_zone }} 及 UTC 偏移；隐私账单仅显示方向和金额，不显示原分类或备注。</p>
+  <div class="statement-scroll">
+    <table class="statement-table">
+      <colgroup><col style="width:7%"><col style="width:18%"><col style="width:12%"><col style="width:17%"><col style="width:18%"><col style="width:14%"><col style="width:14%"></colgroup>
+      <thead><tr><th scope="col">序号 / 记录</th><th scope="col">发生时间</th><th scope="col">类型</th><th scope="col">分类 / 对方</th><th scope="col">说明</th><th scope="col" class="statement-numeric">原币变动</th><th scope="col" class="statement-numeric">滚动余额</th></tr></thead>
+      <tbody>
+        <tr><td colspan="5">期初余额</td><td></td><td class="statement-money statement-numeric">{{ opening }}</td></tr>
+        {% for row in rows %}
+        <tr><td>{{ row.number }}<br><span class="statement-reference">{{ row.reference }}</span></td><td>{{ row.happened_at }}</td><td>{{ row.label }}</td><td>{{ row.subject }}</td><td>{{ row.note }}</td><td class="statement-money statement-numeric">{{ row.amount }}</td><td class="statement-money statement-numeric">{{ row.balance }}</td></tr>
+        {% endfor %}
+        {% if rows.is_empty() %}<tr><td colspan="7">本区间无已入账流水，期初余额等于期末余额。</td></tr>{% endif %}
+        <tr><td colspan="5">期末余额</td><td class="statement-money statement-numeric">{{ net }}</td><td class="statement-money statement-numeric">{{ closing }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</article>
+{% endblock %}

@@ -117,6 +117,7 @@ struct RequestView {
     paid_at: String,
     has_submission: bool,
     can_confirm: bool,
+    can_print: bool,
     can_submit_repayment: bool,
     can_revoke: bool,
     repayment_pending: bool,
@@ -151,6 +152,27 @@ struct DebtRequestPublicTemplate {
     incoming: bool,
 }
 
+struct ProofTime {
+    label: &'static str,
+    utc: String,
+    local: String,
+}
+
+fn proof_time(
+    label: &'static str,
+    utc: NaiveDateTime,
+    time_zone: super::ClientTimeZone,
+) -> ProofTime {
+    ProofTime {
+        label,
+        utc: utc.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        local: time_zone
+            .local_datetime(utc)
+            .format("%Y-%m-%d %H:%M:%S %:z")
+            .to_string(),
+    }
+}
+
 #[derive(Template)]
 #[template(path = "debt_request_receipt.html")]
 struct DebtRequestReceiptTemplate {
@@ -158,17 +180,23 @@ struct DebtRequestReceiptTemplate {
     request: RequestSnapshot,
     submission: PayerSubmission,
     paid_amount: String,
-    expires_at: String,
+    requested_amount: String,
     confirmed: bool,
-    is_borrow: bool,
+    is_loan: bool,
     repayment_pending: bool,
     repaid: bool,
-    repayment_at: String,
     repayment_note: String,
+    repayment_amount: String,
     verification_code: String,
     requires_confirmation: bool,
     incoming: bool,
     origin_debt_record_id: i64,
+    confirmed_debt_record_id: i64,
+    repayment_debt_record_id: i64,
+    proof_version: i32,
+    times: Vec<ProofTime>,
+    time_zone: &'static str,
+    style_nonce: String,
 }
 
 #[derive(Template)]
@@ -274,6 +302,106 @@ fn render_public<T: Template>(template: T) -> HandlerResult<Response> {
     Ok(public_response(
         Html(template.render().map_err(err500)?).into_response(),
     ))
+}
+
+fn render_receipt(
+    request: &debt_request::Model,
+    token: String,
+    token_bytes: &[u8],
+    snapshot: RequestSnapshot,
+    submission: PayerSubmission,
+    time_zone: super::ClientTimeZone,
+) -> HandlerResult<Response> {
+    let Ok(paid_at) = NaiveDateTime::parse_from_str(&submission.paid_at, TIME_FMT) else {
+        return render_public(UnavailableTemplate {});
+    };
+    let mut times = vec![
+        proof_time("请求创建", request.created_at.naive_utc(), time_zone),
+        proof_time(
+            if request.requires_confirmation {
+                "实际收付（对方声明）"
+            } else {
+                "实际收付（账主单方陈述）"
+            },
+            paid_at,
+            time_zone,
+        ),
+    ];
+    if let Some(at) = request.submitted_at {
+        times.push(proof_time(
+            if request.requires_confirmation {
+                "对方提交 / 确认收付"
+            } else {
+                "账主登记单方陈述"
+            },
+            at.naive_utc(),
+            time_zone,
+        ));
+    }
+    if let Some(at) = request.confirmed_at {
+        times.push(proof_time("账主核实入账", at.naive_utc(), time_zone));
+    }
+    let repayment = if matches!(request.status.as_str(), "repayment_submitted" | "repaid") {
+        let Some(repayment) = decrypt_repayment(request, token_bytes) else {
+            return render_public(UnavailableTemplate {});
+        };
+        let Ok(at) = NaiveDateTime::parse_from_str(&repayment.repaid_at, TIME_FMT) else {
+            return render_public(UnavailableTemplate {});
+        };
+        times.push(proof_time("历史还款收付（账主登记）", at, time_zone));
+        Some(repayment)
+    } else {
+        None
+    };
+    if let Some(at) = request.repayment_submitted_at {
+        times.push(proof_time("历史还款登记", at.naive_utc(), time_zone));
+    }
+    if let Some(at) = request.verified_at {
+        times.push(proof_time(
+            "对方确认收到历史还款",
+            at.naive_utc(),
+            time_zone,
+        ));
+    }
+    times.push(proof_time("原链接有效期", request.expires_at, time_zone));
+    let style_nonce = URL_SAFE_NO_PAD.encode(crypto::random_bytes::<16>());
+    // Authorize only this response's business-template style block, not arbitrary inline CSS.
+    let policy = HeaderValue::from_str(&format!(
+        "default-src 'none'; style-src 'self' 'nonce-{style_nonce}'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+    ))
+    .map_err(err500)?;
+    let mut response = render_public(DebtRequestReceiptTemplate {
+        token,
+        paid_amount: crate::currency::format(submission.amount_cents, &snapshot.currency),
+        requested_amount: crate::currency::format(snapshot.amount_cents, &snapshot.currency),
+        repayment_amount: repayment
+            .as_ref()
+            .map(|repayment| crate::currency::format(repayment.amount_cents, &snapshot.currency))
+            .unwrap_or_default(),
+        repayment_note: repayment
+            .map(|repayment| repayment.note)
+            .unwrap_or_default(),
+        is_loan: matches!(request.kind.as_str(), "borrow" | "lend"),
+        request: snapshot,
+        submission,
+        confirmed: request.status != "submitted",
+        repayment_pending: request.status == "repayment_submitted",
+        repaid: request.status == "repaid",
+        verification_code: digest_code(chain_head(request)),
+        requires_confirmation: request.requires_confirmation,
+        incoming: incoming(&request.kind),
+        origin_debt_record_id: request.origin_debt_record_id.unwrap_or_default(),
+        confirmed_debt_record_id: request.confirmed_debt_record_id.unwrap_or_default(),
+        repayment_debt_record_id: request.repayment_debt_record_id.unwrap_or_default(),
+        proof_version: request.proof_version,
+        times,
+        time_zone: time_zone.0.name(),
+        style_nonce,
+    })?;
+    response
+        .headers_mut()
+        .insert(header::CONTENT_SECURITY_POLICY, policy);
+    Ok(response)
 }
 
 fn request_key(token: &[u8], salt: &[u8]) -> crypto::Dek {
@@ -1238,6 +1366,12 @@ pub async fn list(
             can_confirm: request.requires_confirmation
                 && request.status == "submitted"
                 && verify_chain(&request),
+            can_print: has_submission
+                && verify_chain(&request)
+                && (matches!(
+                    request.status.as_str(),
+                    "confirmed" | "recorded" | "repayment_submitted" | "repaid"
+                ) || (request.status == "submitted" && !expired)),
             can_submit_repayment: matches!(request.kind.as_str(), "borrow" | "lend")
                 && matches!(request.status.as_str(), "confirmed" | "recorded")
                 && verify_chain(&request),
@@ -1277,6 +1411,7 @@ pub async fn list(
 pub async fn open(
     State(state): State<AppState>,
     Path(token): Path<String>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
 ) -> HandlerResult<Response> {
     let Some((request, token_bytes)) = find_public_request(&state, &token).await? else {
         return render_public(UnavailableTemplate {});
@@ -1294,24 +1429,14 @@ pub async fn open(
         let Some(submission) = decrypt_submission(&request, token_bytes.as_slice()) else {
             return render_public(UnavailableTemplate {});
         };
-        let repayment = decrypt_repayment(&request, token_bytes.as_slice()).unwrap_or_default();
-        return render_public(DebtRequestReceiptTemplate {
+        return render_receipt(
+            &request,
             token,
-            paid_amount: crate::currency::format(submission.amount_cents, &snapshot.currency),
-            is_borrow: request.kind == "borrow",
-            request: snapshot,
+            token_bytes.as_slice(),
+            snapshot,
             submission,
-            expires_at: request.expires_at.format(TIME_FMT).to_string(),
-            confirmed: request.status != "submitted",
-            repayment_pending: request.status == "repayment_submitted",
-            repaid: request.status == "repaid",
-            repayment_at: repayment.repaid_at,
-            repayment_note: repayment.note,
-            verification_code: digest_code(chain_head(&request)),
-            requires_confirmation: request.requires_confirmation,
-            incoming: incoming(&request.kind),
-            origin_debt_record_id: request.origin_debt_record_id.unwrap_or_default(),
-        });
+            time_zone,
+        );
     }
     render_public(DebtRequestPublicTemplate {
         token,
@@ -1352,6 +1477,7 @@ pub async fn account_identifier(
 pub async fn submit(
     State(state): State<AppState>,
     Path(token): Path<String>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
     Form(form): Form<SubmitRequestForm>,
 ) -> HandlerResult<Response> {
     let _write_guard = state.balance_writes.lock().await;
@@ -1401,33 +1527,20 @@ pub async fn submit(
     let cipher = crypto::encrypt(&key, &serde_json::to_vec(&submission).map_err(err500)?);
     let submitted_at = Utc::now();
     let submission_digest = submitted_digest(&request.request_digest, &cipher, submitted_at);
-    let expires_at = request.expires_at.format(TIME_FMT).to_string();
-    let requires_confirmation = request.requires_confirmation;
-    let is_incoming = incoming(&request.kind);
-    let origin_debt_record_id = request.origin_debt_record_id.unwrap_or_default();
     let mut active = request.into_active_model();
     active.submission = Set(cipher);
-    active.submission_digest = Set(submission_digest.clone());
+    active.submission_digest = Set(submission_digest);
     active.status = Set("submitted".into());
     active.submitted_at = Set(Some(submitted_at));
-    active.update(&state.db).await.map_err(err500)?;
-    render_public(DebtRequestReceiptTemplate {
+    let request = active.update(&state.db).await.map_err(err500)?;
+    render_receipt(
+        &request,
         token,
-        paid_amount: crate::currency::format(amount_cents, &snapshot.currency),
-        is_borrow: snapshot.kind == "borrow",
-        request: snapshot,
+        token_bytes.as_slice(),
+        snapshot,
         submission,
-        expires_at,
-        confirmed: false,
-        repayment_pending: false,
-        repaid: false,
-        repayment_at: String::new(),
-        repayment_note: String::new(),
-        verification_code: digest_code(&submission_digest),
-        requires_confirmation,
-        incoming: is_incoming,
-        origin_debt_record_id,
-    })
+        time_zone,
+    )
 }
 
 /// The old loan shortcut now creates a new origin-bound request. Confirmation

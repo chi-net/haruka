@@ -394,6 +394,10 @@ async fn main() {
         )
         .route("/accounts/{id}", get(handlers::accounts::detail))
         .route(
+            "/accounts/{id}/statement",
+            get(handlers::account_statements::show).post(handlers::account_statements::compare),
+        )
+        .route(
             "/accounts/{id}/edit",
             get(handlers::accounts::edit_form).post(handlers::accounts::update),
         )

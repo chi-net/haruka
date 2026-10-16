@@ -44,7 +44,7 @@
     <div class="font-mono">{{ engel_coefficient }}</div>
   </div>
 </div>
-<p class="text-xs text-gray-500 mb-4">按 {{ time_zone }} 本月截至今日统计，不随下方筛选或分页变化；{% if private_mode %}仅统计隐私账单{% else %}不含隐私账单{% endif %}，不计转账和借还。</p>
+<p class="text-xs text-gray-500 mb-4">按 {{ time_zone }} 本月截至今日统计，不随下方筛选或分页变化；{% if private_mode %}仅统计隐私账单{% else %}金额及食品占比包含隐私账单，列表仍隐藏隐私记录{% endif %}，不计转账和借还。</p>
 <form method="get" action="{{ search_action }}" class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
   <input type="hidden" name="time_zone" value="{{ time_zone }}">
   <div class="flex flex-wrap items-center justify-between gap-3 mb-3">

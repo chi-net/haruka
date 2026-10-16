@@ -414,3 +414,90 @@ async fn private_bills_require_tab_authority_and_keep_real_balances_without_meta
     assert!(ordinary.contains("public-batch-note"));
     assert!(!ordinary.contains("private-batch-note"));
 }
+
+#[tokio::test]
+async fn private_money_is_included_in_summaries_without_exposing_private_rows() {
+    let app = App::start().await;
+    for (kind, name, food) in [
+        ("income", "公开收入", "false"),
+        ("income", "private-income-category", "false"),
+        ("expense", "公开非食品", "false"),
+        ("expense", "private-food-category", "true"),
+    ] {
+        assert_eq!(
+            app.post(
+                "/categories",
+                &[("kind", kind), ("name", name), ("is_food", food)],
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::SEE_OTHER,
+        );
+    }
+    let happened_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M").to_string();
+    for (kind, amount, category, note, private) in [
+        ("income", "1000", "公开收入", "public-income", "false"),
+        (
+            "income",
+            "25",
+            "private-income-category",
+            "private-income-note",
+            "true",
+        ),
+        ("expense", "100", "公开非食品", "public-expense", "false"),
+        (
+            "expense",
+            "50",
+            "private-food-category",
+            "private-food-note",
+            "true",
+        ),
+    ] {
+        assert_eq!(
+            app.post(
+                "/bills",
+                &[
+                    ("account_id", "1"),
+                    ("kind", kind),
+                    ("amount", amount),
+                    ("category", category),
+                    ("note", note),
+                    ("happened_at", &happened_at),
+                    ("is_private", private),
+                ],
+                None,
+            )
+            .await
+            .status(),
+            StatusCode::OK,
+        );
+    }
+    for path in [
+        "/bills?time_zone=UTC",
+        "/bills/search?keyword=no-matching-note&time_zone=UTC",
+    ] {
+        let response = app.get(path, None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = response.text().await.unwrap();
+        assert!(html.contains("+CNY 1025.00"), "{path}");
+        assert!(html.contains("-CNY 150.00"), "{path}");
+        assert!(html.contains("33.3%"), "{path}");
+        for secret in ["private-income-note", "private-food-note"] {
+            assert!(!html.contains(secret), "{path}: {secret}");
+        }
+    }
+    let stats = app.get("/statistics", None).await.text().await.unwrap();
+    assert!(stats.contains("+CNY 1025.00"));
+    assert!(stats.contains("-CNY 150.00"));
+    assert!(stats.contains("33.3%"));
+    assert!(!stats.contains("private-food-category"));
+    assert!(!stats.contains("private-food-note"));
+    let balance: Value = app
+        .get("/accounts/1/balance-summary", None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(balance["balance"], "CNY 875.00");
+}
