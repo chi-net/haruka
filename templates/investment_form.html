@@ -64,7 +64,7 @@
         <div class="flex flex-wrap items-center gap-3 mt-3"><button id="investment-smart-preview" type="button" class="rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700">查看当前档位</button><span id="investment-smart-status" role="status" aria-live="polite">预览使用所选开始日期之前最近一个指数交易日的数据。</span></div>
       </div>
     </div>
-    <div id="investment-manual-help" class="rounded bg-amber-50 border border-amber-100 p-3 text-xs text-amber-800 {% if strategy != "manual" %}hidden{% endif %}">每个到期交易日会显示一个金额输入框，由你核对银行或基金平台后确认记账；同一计划同一天只能执行一次。</div>
+    <div id="investment-manual-help" class="rounded bg-amber-50 border border-amber-100 p-3 text-xs text-amber-800 {% if strategy != "manual" %}hidden{% endif %}">只确认北京时间当天交易日的实际金额，不补扣历史日期；输入 0 表示当日无扣款，不生成转账或手续费，同一计划同一天只能确认一次。</div>
     <div id="investment-sms-fields" class="rounded bg-emerald-50 border border-emerald-100 p-3 space-y-3 {% if strategy != "sms" %}hidden{% endif %}">
       <p class="text-xs text-emerald-800">按所选具体基金的名称或银行名称别名及银行卡尾号匹配，不使用投资账户分组名。银行名称请在基金编辑页维护；绑定计划的自定义模板如提取了基金名，也必须匹配该基金。</p>
       <p class="text-xs text-emerald-800">成功短信按实扣金额在扣款账户与所选具体基金之间生成转账；失败短信只显示失败记录。短信金额已经是银行实际扣款，本模式不会再另记手续费。</p>
@@ -73,7 +73,7 @@
   <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
     <div id="investment-amount-field">
       <label id="investment-amount-label" class="block text-sm text-gray-600 mb-1">每个交易日基准金额</label>
-      <input id="investment-amount" name="amount" type="number" step="0.01" min="0.01" value="{{ amount }}" {% if strategy != "manual" && strategy != "sms" %}required{% endif %} class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <input id="investment-amount" name="amount" type="number" step="0.01" min="{% if strategy == "manual" %}0{% else %}0.01{% endif %}" value="{{ amount }}" {% if strategy != "manual" && strategy != "sms" %}required{% endif %} class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
       <p id="investment-amount-help" class="text-xs text-gray-400 mt-1"></p>
     </div>
     <div>
@@ -137,11 +137,12 @@
     manualHelp.classList.toggle('hidden', !manual);
     smsFields.classList.toggle('hidden', !sms);
     amount.required = !manual && !sms;
+    amount.min = manual ? '0' : '0.01';
     amount.readOnly = sms;
     amountField.classList.toggle('hidden', sms);
     feeRate.disabled = sms;
     amountLabel.textContent = manual ? '默认填写金额（可留空）' : sms ? '每次金额' : '每个交易日基准金额';
-    amountHelp.textContent = manual ? '到期时仍可覆盖为当天实际金额。' : sms ? '由银行成功短信中的扣款金额自动填写。' : '';
+    amountHelp.textContent = manual ? '当天仍需确认；输入 0 表示当天不扣款。' : sms ? '由银行成功短信中的扣款金额自动填写。' : '';
   };
   strategy.addEventListener('change', syncStrategy);
   preview.addEventListener('click', async () => {

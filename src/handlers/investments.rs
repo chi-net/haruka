@@ -102,13 +102,13 @@ pub struct SmsProcessResponse {
 }
 
 fn parse_nonnegative_amount(value: &str, field: &str) -> HandlerResult<i64> {
-    let decimal = Decimal::from_str(value.trim())
-        .map_err(|_| bad_request(format!("{field}格式不正确")))?
-        .round_dp(2);
+    let decimal =
+        Decimal::from_str(value.trim()).map_err(|_| bad_request(format!("{field}格式不正确")))?;
     if decimal < Decimal::ZERO {
         return Err(bad_request(format!("{field}不能小于 0")));
     }
     decimal
+        .round_dp(2)
         .checked_mul(Decimal::from(100))
         .and_then(|value| value.to_i64())
         .ok_or_else(|| bad_request(format!("{field}超出范围")))
@@ -727,10 +727,10 @@ async fn parse_form(
             return Err(bad_request("短信实扣模式的扣款账户必须配置有效银行卡号"));
         }
     }
-    let amount = if strategy == "sms" {
+    let amount = if strategy == "sms" || strategy == "manual" && form.amount.trim().is_empty() {
         0
-    } else if strategy == "manual" && form.amount.trim().is_empty() {
-        0
+    } else if strategy == "manual" {
+        parse_nonnegative_amount(&form.amount, "默认定投金额")?
     } else {
         parse_amount(&form.amount)?
     };
@@ -773,12 +773,21 @@ pub async fn list(
         .map(|account| (account.id, account.currency.clone()))
         .collect::<HashMap<_, _>>();
     let keyword = query.keyword.trim().to_lowercase();
-    let plan_rows = recurring_investment::Entity::find()
+    let stored_plans = recurring_investment::Entity::find()
         .order_by_asc(recurring_investment::Column::NextTradeDate)
         .order_by_asc(recurring_investment::Column::Id)
         .all(&state.db)
         .await
-        .map_err(err500)?
+        .map_err(err500)?;
+    let manual_trade_date = if stored_plans
+        .iter()
+        .any(|plan| plan.active && plan.strategy == "manual" && plan.next_trade_date <= today)
+    {
+        next_trading_day(&state, today).await?
+    } else {
+        today
+    };
+    let plan_rows = stored_plans
         .into_iter()
         .map(|plan| {
             let name = crypto::decrypt_string(&dek, &plan.name);
@@ -786,6 +795,11 @@ pub async fn list(
             let smart = plan.strategy == "smart";
             let manual = plan.strategy == "manual";
             let sms = plan.strategy == "sms";
+            let next_trade_date = if manual && plan.active {
+                plan.next_trade_date.max(manual_trade_date)
+            } else {
+                plan.next_trade_date
+            };
             let strategy_label = match plan.strategy.as_str() {
                 "smart" => {
                     let index_name = crate::market_data::index_option(&plan.index_code)
@@ -840,10 +854,10 @@ pub async fn list(
                 next_trade_date: if sms {
                     "等待短信".into()
                 } else {
-                    plan.next_trade_date.format("%Y-%m-%d").to_string()
+                    next_trade_date.format("%Y-%m-%d").to_string()
                 },
                 active: plan.active,
-                due: plan.active && !sms && plan.next_trade_date <= today,
+                due: plan.active && !sms && next_trade_date <= today,
                 note,
             }
         })
@@ -905,7 +919,16 @@ pub async fn list(
         .await
         .map_err(err500)?
         .into_iter()
-        .map(|plan| (plan.id, crypto::decrypt_string(&dek, &plan.name)))
+        .map(|plan| {
+            (
+                plan.id,
+                (
+                    crypto::decrypt_string(&dek, &plan.name),
+                    plan.from_account_id,
+                    plan.fund_account_id,
+                ),
+            )
+        })
         .collect::<HashMap<_, _>>();
     let transfers = transfer::Entity::find()
         .all(&state.db)
@@ -929,10 +952,25 @@ pub async fn list(
         .map_err(err500)?
         .into_iter()
         .filter_map(|execution| {
-            let transfer = transfers.get(&execution.transfer_id?)?;
+            let (from_account_id, fund_account_id, amount) = if let Some(transfer) =
+                execution.transfer_id.and_then(|id| transfers.get(&id))
+            {
+                (
+                    transfer.from_account_id,
+                    transfer.to_account_id,
+                    crypto::decrypt_cents(&dek, &transfer.amount),
+                )
+            } else if execution.strategy == "manual"
+                && crypto::decrypt_cents(&dek, &execution.base_amount) == 0
+            {
+                let (_, from_account_id, fund_account_id) = all_plans.get(&execution.plan_id)?;
+                (*from_account_id, *fund_account_id, 0)
+            } else {
+                return None;
+            };
             let currency = account_currencies
-                .get(&transfer.from_account_id)
-                .cloned()
+                .get(&from_account_id)
+                .map(String::as_str)
                 .unwrap_or_default();
             let fee = execution
                 .fee_bill_id
@@ -942,7 +980,14 @@ pub async fn list(
             let (strategy, decision) = if execution.strategy == "sms" {
                 ("短信实扣".into(), "按银行短信中的实际扣款金额执行".into())
             } else if execution.strategy == "manual" {
-                ("手动金额".into(), "当日由用户确认后执行".into())
+                (
+                    "手动金额".into(),
+                    if amount == 0 {
+                        "当日无扣款（已确认 0）".into()
+                    } else {
+                        "当日由用户确认后执行".into()
+                    },
+                )
             } else if execution.index_code.is_empty() {
                 ("固定金额".into(), String::new())
             } else {
@@ -977,21 +1022,18 @@ pub async fn list(
             Some(ExecutionRow {
                 plan_name: all_plans
                     .get(&execution.plan_id)
-                    .cloned()
+                    .map(|(name, ..)| name.clone())
                     .unwrap_or_else(|| "已删除计划".into()),
                 trade_date: execution.trade_date.format("%Y-%m-%d").to_string(),
                 from_account: account_names
-                    .get(&transfer.from_account_id)
+                    .get(&from_account_id)
                     .cloned()
                     .unwrap_or_else(|| "已删除账户".into()),
                 fund_account: account_names
-                    .get(&transfer.to_account_id)
+                    .get(&fund_account_id)
                     .cloned()
                     .unwrap_or_else(|| "已删除基金账户".into()),
-                amount: crate::currency::format(
-                    crypto::decrypt_cents(&dek, &transfer.amount),
-                    &currency,
-                ),
+                amount: crate::currency::format(amount, currency),
                 fee: crate::currency::format(fee, &currency),
                 strategy,
                 decision,
@@ -1172,9 +1214,12 @@ pub async fn update(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "定投计划不存在".into()))?;
-    let reset_schedule = !plan.active && parsed.active || parsed.start_date > plan.next_trade_date;
+    let today = china_today();
+    let reset_schedule = !plan.active && parsed.active
+        || parsed.start_date > plan.next_trade_date
+        || parsed.strategy == "manual" && plan.next_trade_date < today;
     let next_trade_date = if reset_schedule {
-        next_trading_day(&state, parsed.start_date.max(china_today())).await?
+        next_trading_day(&state, parsed.start_date.max(today)).await?
     } else {
         plan.next_trade_date
     };
@@ -1319,8 +1364,11 @@ async fn execute_plan_day(
         .as_ref()
         .map(|decision| decision.multiplier_bps)
         .unwrap_or(10_000);
-    let amount =
-        crate::market_data::adjusted_amount(base_amount, multiplier_bps).map_err(bad_request)?;
+    let amount = if plan.strategy == "manual" && base_amount == 0 {
+        0
+    } else {
+        crate::market_data::adjusted_amount(base_amount, multiplier_bps).map_err(bad_request)?
+    };
     let fee_rate_bps = if plan.strategy == "sms" {
         0
     } else {
@@ -1330,16 +1378,18 @@ async fn execute_plan_day(
     let total_debit = amount
         .checked_add(fee)
         .ok_or_else(|| bad_request("定投本金和手续费合计超出范围"))?;
-    super::accounts::ensure_balance_delta(
-        state,
-        dek,
-        plan.from_account_id,
-        total_debit
-            .checked_neg()
-            .ok_or_else(|| bad_request("定投金额超出范围"))?,
-    )
-    .await?;
-    super::accounts::ensure_balance_delta(state, dek, fund_account.id, amount).await?;
+    if amount > 0 {
+        super::accounts::ensure_balance_delta(
+            state,
+            dek,
+            plan.from_account_id,
+            total_debit
+                .checked_neg()
+                .ok_or_else(|| bad_request("定投金额超出范围"))?,
+        )
+        .await?;
+        super::accounts::ensure_balance_delta(state, dek, fund_account.id, amount).await?;
+    }
     let fee_category_id = if fee > 0 {
         Some(ensure_fee_category(state, dek).await?)
     } else {
@@ -1359,35 +1409,46 @@ async fn execute_plan_day(
             .and_hms_opt(7, 0, 0)
             .ok_or_else(|| bad_request("定投交易时间无效"))?,
     );
-    let plan_name = crypto::decrypt_string(dek, &plan.name);
-    let transfer_note = if let Some(decision) = &smart_decision {
-        format!(
-            "聪明定投 · {plan_name} · {} {} · {}",
-            decision.index_name,
-            decision.moving_average_days,
-            crate::market_data::format_multiplier(decision.multiplier_bps)
-        )
-    } else if plan.strategy == "sms" {
-        format!("银行短信定投 · {plan_name}")
-    } else if plan.strategy == "manual" {
-        format!("手动金额定投 · {plan_name}")
+    let plan_name = if amount > 0 {
+        crypto::decrypt_string(dek, &plan.name)
     } else {
-        format!("每日定投 · {plan_name}")
+        String::new()
     };
     let transaction = state.db.begin().await.map_err(err500)?;
-    let transfer = transfer::ActiveModel {
-        from_account_id: Set(plan.from_account_id),
-        to_account_id: Set(plan.fund_account_id),
-        amount: Set(crypto::encrypt_cents(dek, amount)),
-        to_amount: Set(crypto::encrypt_cents(dek, amount)),
-        note: Set(crypto::encrypt(dek, transfer_note.as_bytes())),
-        happened_at: Set(happened_at),
-        created_at: Set(chrono::Utc::now()),
-        ..Default::default()
-    }
-    .insert(&transaction)
-    .await
-    .map_err(err500)?;
+    let transfer_id = if amount > 0 {
+        let transfer_note = if let Some(decision) = &smart_decision {
+            format!(
+                "聪明定投 · {plan_name} · {} {} · {}",
+                decision.index_name,
+                decision.moving_average_days,
+                crate::market_data::format_multiplier(decision.multiplier_bps)
+            )
+        } else if plan.strategy == "sms" {
+            format!("银行短信定投 · {plan_name}")
+        } else if plan.strategy == "manual" {
+            format!("手动金额定投 · {plan_name}")
+        } else {
+            format!("每日定投 · {plan_name}")
+        };
+        Some(
+            transfer::ActiveModel {
+                from_account_id: Set(plan.from_account_id),
+                to_account_id: Set(plan.fund_account_id),
+                amount: Set(crypto::encrypt_cents(dek, amount)),
+                to_amount: Set(crypto::encrypt_cents(dek, amount)),
+                note: Set(crypto::encrypt(dek, transfer_note.as_bytes())),
+                happened_at: Set(happened_at),
+                created_at: Set(chrono::Utc::now()),
+                ..Default::default()
+            }
+            .insert(&transaction)
+            .await
+            .map_err(err500)?
+            .id,
+        )
+    } else {
+        None
+    };
     let fee_bill_id = if let Some(category_id) = fee_category_id {
         Some(
             bill::ActiveModel {
@@ -1416,7 +1477,7 @@ async fn execute_plan_day(
     investment_execution::ActiveModel {
         plan_id: Set(plan.id),
         trade_date: Set(trade_date),
-        transfer_id: Set(Some(transfer.id)),
+        transfer_id: Set(transfer_id),
         fee_bill_id: Set(fee_bill_id),
         base_amount: Set(crypto::encrypt_cents(dek, base_amount)),
         multiplier_bps: Set(crypto::encrypt_cents(dek, multiplier_bps)),
@@ -1458,9 +1519,20 @@ pub async fn execute_manual(
     Form(form): Form<ManualExecuteFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
+    confirm_manual_on(&state, &dek, id, form, china_today()).await?;
+    Ok(Redirect::to("/investments"))
+}
+
+async fn confirm_manual_on(
+    state: &AppState,
+    dek: &crypto::Dek,
+    id: i64,
+    form: ManualExecuteFormData,
+    today: NaiveDate,
+) -> HandlerResult<()> {
     let trade_date = NaiveDate::parse_from_str(form.trade_date.trim(), "%Y-%m-%d")
         .map_err(|_| bad_request("待执行交易日格式不正确"))?;
-    let amount = parse_amount(&form.amount)?;
+    let amount = parse_nonnegative_amount(&form.amount, "定投金额")?;
     let plan = recurring_investment::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -1472,14 +1544,16 @@ pub async fn execute_manual(
     if !plan.active {
         return Err(bad_request("这个定投计划已暂停"));
     }
-    if trade_date != plan.next_trade_date {
-        return Err(bad_request("待执行日期已经变化，请刷新页面后重新填写"));
+    if trade_date != today {
+        return Err(bad_request(
+            "手动定投只能确认北京时间当天的金额，请刷新页面",
+        ));
     }
-    if trade_date > china_today() {
-        return Err(bad_request("尚未到这个交易日，不能提前执行"));
+    if plan.next_trade_date > today {
+        return Err(bad_request("今天已经确认或尚未到计划执行日期，请刷新页面"));
     }
-    execute_plan_day(&state, &dek, &plan, trade_date, Some(amount), None).await?;
-    Ok(Redirect::to("/investments"))
+    execute_plan_day(state, dek, &plan, trade_date, Some(amount), None).await?;
+    Ok(())
 }
 
 struct SmsOutcome {
@@ -3011,3 +3085,6 @@ mod builtin_sms_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
