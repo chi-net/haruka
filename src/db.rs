@@ -147,6 +147,13 @@ pub async fn init() -> DatabaseConnection {
     ensure_column(&db, "bills", "is_food", "BOOLEAN NOT NULL DEFAULT 0").await;
     ensure_column(&db, "bills", "category_id", "INTEGER DEFAULT NULL").await;
     ensure_column(&db, "bills", "is_private", "BOOLEAN NOT NULL DEFAULT 0").await;
+    ensure_column(&db, "bills", "refund_of_bill_id", "INTEGER DEFAULT NULL").await;
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "CREATE INDEX IF NOT EXISTS idx_bills_refund_of ON bills (refund_of_bill_id)".to_string(),
+    ))
+    .await
+    .expect("创建退款来源索引失败");
     let mut create_bill_shares = schema.create_table_from_entity(bill_share::Entity);
     db.execute(builder.build(create_bill_shares.if_not_exists()))
         .await

@@ -1262,13 +1262,52 @@ pub async fn toggle(State(state): State<AppState>, Path(id): Path<i64>) -> Handl
 
 pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
+    let transaction = state.db.begin().await.map_err(err500)?;
+    let executions = investment_execution::Entity::find()
+        .filter(investment_execution::Column::PlanId.eq(id))
+        .all(&transaction)
+        .await
+        .map_err(err500)?;
+    // 旧定投仅在执行记录上关联费用；计划级联删除执行前先固化到保留的转账。
+    for execution in executions {
+        let (Some(transfer_id), Some(fee_bill_id)) = (execution.transfer_id, execution.fee_bill_id)
+        else {
+            continue;
+        };
+        let Some(transfer) = transfer::Entity::find_by_id(transfer_id)
+            .one(&transaction)
+            .await
+            .map_err(err500)?
+        else {
+            continue;
+        };
+        if transfer.fee_bill_id == Some(fee_bill_id) {
+            continue;
+        }
+        if transfer.fee_bill_id.is_some() {
+            return Err(bad_request("定投转账关联了不同的手续费账单，不能删除计划"));
+        }
+        let Some(fee_bill) = bill::Entity::find_by_id(fee_bill_id)
+            .one(&transaction)
+            .await
+            .map_err(err500)?
+        else {
+            continue;
+        };
+        let mut active = transfer.into_active_model();
+        active.fee_bill_id = Set(Some(fee_bill_id));
+        active.fee_amount = Set(fee_bill.amount);
+        // 历史执行没有保存费率，不能拿计划当前费率伪造旧快照。
+        active.update(&transaction).await.map_err(err500)?;
+    }
     let result = recurring_investment::Entity::delete_by_id(id)
-        .exec(&state.db)
+        .exec(&transaction)
         .await
         .map_err(err500)?;
     if result.rows_affected == 0 {
         return Err((StatusCode::NOT_FOUND, "定投计划不存在".into()));
     }
+    transaction.commit().await.map_err(err500)?;
     Ok(Redirect::to("/investments"))
 }
 
@@ -1436,6 +1475,8 @@ async fn execute_plan_day(
                 to_account_id: Set(plan.fund_account_id),
                 amount: Set(crypto::encrypt_cents(dek, amount)),
                 to_amount: Set(crypto::encrypt_cents(dek, amount)),
+                fee_rate_bps: Set(crypto::encrypt_cents(dek, fee_rate_bps)),
+                fee_amount: Set(crypto::encrypt_cents(dek, fee)),
                 note: Set(crypto::encrypt(dek, transfer_note.as_bytes())),
                 happened_at: Set(happened_at),
                 created_at: Set(chrono::Utc::now()),
@@ -1474,6 +1515,17 @@ async fn execute_plan_day(
     } else {
         None
     };
+    if let (Some(transfer_id), Some(fee_bill_id)) = (transfer_id, fee_bill_id) {
+        transfer::Entity::update_many()
+            .col_expr(
+                transfer::Column::FeeBillId,
+                sea_orm::sea_query::Expr::value(fee_bill_id),
+            )
+            .filter(transfer::Column::Id.eq(transfer_id))
+            .exec(&transaction)
+            .await
+            .map_err(err500)?;
+    }
     investment_execution::ActiveModel {
         plan_id: Set(plan.id),
         trade_date: Set(trade_date),

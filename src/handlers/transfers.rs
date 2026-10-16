@@ -10,12 +10,16 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+};
 
 use crate::{
     crypto, currency,
     entity::{
-        account, account_detail, bill, category, installment_item, investment_execution, transfer,
+        account, account_detail, bill, category, installment_item, investment_execution,
+        investment_sms_event, transfer,
     },
     AppState, SessionDek,
 };
@@ -340,45 +344,96 @@ pub async fn delete(
             "分期还款本金流水不能单独删除，请在分期详情中撤销对应还款",
         ));
     }
-    if investment_execution::Entity::find()
-        .filter(investment_execution::Column::TransferId.eq(id))
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .is_some()
-    {
-        return Err(bad_request(
-            "定投生成的转账不能单独删除；删除定投计划不会影响已有流水",
-        ));
-    }
     let transfer = transfer::Entity::find_by_id(id)
         .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "转账不存在".into()))?;
-    let from_amount = crypto::decrypt_cents(&dek, &transfer.amount);
-    let from_refund = from_amount
-        .checked_add(crypto::decrypt_cents(&dek, &transfer.fee_amount))
-        .ok_or_else(|| bad_request("转账本金和手续费合计超出范围"))?;
-    let amount = super::transfer_to_cents(&dek, &transfer);
-    super::accounts::ensure_balance_delta(&state, &dek, transfer.from_account_id, from_refund)
-        .await?;
-    super::accounts::ensure_balance_delta(
-        &state,
-        &dek,
+    let executions = investment_execution::Entity::find()
+        .filter(investment_execution::Column::TransferId.eq(id))
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let fee_bill_ids: BTreeSet<i64> = transfer
+        .fee_bill_id
+        .into_iter()
+        .chain(
+            executions
+                .iter()
+                .filter_map(|execution| execution.fee_bill_id),
+        )
+        .collect();
+    for &fee_bill_id in &fee_bill_ids {
+        super::refunds::ensure_deletable(&state, fee_bill_id).await?;
+    }
+    let fee_bills = bill::Entity::find()
+        .filter(bill::Column::Id.is_in(fee_bill_ids.iter().copied()))
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    // 手续费账单才实际影响余额；转账上的 fee_amount 只是快照，不能重复返还。
+    let mut deltas = BTreeMap::<i64, i64>::new();
+    let mut add_delta = |account_id, delta| -> HandlerResult<()> {
+        let value = deltas.entry(account_id).or_default();
+        *value = value
+            .checked_add(delta)
+            .ok_or_else(|| bad_request("金额超出范围"))?;
+        Ok(())
+    };
+    add_delta(
+        transfer.from_account_id,
+        crypto::decrypt_cents(&dek, &transfer.amount),
+    )?;
+    add_delta(
         transfer.to_account_id,
-        amount
+        super::transfer_to_cents(&dek, &transfer)
             .checked_neg()
             .ok_or_else(|| bad_request("金额超出范围"))?,
-    )
-    .await?;
-    let transaction = state.db.begin().await.map_err(err500)?;
-    if let Some(fee_bill_id) = transfer.fee_bill_id {
-        bill::Entity::delete_by_id(fee_bill_id)
-            .exec(&transaction)
-            .await
-            .map_err(err500)?;
+    )?;
+    for fee_bill in fee_bills {
+        let amount = crypto::decrypt_cents(&dek, &fee_bill.amount);
+        let refund = if fee_bill.kind == "income" {
+            amount
+                .checked_neg()
+                .ok_or_else(|| bad_request("金额超出范围"))?
+        } else {
+            amount
+        };
+        add_delta(fee_bill.account_id, refund)?;
     }
+    for (account_id, delta) in deltas {
+        super::accounts::ensure_balance_delta(&state, &dek, account_id, delta).await?;
+    }
+    let transaction = state.db.begin().await.map_err(err500)?;
+    // 保留短信的哈希和已处理状态，只清除失效关联；重放/补处理不能重建已撤销流水。
+    investment_sms_event::Entity::update_many()
+        .col_expr(
+            investment_sms_event::Column::TransferId,
+            sea_orm::sea_query::Expr::value(Option::<i64>::None),
+        )
+        .filter(investment_sms_event::Column::TransferId.eq(id))
+        .exec(&transaction)
+        .await
+        .map_err(err500)?;
+    investment_sms_event::Entity::update_many()
+        .col_expr(
+            investment_sms_event::Column::BillId,
+            sea_orm::sea_query::Expr::value(Option::<i64>::None),
+        )
+        .filter(investment_sms_event::Column::BillId.is_in(fee_bill_ids.iter().copied()))
+        .exec(&transaction)
+        .await
+        .map_err(err500)?;
+    investment_execution::Entity::delete_many()
+        .filter(investment_execution::Column::TransferId.eq(id))
+        .exec(&transaction)
+        .await
+        .map_err(err500)?;
+    bill::Entity::delete_many()
+        .filter(bill::Column::Id.is_in(fee_bill_ids))
+        .exec(&transaction)
+        .await
+        .map_err(err500)?;
     transfer::Entity::delete_by_id(id)
         .exec(&transaction)
         .await

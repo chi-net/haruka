@@ -108,6 +108,7 @@
       <td class="px-4 py-2 text-right whitespace-nowrap">
         {% if !record.detail_url.is_empty() %}<a href="{{ record.detail_url }}" class="text-blue-600 hover:underline mr-3">{% if record.detail_url.starts_with("/debt-requests") %}借还请求与证明{% else %}查看分期{% endif %}</a>{% endif %}
         {% if !record.share_url.is_empty() %}<a href="{{ record.share_url }}" class="text-blue-600 hover:underline mr-3">分享</a>{% endif %}
+        {% if !record.refund_url.is_empty() %}<a href="{{ record.refund_url }}" class="text-blue-600 hover:underline mr-3">退款</a>{% endif %}
         {% if !record.edit_url.is_empty() %}<a href="{{ record.edit_url }}" class="text-blue-600 hover:underline mr-3">编辑</a>{% endif %}
         {% if !record.delete_action.is_empty() %}<form method="post" action="{{ record.delete_action }}" class="inline" hx-confirm="{{ record.delete_confirm }}">
           <input type="hidden" name="redirect_to" value="{{ search_action }}">

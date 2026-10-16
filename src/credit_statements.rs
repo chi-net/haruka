@@ -384,6 +384,7 @@ mod tests {
                 category_id: None,
                 is_food: false,
                 is_private: false,
+                refund_of_bill_id: None,
                 note: String::new(),
                 happened_at: time(when),
                 created_at: time(when).and_utc(),

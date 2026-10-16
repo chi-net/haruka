@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}账单退款 - Haruka{% endblock %}
+{% block content %}
+<div {% if is_private %}data-privacy-sensitive{% endif %} hx-history="false" class="max-w-lg space-y-4">
+  <h1 class="text-xl font-bold">账单退款</h1>
+  <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-2 text-sm">
+    <h2 class="font-semibold">原始支出</h2>
+    <dl class="space-y-2">
+      <div class="flex justify-between gap-4"><dt class="text-gray-500">账户 / 币种</dt><dd>{{ account_name }} / {{ currency }}</dd></div>
+      <div class="flex justify-between gap-4"><dt class="text-gray-500">分类</dt><dd>{{ original_category }}</dd></div>
+      <div class="flex justify-between gap-4"><dt class="text-gray-500">发生时间</dt><dd data-utc-time="{{ original_happened_at }}">{{ original_happened_at }}</dd></div>
+      <div class="flex justify-between gap-4"><dt class="text-gray-500">原始金额</dt><dd class="font-mono">{{ original_amount }}</dd></div>
+      <div class="flex justify-between gap-4"><dt class="text-gray-500">已退金额</dt><dd class="font-mono">{{ refunded_amount }}</dd></div>
+      <div class="flex justify-between gap-4"><dt class="text-gray-500">剩余可退</dt><dd class="font-mono font-semibold">{{ remaining_amount }}</dd></div>
+    </dl>
+    {% if !original_note.is_empty() %}<p class="text-gray-500 break-words">原备注：{{ original_note }}</p>{% endif %}
+    <p class="text-gray-500">退款将作为一笔收入记入原账户、使用原币种，分类固定为「退款收入」。原始支出与发生时间保持不变，不冲减支出。</p>
+    <p class="text-gray-500">退款收入可删除撤销。已有退款的原账单不能编辑或删除；撤销关联的转账或分期还款前，也须先删除该费用的退款记录。</p>
+    {% if is_private %}<p class="text-gray-500">本次退款继承原账单的隐私设置。</p>{% endif %}
+    {% if has_installment %}<p class="text-amber-700">此消费已有分期计划。退款不会自动取消分期，不会修改分期状态、还款记录或后续还款安排。</p>{% endif %}
+  </section>
+  {% if can_refund %}
+  <form method="post" action="/bills/{{ id }}/refund" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
+    <input type="hidden" name="redirect_to" value="{{ redirect_to }}">
+    <fieldset class="space-y-2 text-sm">
+      <legend class="text-gray-600 mb-1">退款方式</legend>
+      <label class="flex items-center gap-2"><input type="radio" name="mode" value="full" checked>全额退款（退还提交时的全部剩余金额）</label>
+      <label class="flex items-center gap-2"><input type="radio" name="mode" value="partial">部分退款（填写本次金额）</label>
+    </fieldset>
+    <div>
+      <label for="refund-amount" class="block text-sm text-gray-600 mb-1">本次部分退款金额（{{ currency }}）</label>
+      <input id="refund-amount" name="amount" type="number" min="0.01" step="0.01" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <p class="text-xs text-gray-500 mt-1">仅部分退款需要填写，金额须大于 0 且不能超过剩余可退金额。</p>
+    </div>
+    <div data-utc-field>
+      <label class="block text-sm text-gray-600 mb-1">退款时间</label>
+      <input data-utc-picker data-utc-value="{{ happened_at }}" name="happened_at" value="{{ happened_at }}" type="datetime-local" required class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+      <input data-utc-target type="hidden" value="{{ happened_at }}">
+      <noscript><p class="text-xs text-gray-500 mt-1">未启用 JavaScript，请按 UTC 输入退款时间。</p></noscript>
+    </div>
+    <div>
+      <label for="refund-note" class="block text-sm text-gray-600 mb-1">备注（可选）</label>
+      <input id="refund-note" name="note" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+    <div class="flex gap-3">
+      <button type="submit" class="bg-blue-600 text-white text-sm px-4 py-1.5 rounded hover:bg-blue-700">记录退款收入</button>
+      <a href="{{ redirect_to }}" class="text-sm text-gray-600 px-4 py-1.5 rounded border border-gray-300 hover:bg-gray-50">取消</a>
+    </div>
+  </form>
+  {% else %}
+  <p class="text-sm text-gray-600">该账单已全额退款。若需撤销退款，请删除对应退款收入记录。</p>
+  <a href="{{ redirect_to }}" class="inline-block text-sm text-blue-600">返回账单</a>
+  {% endif %}
+</div>
+<script>
+(() => {
+  const amount = document.getElementById('refund-amount');
+  if (!amount) return;
+  const form = amount.form;
+  const updateMode = () => {
+    const partial = form.elements.mode.value === 'partial';
+    amount.disabled = !partial;
+    amount.required = partial;
+  };
+  form.querySelectorAll('input[name="mode"]').forEach(input => input.addEventListener('change', updateMode));
+  updateMode();
+})();
+</script>
+{% endblock %}

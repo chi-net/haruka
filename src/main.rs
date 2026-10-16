@@ -445,6 +445,10 @@ async fn main() {
             get(handlers::shares::bill_share_form).post(handlers::shares::create),
         )
         .route(
+            "/bills/{id}/refund",
+            get(handlers::refunds::new_form).post(handlers::refunds::create),
+        )
+        .route(
             "/bills/{id}/edit",
             get(handlers::bills::edit_form).post(handlers::bills::update),
         )

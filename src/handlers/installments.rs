@@ -963,6 +963,7 @@ pub async fn set_paid(
             }
         }
         if let Some(bill_id) = item.charge_bill_id {
+            super::refunds::ensure_deletable(&state, bill_id).await?;
             if let Some(charge_bill) = bill::Entity::find_by_id(bill_id)
                 .one(&state.db)
                 .await

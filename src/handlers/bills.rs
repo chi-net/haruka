@@ -8,8 +8,8 @@ use axum::{
 use chrono::NaiveDateTime;
 use rust_decimal::{prelude::ToPrimitive, Decimal};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
-    TransactionTrait,
+    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -46,6 +46,7 @@ pub(crate) struct LedgerRow {
     pub(crate) money_class: String,
     pub(crate) edit_url: String,
     pub(crate) share_url: String,
+    pub(crate) refund_url: String,
     pub(crate) detail_url: String,
     pub(crate) delete_action: String,
     pub(crate) delete_confirm: String,
@@ -597,13 +598,45 @@ pub(crate) async fn ledger_rows(
         .iter()
         .filter_map(|transfer| transfer.fee_bill_id)
         .collect();
+    let mut investment_transfer_ids = HashSet::new();
+    let mut investment_fee_bill_ids = HashSet::new();
+    for (transfer_id, fee_bill_id) in investment_execution::Entity::find()
+        .select_only()
+        .column(investment_execution::Column::TransferId)
+        .column(investment_execution::Column::FeeBillId)
+        .into_tuple::<(Option<i64>, Option<i64>)>()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+    {
+        investment_transfer_ids.extend(transfer_id);
+        investment_fee_bill_ids.extend(fee_bill_id);
+    }
+    let installment_fee_bill_ids: HashSet<i64> = installment_item::Entity::find()
+        .select_only()
+        .column(installment_item::Column::ChargeBillId)
+        .filter(installment_item::Column::ChargeBillId.is_not_null())
+        .into_tuple::<i64>()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .collect();
+    let bills = bill::Entity::find().all(&state.db).await.map_err(err500)?;
+    let refunded_bill_ids: HashSet<i64> = bills
+        .iter()
+        .filter_map(|bill| bill.refund_of_bill_id)
+        .collect();
 
     let mut rows = Vec::new();
-    for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
+    for bill in bills {
         if bill.is_private != private_mode {
             continue;
         }
         let incoming = bill.kind == "income";
+        let automatic_fee = transfer_fee_bill_ids.contains(&bill.id)
+            || investment_fee_bill_ids.contains(&bill.id)
+            || installment_fee_bill_ids.contains(&bill.id);
         let amount = crypto::decrypt_cents(dek, &bill.amount);
         let bill_currency = account_currencies
             .get(&bill.account_id)
@@ -612,10 +645,16 @@ pub(crate) async fn ledger_rows(
         let converted = rates.convert(amount, bill_currency).map_err(err500)?;
         rows.push(LedgerRow {
             happened_at: bill.happened_at.format(TIME_FMT).to_string(),
-            record_type: if incoming {
+            record_type: if bill.refund_of_bill_id.is_some() {
+                "收入 · 退款".into()
+            } else if incoming {
                 "收入".into()
+            } else if investment_fee_bill_ids.contains(&bill.id) {
+                "支出 · 定投手续费（自动）".into()
             } else if transfer_fee_bill_ids.contains(&bill.id) {
                 "支出 · 转账手续费（自动）".into()
+            } else if installment_fee_bill_ids.contains(&bill.id) {
+                "支出 · 分期费用（自动）".into()
             } else if installment_plan_ids.contains_key(&bill.id) {
                 "支出 · 分期".into()
             } else {
@@ -639,7 +678,9 @@ pub(crate) async fn ledger_rows(
             }
             .into(),
             edit_url: if installment_plan_ids.contains_key(&bill.id)
-                || transfer_fee_bill_ids.contains(&bill.id)
+                || automatic_fee
+                || bill.refund_of_bill_id.is_some()
+                || refunded_bill_ids.contains(&bill.id)
             {
                 String::new()
             } else {
@@ -650,11 +691,16 @@ pub(crate) async fn ledger_rows(
             } else {
                 format!("/bills/{}/share", bill.id)
             },
+            refund_url: if !incoming {
+                format!("/bills/{}/refund", bill.id)
+            } else {
+                String::new()
+            },
             detail_url: installment_plan_ids
                 .get(&bill.id)
                 .map(|plan_id| format!("/installments/{plan_id}"))
                 .unwrap_or_default(),
-            delete_action: if transfer_fee_bill_ids.contains(&bill.id) {
+            delete_action: if automatic_fee || refunded_bill_ids.contains(&bill.id) {
                 String::new()
             } else {
                 format!("/bills/{}/delete", bill.id)
@@ -720,9 +766,12 @@ pub(crate) async fn ledger_rows(
             money_class: "text-blue-600".into(),
             edit_url: String::new(),
             share_url: String::new(),
+            refund_url: String::new(),
             detail_url: String::new(),
             delete_action: format!("/transfers/{}/delete", transfer.id),
-            delete_confirm: if transfer.fee_bill_id.is_some() {
+            delete_confirm: if investment_transfer_ids.contains(&transfer.id) {
+                "确认删除这条定投转账及对应执行记录和关联手续费（如有）？计划日期不会回退，同一银行短信不会自动重建。".into()
+            } else if transfer.fee_bill_id.is_some() {
                 "确认删除这条转账并一并撤销手续费？".into()
             } else {
                 "确认删除这条转账？".into()
@@ -773,6 +822,7 @@ pub(crate) async fn ledger_rows(
             .into(),
             edit_url: String::new(),
             share_url: String::new(),
+            refund_url: String::new(),
             detail_url: request_id
                 .map(|id| format!("/debt-requests#debt-request-{id}"))
                 .unwrap_or_default(),
@@ -817,6 +867,7 @@ pub(crate) async fn ledger_rows(
             money_class: "text-amber-700".into(),
             edit_url: String::new(),
             share_url: String::new(),
+            refund_url: String::new(),
             detail_url: String::new(),
             delete_action: String::new(),
             delete_confirm: String::new(),
@@ -1370,7 +1421,7 @@ async fn ensure_not_transfer_fee(state: &AppState, bill_id: i64) -> HandlerResul
     Ok(())
 }
 
-fn require_bill_access(bill: &bill::Model, unlocked: bool) -> HandlerResult<()> {
+pub(crate) fn require_bill_access(bill: &bill::Model, unlocked: bool) -> HandlerResult<()> {
     if bill.is_private && !unlocked {
         return Err((StatusCode::NOT_FOUND, "账单不存在".into()));
     }
@@ -1392,7 +1443,7 @@ pub async fn edit_form(
         .is_some()
     {
         return Err(bad_request(
-            "定投手续费流水不能单独编辑；删除定投计划不会影响已有手续费流水",
+            "定投手续费流水不能单独编辑，请删除对应定投本金转账以一并撤销手续费",
         ));
     }
     if installment_item::Entity::find()
@@ -1423,6 +1474,7 @@ pub async fn edit_form(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
     require_bill_access(&b, unlocked)?;
+    super::refunds::ensure_editable(&state, &b).await?;
     let accounts = account_options(&state, &dek).await?;
     let categories = category_options(&state, &dek).await?;
     let html = BillFormTemplate {
@@ -1460,7 +1512,7 @@ pub async fn update(
         .is_some()
     {
         return Err(bad_request(
-            "定投手续费流水不能单独编辑；删除定投计划不会影响已有手续费流水",
+            "定投手续费流水不能单独编辑，请删除对应定投本金转账以一并撤销手续费",
         ));
     }
     if installment_item::Entity::find()
@@ -1493,6 +1545,7 @@ pub async fn update(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
     require_bill_access(&b, unlocked)?;
+    super::refunds::ensure_editable(&state, &b).await?;
     let old_amount = crypto::decrypt_cents(&dek, &b.amount);
     let old_signed = signed_amount(&b.kind, old_amount)?;
     let new_signed = signed_amount(&parsed.kind, parsed.amount)?;
@@ -1557,7 +1610,7 @@ pub async fn delete(
         .is_some()
     {
         return Err(bad_request(
-            "定投手续费流水不能单独删除；删除定投计划不会影响已有手续费流水",
+            "定投手续费流水不能单独删除，请删除对应定投本金转账以一并撤销手续费",
         ));
     }
     if installment_item::Entity::find()
@@ -1577,6 +1630,7 @@ pub async fn delete(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
     require_bill_access(&b, unlocked)?;
+    super::refunds::ensure_deletable(&state, id).await?;
     if let Some(plan) = installment_plan::Entity::find()
         .filter(installment_plan::Column::BillId.eq(id))
         .one(&state.db)
