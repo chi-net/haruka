@@ -17,9 +17,9 @@
     <button type="button" data-copy-row data-copy-label="账户名" class="min-h-11 text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
       <span class="block text-xs text-gray-500">账户名</span><span data-copy-value class="block mt-1 font-medium break-all select-text">{{ raw_name }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制账户名</span>
     </button>
-    {% if !card_number.is_empty() %}
-    <button type="button" data-copy-row data-copy-label="卡号" class="min-h-11 text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
-      <span class="block text-xs text-gray-500">银行卡号</span><span data-copy-value class="block mt-1 font-mono break-all select-text">{{ card_number }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">复制完整卡号</span>
+    {% if !card_number_tail.is_empty() %}
+    <button type="button" data-copy-row data-copy-label="卡号" data-copy-card-url="/accounts/{{ id }}/card-number" class="min-h-11 text-left rounded-lg border border-gray-200 p-3 hover:border-blue-300 hover:bg-blue-50/40">
+      <span class="block text-xs text-gray-500">银行卡号尾号</span><span class="block mt-1 font-mono">{{ card_number_tail }}</span><span data-copy-status class="block text-xs text-blue-600 mt-1">点击复制完整卡号</span>
     </button>
     {% endif %}
     {% if !account_username.is_empty() %}
@@ -77,35 +77,91 @@
       area.focus({ preventScroll: true });
       area.select();
       area.setSelectionRange(0, text.length);
-      if (!document.execCommand('copy')) throw new Error('浏览器拒绝了复制操作，请长按完整内容手动复制。');
+      if (!document.execCommand('copy')) throw new Error('浏览器拒绝了复制操作，请允许剪贴板权限后重试。');
     } finally {
       area.remove();
       if (active instanceof HTMLElement && active.isConnected) active.focus({ preventScroll: true });
     }
   };
+  const copyText = async value => {
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(value);
+        return;
+      } catch (_) {}
+    }
+    fallbackCopy(value);
+  };
+  const readyCards = new WeakMap();
+  const forgetCard = row => {
+    const ready = readyCards.get(row);
+    if (ready) window.clearTimeout(ready.timer);
+    readyCards.delete(row);
+  };
+  const offerCardCopy = (row, value) => {
+    forgetCard(row);
+    const expiresAt = Date.now() + 30000;
+    const timer = window.setTimeout(() => {
+      readyCards.delete(row);
+      if (row.isConnected) row.querySelector('[data-copy-status]').textContent = '点击复制完整卡号';
+    }, 30000);
+    readyCards.set(row, { value, expiresAt, timer });
+    row.querySelector('[data-copy-status]').textContent = '卡号已读取，请再次点击复制（30 秒内有效）';
+  };
+  const readCard = async row => {
+    const response = await fetch(row.dataset.copyCardUrl, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store'
+    });
+    if (!response.ok) throw new Error(await window.harukaReadErrorResponse(response));
+    return (await response.json()).card_number;
+  };
   document.addEventListener('click', async event => {
     const row = event.target.closest('[data-copy-row]');
-    if (!row) return;
+    if (!row || row.disabled) return;
     const status = row.querySelector('[data-copy-status]');
-    const value = row.querySelector('[data-copy-value]').textContent.trim();
+    row.disabled = true;
     try {
-      // Invoke the Clipboard API inside the tap gesture, without a preceding fetch.
-      if (navigator.clipboard && window.isSecureContext) {
-        try {
-          await navigator.clipboard.writeText(value);
-        } catch (_) {
-          fallbackCopy(value);
+      let ready = readyCards.get(row);
+      if (ready && ready.expiresAt <= Date.now()) {
+        forgetCard(row);
+        ready = null;
+      }
+      if (row.dataset.copyCardUrl && !ready) {
+        status.textContent = '正在读取卡号…';
+        if (window.isSecureContext && navigator.clipboard?.write && window.ClipboardItem) {
+          let value;
+          const content = readCard(row).then(text => {
+            value = text;
+            return new Blob([text], { type: 'text/plain' });
+          });
+          try {
+            // Start the clipboard operation in the tap gesture; WebKit resolves the bytes later.
+            await navigator.clipboard.write([new ClipboardItem({ 'text/plain': content })]);
+          } catch (_) {
+            await content;
+            offerCardCopy(row, value);
+            return;
+          }
+        } else {
+          // Legacy HTTP copying needs a fresh tap after the protected request completes.
+          offerCardCopy(row, await readCard(row));
+          return;
         }
       } else {
-        fallbackCopy(value);
+        await copyText(ready ? ready.value : row.querySelector('[data-copy-value]').textContent.trim());
       }
+      forgetCard(row);
       status.textContent = `${row.dataset.copyLabel}已复制`;
       window.setTimeout(() => {
-        if (status.isConnected) status.textContent = `复制${row.dataset.copyLabel === '账户名' ? '' : '完整'}${row.dataset.copyLabel}`;
+        if (status.isConnected) status.textContent = row.dataset.copyCardUrl ? '点击复制完整卡号' : `复制${row.dataset.copyLabel === '账户名' ? '' : '完整'}${row.dataset.copyLabel}`;
       }, 1600);
     } catch (error) {
-      status.textContent = '复制失败，可长按上方完整内容手动复制';
-      window.harukaShowError(error.message || '复制失败，请长按完整内容手动复制。');
+      status.textContent = '读取或复制失败，请重试';
+      window.harukaShowError(error.message || '复制失败，请允许剪贴板权限后重试。');
+    } finally {
+      row.disabled = false;
     }
   });
 })();

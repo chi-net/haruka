@@ -36,7 +36,7 @@
   <div id="account-username-field">
     <label class="block text-sm text-gray-600 mb-1">账户用户名（可选）</label>
     <input name="account_username" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="{% if is_edit %}留空保留原用户名{% else %}输入账户用户名{% endif %}" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-    {% if is_edit && !account_username.is_empty() %}<p class="text-xs text-gray-500 mt-1">当前末尾：{{ account_username }}</p><label class="flex items-center gap-2 text-xs text-gray-500 mt-1"><input type="checkbox" name="clear_account_username" value="true">清除原用户名（填写新用户名时替换）</label>{% endif %}
+    {% if is_edit && !account_username.is_empty() %}<p class="text-xs text-gray-500 mt-1">当前用户名：{{ account_username }}</p><label class="flex items-center gap-2 text-xs text-gray-500 mt-1"><input type="checkbox" name="clear_account_username" value="true">清除原用户名（填写新用户名时替换）</label>{% endif %}
   </div>
   <div id="credit-settings-field" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
     <div>

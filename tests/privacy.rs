@@ -503,12 +503,13 @@ async fn private_money_is_included_in_summaries_without_exposing_private_rows() 
 }
 
 #[tokio::test]
-async fn full_account_identifiers_are_visible_only_in_unlocked_uncached_details() {
+async fn account_usernames_are_complete_but_cards_require_explicit_unlocked_access() {
     let app = App::start().await;
     let mut ids = Vec::new();
     for (kind, name, card, username) in [
         ("bank", "完整银行卡账户", "6225888812345678", ""),
         ("payment", "完整支付账户", "", "complete-account-user-1999"),
+        ("payment", "单字符支付账户", "", "甲"),
     ] {
         let created = app
             .post(
@@ -535,15 +536,57 @@ async fn full_account_identifiers_are_visible_only_in_unlocked_uncached_details(
         assert_eq!(response.headers()[header::PRAGMA], "no-cache");
         let html = response.text().await.unwrap();
         assert!(html.contains(name));
-        let identifier = if card.is_empty() { username } else { card };
+        let edit = app
+            .get(&format!("/accounts/{id}/edit"), None)
+            .await
+            .text()
+            .await
+            .unwrap();
+        let identifier = if card.is_empty() { username } else { "5678" };
         assert!(html.contains(identifier));
-        let list = app.get("/accounts", None).await.text().await.unwrap();
-        assert!(!list.contains(identifier));
+        assert!(edit.contains(identifier));
+        for path in [
+            "/accounts".to_owned(),
+            "/bills/new".to_owned(),
+            "/dashboard".to_owned(),
+            format!("/accounts/{id}/statement"),
+        ] {
+            let response = app.get(&path, None).await;
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let page = response.text().await.unwrap();
+            assert!(page.contains(&format!("{name}({identifier})")), "{path}");
+            if !card.is_empty() {
+                assert!(!page.contains(card), "{path}");
+            }
+        }
+        if !card.is_empty() {
+            assert!(!html.contains(card));
+            assert!(!edit.contains(card));
+            let copied = app
+                .post(&format!("/accounts/{id}/card-number"), &[], None)
+                .await;
+            assert_eq!(copied.status(), StatusCode::OK);
+            assert_eq!(copied.headers()[header::CACHE_CONTROL], "no-store");
+            assert_eq!(copied.headers()[header::PRAGMA], "no-cache");
+            assert_eq!(copied.json::<Value>().await.unwrap()["card_number"], card);
+        } else {
+            assert_eq!(
+                app.post(&format!("/accounts/{id}/card-number"), &[], None)
+                    .await
+                    .status(),
+                StatusCode::NOT_FOUND,
+            );
+        }
     }
     assert!(app.post("/lock", &[], None).await.status().is_redirection());
     for id in ids {
         let locked = app.get(&format!("/accounts/{id}"), None).await;
         assert!(locked.status().is_redirection());
         assert_eq!(locked.headers()[header::LOCATION], "/unlock");
+        let card = app
+            .post(&format!("/accounts/{id}/card-number"), &[], None)
+            .await;
+        assert!(card.status().is_redirection());
+        assert_eq!(card.headers()[header::LOCATION], "/unlock");
     }
 }

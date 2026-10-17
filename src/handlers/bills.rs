@@ -535,7 +535,7 @@ fn append_account_identity(
             let username = crypto::decrypt_string(dek, &detail.account_username);
             if !username.is_empty() {
                 name.push('(');
-                name.push_str(&super::mask_account_username(&username));
+                name.push_str(&username);
                 name.push(')');
             }
         }

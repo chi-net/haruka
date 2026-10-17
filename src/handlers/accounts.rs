@@ -87,7 +87,7 @@ struct AccountDetailTemplate {
     kind_label: String,
     is_investment: bool,
     currency: String,
-    card_number: String,
+    card_number_tail: String,
     account_username: String,
     credit_summary: String,
     note: String,
@@ -1015,7 +1015,7 @@ pub async fn detail(
 
     let card_number = detail
         .as_ref()
-        .map(|item| crypto::decrypt_string(&dek, &item.card_number))
+        .map(|item| super::mask_card_number(&crypto::decrypt_string(&dek, &item.card_number)))
         .unwrap_or_default();
     let account_username = detail
         .as_ref()
@@ -1035,7 +1035,7 @@ pub async fn detail(
         kind_label: account_kind_label(&account.kind).into(),
         is_investment: account.kind == "investment_fund",
         currency: account.currency.clone(),
-        card_number,
+        card_number_tail: card_number,
         account_username,
         credit_summary,
         transfer_fee_rate: super::fees::format_rate(crypto::decrypt_cents(
@@ -1069,6 +1069,26 @@ pub async fn detail(
         Html(html),
     )
         .into_response())
+}
+
+pub async fn card_number(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+) -> HandlerResult<impl IntoResponse> {
+    let detail = account_detail::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "这个账户没有卡号".into()))?;
+    let card_number = crypto::decrypt_string(&dek, &detail.card_number);
+    if card_number.is_empty() {
+        return Err((StatusCode::NOT_FOUND, "这个账户没有卡号".into()));
+    }
+    Ok((
+        [("cache-control", "no-store"), ("pragma", "no-cache")],
+        Json(serde_json::json!({ "card_number": card_number })),
+    ))
 }
 
 pub async fn new_form(State(state): State<AppState>) -> HandlerResult<Html<String>> {
@@ -1197,9 +1217,7 @@ pub async fn edit_form(
         .unwrap_or_default();
     let account_username = detail
         .as_ref()
-        .map(|detail| {
-            super::mask_account_username(&crypto::decrypt_string(&dek, &detail.account_username))
-        })
+        .map(|detail| crypto::decrypt_string(&dek, &detail.account_username))
         .unwrap_or_default();
     let credit_limit = detail
         .as_ref()
