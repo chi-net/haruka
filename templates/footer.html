@@ -1,9 +1,14 @@
 {% let site_footer = crate::site_footer::current() %}
-{% if !site_footer.footer_text.is_empty() || !site_footer.icp_record.is_empty() %}
+{% if !site_footer.footer_text.is_empty() || !site_footer.icp_record.is_empty() || !site_footer.public_security_record.is_empty() %}
 <footer data-site-footer hx-boost="false" class="border-t border-gray-200 text-sm text-gray-500 print:hidden">
   <div class="mx-auto max-w-6xl space-y-2 break-words px-4 py-5 text-center">
     {% if !site_footer.footer_text.is_empty() %}<p class="whitespace-pre-line">{{ site_footer.footer_text }}</p>{% endif %}
-    {% if !site_footer.icp_record.is_empty() %}<a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer" class="inline-block max-w-full hover:underline">{{ site_footer.icp_record }}</a>{% endif %}
+    {% if !site_footer.icp_record.is_empty() || !site_footer.public_security_record.is_empty() %}
+    <div class="flex flex-wrap items-center justify-center gap-x-4 gap-y-2">
+      {% if !site_footer.icp_record.is_empty() %}<a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer" class="inline-block min-w-0 max-w-full hover:underline">{{ site_footer.icp_record }}</a>{% endif %}
+      {% if !site_footer.public_security_record.is_empty() %}<a href="https://beian.gov.cn/" target="_blank" rel="noopener noreferrer" class="inline-block min-w-0 max-w-full hover:underline">{{ site_footer.public_security_record }}</a>{% endif %}
+    </div>
+    {% endif %}
   </div>
 </footer>
 {% endif %}

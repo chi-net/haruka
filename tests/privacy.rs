@@ -681,12 +681,12 @@ async fn owner_name_stays_private_and_only_nonblank_submissions_update_encrypted
 
 #[tokio::test]
 async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_private_changes() {
-    async fn preferences(app: &App) -> (String, String, String) {
+    async fn preferences(app: &App) -> (String, String, String, String) {
         let row = app
             .db
             .query_one(Statement::from_string(
                 DbBackend::Sqlite,
-                "SELECT footer_text, icp_record, owner_name FROM preferences WHERE id = 1"
+                "SELECT footer_text, icp_record, public_security_record, owner_name FROM preferences WHERE id = 1"
                     .to_owned(),
             ))
             .await
@@ -695,6 +695,7 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
         (
             row.try_get("", "footer_text").unwrap(),
             row.try_get("", "icp_record").unwrap(),
+            row.try_get("", "public_security_record").unwrap(),
             row.try_get("", "owner_name").unwrap(),
         )
     }
@@ -707,7 +708,7 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
             .status(),
         StatusCode::SEE_OTHER,
     );
-    let (_, _, owner_ciphertext) = preferences(&app).await;
+    let (_, _, _, owner_ciphertext) = preferences(&app).await;
     assert!(!owner_ciphertext.is_empty());
     assert!(!owner_ciphertext.contains(owner_name));
 
@@ -720,6 +721,7 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
             &[
                 ("footer_text", &maximum_text),
                 ("icp_record", &maximum_record),
+                ("public_security_record", &maximum_record),
             ],
             None,
         )
@@ -729,20 +731,28 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
     );
     assert_eq!(
         preferences(&app).await,
-        (maximum_text, maximum_record, owner_ciphertext.clone()),
+        (
+            maximum_text,
+            maximum_record.clone(),
+            maximum_record,
+            owner_ciphertext.clone()
+        ),
     );
 
     let footer_text =
         "<script>alert(\"footer-xss\")</script> & footer-public-line-one\nfooter-public-line-two";
     let icp_record = "京ICP备2026101701号-1";
+    let public_security_record = "浙公网安备33010602009999号";
     let padded_text = format!(" \t{footer_text}\r\n\u{3000}");
     let padded_record = format!("\u{3000}{icp_record} \t");
+    let padded_public_record = format!(" \t{public_security_record}\u{3000}");
     assert_eq!(
         app.post(
             "/settings/footer",
             &[
                 ("footer_text", &padded_text),
                 ("icp_record", &padded_record),
+                ("public_security_record", &padded_public_record),
             ],
             None,
         )
@@ -753,6 +763,7 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
     let saved = (
         footer_text.to_owned(),
         icp_record.to_owned(),
+        public_security_record.to_owned(),
         owner_ciphertext.clone(),
     );
     assert_eq!(preferences(&app).await, saved);
@@ -802,6 +813,17 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
             .unwrap_or_else(|| panic!("unclosed official record link: {path}"))
             .0;
         assert!(record_link.contains(icp_record), "{path}");
+        let public_record_link = html
+            .split_once("href=\"https://beian.gov.cn/\"")
+            .unwrap_or_else(|| panic!("missing public security record link: {path}"))
+            .1
+            .split_once("</a>")
+            .unwrap()
+            .0;
+        assert!(
+            public_record_link.contains(public_security_record),
+            "{path}"
+        );
         assert!(!html.contains(owner_name), "{path}");
     }
 
@@ -812,6 +834,10 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
         .form(&[
             ("footer_text", "unauthorized-footer-replacement"),
             ("icp_record", "unauthorized-record-replacement"),
+            (
+                "public_security_record",
+                "unauthorized-public-record-replacement",
+            ),
         ])
         .send()
         .await
@@ -820,20 +846,31 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
     assert_eq!(unauthorized.headers()[header::LOCATION], "/unlock");
     assert_eq!(preferences(&app).await, saved);
 
-    for (text, record) in [
+    for (text, record, public_record) in [
         (
             "页".repeat(2001),
             "invalid-text-record-replacement".to_owned(),
+            "invalid-text-public-record".to_owned(),
         ),
         (
             "invalid-record-text-replacement".to_owned(),
             "备".repeat(81),
+            "invalid-icp-public-record".to_owned(),
+        ),
+        (
+            "invalid-public-text-replacement".to_owned(),
+            "invalid-public-icp-replacement".to_owned(),
+            "公".repeat(81),
         ),
     ] {
         let rejected = app
             .post(
                 "/settings/footer",
-                &[("footer_text", &text), ("icp_record", &record)],
+                &[
+                    ("footer_text", &text),
+                    ("icp_record", &record),
+                    ("public_security_record", &public_record),
+                ],
                 None,
             )
             .await;
@@ -850,9 +887,39 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
             .unwrap();
         assert!(html.contains("footer-public-line-two"));
         assert!(html.contains(icp_record));
+        assert!(html.contains(public_security_record));
         assert!(!html.contains("invalid-text-record-replacement"));
         assert!(!html.contains("invalid-record-text-replacement"));
     }
+    // The public security record must work alone, without turning markup into HTML.
+    let record_with_markup = "公安备案-xss<img src=x onerror=alert(1)>";
+    assert_eq!(
+        app.post(
+            "/settings/footer",
+            &[
+                ("footer_text", ""),
+                ("icp_record", ""),
+                ("public_security_record", record_with_markup),
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER,
+    );
+    let only_record = app
+        .client
+        .get(format!("{}/unlock", app.url))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(only_record.contains("公安备案-xss"));
+    assert!(!only_record.contains("<img src=x"));
+    assert!(only_record.contains("href=\"https://beian.gov.cn/\""));
+    assert!(!only_record.contains("href=\"https://beian.miit.gov.cn/\""));
 
     let sms = app
         .client
@@ -873,6 +940,7 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
     assert!(!body.contains("footer-public-line"));
     assert!(!body.contains(icp_record));
     assert!(!body.contains("beian.miit.gov.cn"));
+    assert!(!body.contains("beian.gov.cn"));
     assert!(!body.contains("<footer"));
 
     assert_eq!(
@@ -880,7 +948,8 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
             "/settings/footer",
             &[
                 ("footer_text", " \t\r\n\u{3000}"),
-                ("icp_record", "\u{3000} ")
+                ("icp_record", "\u{3000} "),
+                ("public_security_record", "\t\u{3000} "),
             ],
             None,
         )
@@ -890,7 +959,12 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
     );
     assert_eq!(
         preferences(&app).await,
-        (String::new(), String::new(), owner_ciphertext),
+        (
+            String::new(),
+            String::new(),
+            String::new(),
+            owner_ciphertext
+        ),
     );
     for (path, authenticated, status) in pages {
         let response = if authenticated {
@@ -907,5 +981,7 @@ async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_p
         assert!(!html.contains("footer-xss"), "{path}");
         assert!(!html.contains("footer-public-line"), "{path}");
         assert!(!html.contains(icp_record), "{path}");
+        assert!(!html.contains(public_security_record), "{path}");
+        assert!(!html.contains("公安备案-xss"), "{path}");
     }
 }

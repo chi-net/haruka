@@ -12,6 +12,7 @@ use crate::{entity::preference, AppState};
 pub struct FooterConfig {
     pub footer_text: String,
     pub icp_record: String,
+    pub public_security_record: String,
 }
 
 static CONFIG: OnceLock<RwLock<Arc<FooterConfig>>> = OnceLock::new();
@@ -28,13 +29,14 @@ pub fn current() -> Arc<FooterConfig> {
 }
 
 pub async fn load(db: &sea_orm::DatabaseConnection) -> Result<(), sea_orm::DbErr> {
-    let (footer_text, icp_record) = preference::Entity::find_by_id(1)
+    let (footer_text, icp_record, public_security_record) = preference::Entity::find_by_id(1)
         .select_only()
         .columns([
             preference::Column::FooterText,
             preference::Column::IcpRecord,
+            preference::Column::PublicSecurityRecord,
         ])
-        .into_tuple::<(String, String)>()
+        .into_tuple::<(String, String, String)>()
         .one(db)
         .await?
         .ok_or_else(|| sea_orm::DbErr::Custom("默认设置不存在".into()))?;
@@ -42,6 +44,7 @@ pub async fn load(db: &sea_orm::DatabaseConnection) -> Result<(), sea_orm::DbErr
         .set(RwLock::new(Arc::new(FooterConfig {
             footer_text,
             icp_record,
+            public_security_record,
         })))
         .map_err(|_| sea_orm::DbErr::Custom("页脚配置已经初始化".into()))
 }
@@ -67,6 +70,16 @@ pub async fn save(state: &AppState, mut config: FooterConfig) -> Result<(), (Sta
     if record.len() != config.icp_record.len() {
         config.icp_record = record.to_owned();
     }
+    let record = config.public_security_record.trim();
+    if record.chars().count() > 80 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "公安备案号不能超过 80 个字符".into(),
+        ));
+    }
+    if record.len() != config.public_security_record.len() {
+        config.public_security_record = record.to_owned();
+    }
     let cache = CONFIG.get().ok_or_else(|| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -82,6 +95,10 @@ pub async fn save(state: &AppState, mut config: FooterConfig) -> Result<(), (Sta
         .col_expr(
             preference::Column::IcpRecord,
             Expr::value(config.icp_record.clone()),
+        )
+        .col_expr(
+            preference::Column::PublicSecurityRecord,
+            Expr::value(config.public_security_record.clone()),
         )
         .filter(preference::Column::Id.eq(1))
         .exec(&state.db)

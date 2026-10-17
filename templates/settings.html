@@ -15,7 +15,7 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium">网站页脚</h2>
-  <p id="site-footer-help" class="text-sm text-gray-500 mt-1 mb-3">页脚会公开显示在所有屏幕页面，包括未登录页面和公开分享页面；打印证明不显示。以下内容以明文保存，请勿填写个人隐私或敏感信息。仅支持纯文本，不支持 HTML 或自定义链接。两项均留空保存可关闭页脚。</p>
+  <p id="site-footer-help" class="text-sm text-gray-500 mt-1 mb-3">页脚会公开显示在所有屏幕页面，包括未登录页面和公开分享页面；打印证明不显示。以下内容以明文保存，请勿填写个人隐私或敏感信息。仅支持纯文本，不支持 HTML 或自定义链接。三项均留空保存可关闭页脚。</p>
   <form method="post" action="/settings/footer" class="space-y-3" aria-describedby="site-footer-help">
     <div>
       <label for="site-footer-text" class="block text-sm font-medium mb-1">页脚文字</label>
@@ -26,6 +26,11 @@
       <label for="site-icp-record" class="block text-sm font-medium mb-1">ICP备案号</label>
       <input id="site-icp-record" name="icp_record" type="text" maxlength="80" value="{{ footer.icp_record }}" aria-describedby="site-icp-record-help" class="block w-full min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm">
       <p id="site-icp-record-help" class="text-xs text-gray-500 mt-1">最多 80 个字符，固定链接到 https://beian.miit.gov.cn/；留空可关闭此项。</p>
+    </div>
+    <div>
+      <label for="site-public-security-record" class="block text-sm font-medium mb-1">公安备案号</label>
+      <input id="site-public-security-record" name="public_security_record" type="text" maxlength="80" value="{{ footer.public_security_record }}" aria-describedby="site-public-security-record-help" class="block w-full min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm">
+      <p id="site-public-security-record-help" class="text-xs text-gray-500 mt-1">填写完整备案号，例如“京公网安备11000000000000号”，最多 80 个字符；固定链接到 https://beian.gov.cn/，留空可关闭此项。</p>
     </div>
     <button type="submit" class="w-full sm:w-auto bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">保存网站页脚</button>
   </form>

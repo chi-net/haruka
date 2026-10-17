@@ -16,6 +16,9 @@ pub struct Model {
     /// 公开明文 ICP 备案号，仅链接到工信部备案网站。
     #[sea_orm(column_type = "Text", default_value = "")]
     pub icp_record: String,
+    /// 公开明文公安备案号，仅链接到固定公安备案网站。
+    #[sea_orm(column_type = "Text", default_value = "")]
+    pub public_security_record: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
