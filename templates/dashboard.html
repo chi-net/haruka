@@ -70,45 +70,45 @@
 {% endif %}
 
 {% if !credit_accounts.is_empty() %}
-<section class="mb-5 rounded-xl border-2 border-violet-400 bg-violet-50 p-3 sm:p-4">
+<section class="mb-5">
   <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-    <div class="min-w-0"><h2 class="font-bold text-violet-900">信贷额度概览</h2><p class="text-xs text-violet-800">实际金额与日期以金融机构账单为准。</p></div>
+    <div class="min-w-0"><h2 class="font-medium">信贷额度概览</h2><p class="text-xs text-gray-500">实际金额与日期以金融机构账单为准。</p></div>
   </div>
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
     {% for service in credit_accounts %}
-    <article data-credit-summary class="min-w-0 rounded-lg border-2 {% if service.danger %}border-red-400 bg-red-50{% else %}border-violet-200 bg-white{% endif %} p-3">
+    <article data-credit-summary class="min-w-0 rounded-lg border {% if service.danger %}border-red-400{% else %}border-gray-200{% endif %} bg-white p-3">
       <div class="flex flex-wrap items-start justify-between gap-2">
-        <div class="min-w-0 break-words"><h3 class="font-semibold">{{ service.name }} <span class="text-xs font-normal text-violet-800">{{ service.kind }}</span></h3></div>
-        {% if service.danger %}<span class="rounded-full bg-red-600 px-2 py-1 text-xs font-bold text-white">⚠️额度紧张</span>{% endif %}
+        <div class="min-w-0 break-words"><h3 class="font-semibold">{{ service.name }} <span class="text-xs font-normal text-gray-500">{{ service.kind }}</span></h3></div>
+        {% if service.danger %}<span class="rounded-full border border-red-300 px-2 py-1 text-xs font-bold text-red-700">额度紧张</span>{% endif %}
       </div>
       <dl class="mt-2 grid grid-cols-3 gap-2 text-xs">
         <div class="min-w-0"><dt class="text-gray-600">总授信额</dt><dd class="font-mono mt-0.5 break-all">{{ service.limit }}</dd></div>
         <div class="min-w-0"><dt class="text-gray-600">已用 / 欠款</dt><dd class="font-mono font-semibold text-red-700 mt-0.5 break-all">{{ service.used }}</dd></div>
         <div class="min-w-0"><dt class="text-gray-600">剩余额度</dt><dd class="font-mono font-semibold text-green-800 mt-0.5 break-all">{{ service.available }}</dd></div>
       </dl>
-      <div class="mt-2 flex items-center gap-2"><div class="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-violet-100"><div class="h-full {% if service.danger %}bg-red-600{% else %}bg-violet-600{% endif %}" style="width: {{ service.usage_percent }}%"></div></div><span class="text-xs text-gray-600">已用 {{ service.usage_percent }}%</span></div>
-      <div class="mt-2 border-t border-violet-200 pt-2 text-sm">
+      <div class="mt-2 flex items-center gap-2"><div class="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-gray-200"><div class="h-full {% if service.danger %}bg-red-600{% else %}bg-gray-500{% endif %}" style="width: {{ service.usage_percent }}%"></div></div><span class="text-xs text-gray-600">已用 {{ service.usage_percent }}%</span></div>
+      <div class="mt-2 border-t border-gray-200 pt-2 text-sm">
         <section data-credit-unbilled class="flex flex-wrap items-baseline justify-between gap-1">
           <h4 class="text-gray-700">未出账普通消费</h4><p class="font-mono font-semibold break-all">{{ service.unbilled }}</p>
         </section>
         <section data-credit-installments class="mt-2">
           {% match service.next_installment %}
           {% when Some with (period) %}
-          <div class="flex flex-wrap items-baseline justify-between gap-1"><h4 class="font-medium text-violet-900">分期剩余本金</h4><p class="font-mono font-semibold break-all">{{ service.installment_principal }}</p></div>
-          <div class="mt-1 flex flex-wrap items-baseline justify-between gap-1 {% if period.overdue %}font-semibold text-red-800{% else %}text-violet-900{% endif %}"><p class="text-xs">最早未还 {{ period.due_date }}{% if period.overdue %} · 已逾期{% endif %}</p><p class="text-xs">月供 <span class="font-mono break-all">{{ period.total }}</span></p></div>
+          <div class="flex flex-wrap items-baseline justify-between gap-1"><h4 class="font-medium text-gray-900">分期剩余本金</h4><p class="font-mono font-semibold break-all">{{ service.installment_principal }}</p></div>
+          <div class="mt-1 flex flex-wrap items-baseline justify-between gap-1 {% if period.overdue %}font-semibold text-red-800{% else %}text-gray-700{% endif %}"><p class="text-xs">最早未还 {{ period.due_date }}{% if period.overdue %} · 已逾期{% endif %}</p><p class="text-xs">月供 <span class="font-mono break-all">{{ period.total }}</span></p></div>
           <a href="/installments" class="text-xs text-blue-700 hover:underline">查看分期与还款</a>
           {% when None %}
           {% endmatch %}
         </section>
-        <section data-credit-repayment class="mt-2 border-t border-violet-200 pt-2">
-          <div class="flex flex-wrap items-baseline justify-between gap-1"><h4 class="font-semibold text-violet-900">已出账应还</h4><span class="font-mono font-bold text-red-700 break-all">{{ service.due_total }}</span></div>
+        <section data-credit-repayment class="mt-2 border-t border-gray-200 pt-2">
+          <div class="flex flex-wrap items-baseline justify-between gap-1"><h4 class="font-semibold text-gray-900">已出账应还</h4><span class="font-mono font-bold text-red-700 break-all">{{ service.due_total }}</span></div>
           {% if service.due.is_empty() %}
           <p class="mt-1 text-xs text-gray-600">暂无需还账单</p>
           {% else %}
           <div class="mt-1 space-y-2">
             {% for due in service.due %}
-            <div data-credit-due class="border-l-2 {% if due.overdue %}border-red-600 bg-red-100{% else %}border-violet-300 bg-violet-50{% endif %} px-2 py-1">
-              <div class="flex flex-wrap items-baseline justify-between gap-1"><p class="text-xs font-semibold {% if due.overdue %}text-red-800{% else %}text-violet-900{% endif %}">{{ due.due_date }} 前还款{% if due.overdue %} · 已逾期{% endif %}</p><p class="font-mono font-semibold text-red-700 break-all">{{ due.total }}</p></div>
+            <div data-credit-due class="border-l-2 {% if due.overdue %}border-red-600{% else %}border-gray-300{% endif %} bg-gray-50 px-2 py-1">
+              <div class="flex flex-wrap items-baseline justify-between gap-1"><p class="text-xs font-semibold {% if due.overdue %}text-red-800{% else %}text-gray-700{% endif %}">{{ due.due_date }} 前还款{% if due.overdue %} · 已逾期{% endif %}</p><p class="font-mono font-semibold text-red-700 break-all">{{ due.total }}</p></div>
               <dl class="mt-1 grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-xs">
                 <div class="flex min-w-0 flex-wrap justify-between gap-1"><dt class="text-gray-600">普通消费</dt><dd class="font-mono break-all">{{ due.ordinary }}</dd></div>
                 <div class="flex min-w-0 flex-wrap justify-between gap-1"><dt class="text-gray-600">分期</dt><dd class="font-mono break-all">{{ due.installment }}</dd></div>
