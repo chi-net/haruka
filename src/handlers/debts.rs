@@ -160,6 +160,47 @@ fn apply_outstanding(
     Ok(())
 }
 
+/// Debt-only write-offs never enter account balances or income/expense totals.
+/// Net each person's original currency before FX conversion so a fully settled
+/// loan cannot leave a rounding remainder in the reference currency.
+pub(super) async fn outstanding_balances(
+    state: &AppState,
+    dek: &crypto::Dek,
+    records: &[debt_record::Model],
+    account_currencies: &HashMap<i64, String>,
+    rates: &currency::RateTable,
+    default_currency: &str,
+) -> HandlerResult<HashMap<i64, (i64, i64)>> {
+    let settlements = super::debt_requests::settled_amounts(state, dek).await?;
+    let mut native: HashMap<(i64, &str), (i64, i64)> = HashMap::new();
+    for record in records {
+        let currency = account_currencies
+            .get(&record.account_id)
+            .map(String::as_str)
+            .unwrap_or(default_currency);
+        let amount = crypto::decrypt_cents(dek, &record.amount);
+        let settled = settlements.get(&record.id).copied().unwrap_or_default();
+        if settled > amount {
+            return Err(err500("结清金额超过原借款金额"));
+        }
+        let entry = native.entry((record.person_id, currency)).or_default();
+        apply_outstanding(&record.kind, amount - settled, &mut entry.0, &mut entry.1)?;
+    }
+    let mut result: HashMap<i64, (i64, i64)> = HashMap::new();
+    for ((person, currency), (receivable, payable)) in native {
+        let entry = result.entry(person).or_default();
+        entry.0 = entry
+            .0
+            .checked_add(rates.convert(receivable, currency).map_err(err500)?)
+            .ok_or_else(|| err500("借贷金额超出范围"))?;
+        entry.1 = entry
+            .1
+            .checked_add(rates.convert(payable, currency).map_err(err500)?)
+            .ok_or_else(|| err500("借贷金额超出范围"))?;
+    }
+    Ok(result)
+}
+
 pub(crate) async fn request_ids_for_records(
     state: &AppState,
     records: &[debt_record::Model],
@@ -341,23 +382,15 @@ async fn render_people(
     )
     .await
     .map_err(err500)?;
-    let mut outstanding: HashMap<i64, (i64, i64)> = HashMap::new();
-    for record in records {
-        let entry = outstanding.entry(record.person_id).or_default();
-        let native_amount = crypto::decrypt_cents(&dek, &record.amount);
-        let record_currency = account_currencies
-            .get(&record.account_id)
-            .map(String::as_str)
-            .unwrap_or(&default_currency);
-        apply_outstanding(
-            &record.kind,
-            rates
-                .convert(native_amount, record_currency)
-                .map_err(err500)?,
-            &mut entry.0,
-            &mut entry.1,
-        )?;
-    }
+    let outstanding = outstanding_balances(
+        state,
+        dek,
+        &records,
+        &account_currencies,
+        &rates,
+        &default_currency,
+    )
+    .await?;
     let rows = people
         .into_iter()
         .map(|person| {

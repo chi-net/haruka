@@ -327,6 +327,14 @@ impl App {
             .await
     }
 
+    async fn settle(&self, id: i64, note: &str) -> Response {
+        self.post(
+            &format!("/debt-requests/{id}/settle"),
+            &[("note", note.into())],
+        )
+        .await
+    }
+
     async fn historical_record(&self, kind: &str, person: i64, account: i64, cents: i64) -> i64 {
         self.db.execute(Statement::from_sql_and_values(DbBackend::Sqlite,
             "INSERT INTO debt_records (person_id, account_id, kind, amount, note, happened_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1047,4 +1055,327 @@ async fn legacy_digests_and_historical_public_verification_remain_readable_witho
             .await,
         2
     );
+}
+
+#[tokio::test]
+async fn forced_settlement_closes_remaining_debt_without_faking_money_or_counterparty_consent() {
+    let app = App::start().await;
+    let account = app.account("CNY").await;
+    let person = app.person().await;
+    app.force_balance(account, "100").await;
+    let (borrow, borrowed) = app.book("borrow", account, person, "100", None).await;
+    let (paid, _) = app
+        .book("repayment_paid", account, person, "40", Some(borrowed))
+        .await;
+    let (lend, lent) = app.book("lend", account, person, "50", None).await;
+    app.book("repayment_received", account, person, "10", Some(lent))
+        .await;
+    let draft = App::created_id(
+        &app.create(
+            "repayment_paid",
+            account,
+            person,
+            "1",
+            Some(true),
+            Some(borrowed),
+        )
+        .await,
+    );
+    assert_eq!(app.submit(draft, "1").await.status(), StatusCode::OK);
+    let before = app.counts().await;
+    let balance = app.balance(account).await;
+    assert!(app
+        .get("/debt-people/search?relationship=both", true)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("回归对象"));
+    let unauthorized = app
+        .public_post(&format!("/debt-requests/{borrow}/settle"), &[])
+        .await;
+    assert_eq!(unauthorized.status(), StatusCode::SEE_OTHER);
+    assert_eq!(unauthorized.headers()[header::LOCATION], "/unlock");
+    assert_eq!(app.settle(paid, "").await.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        app.settle(draft, "").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.settle(borrow, &"长".repeat(1001)).await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.settle(borrow, "  不再偿还的单方说明  ").await.status(),
+        StatusCode::SEE_OTHER
+    );
+    let closed = app.row(borrow).await;
+    let settled_amount: String = closed.try_get("", "settled_amount").unwrap();
+    assert_eq!(crypto::decrypt_cents(&app.dek, &settled_amount), 6000);
+    let settlement: String = closed.try_get("", "settlement").unwrap();
+    let key = app.request_key(borrow).await;
+    let declaration: Value =
+        serde_json::from_slice(&crypto::decrypt(&key, &settlement).unwrap()).unwrap();
+    assert_eq!(declaration["amount_cents"], 6000);
+    assert_eq!(declaration["note"], "不再偿还的单方说明");
+    let fingerprint: Vec<u8> = closed.try_get("", "settlement_digest").unwrap();
+    let at: Option<DateTime<Utc>> = closed.try_get("", "settled_at").unwrap();
+    assert!(at.is_some());
+    assert_eq!(
+        app.settle(borrow, "重试不应覆盖声明").await.status(),
+        StatusCode::SEE_OTHER
+    );
+    let retry = app.row(borrow).await;
+    assert_eq!(
+        retry.try_get::<Vec<u8>>("", "settlement_digest").unwrap(),
+        fingerprint
+    );
+    assert_eq!(
+        retry
+            .try_get::<Option<DateTime<Utc>>>("", "settled_at")
+            .unwrap(),
+        at
+    );
+    assert_eq!(
+        retry.try_get::<String>("", "settlement").unwrap(),
+        settlement
+    );
+    assert_eq!(app.counts().await, before);
+    assert_eq!(app.balance(account).await, balance);
+    assert_eq!(app.scalar("SELECT COUNT(*) AS value FROM bills").await, 0);
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM transfers").await,
+        0
+    );
+    assert!(!app
+        .get("/debt-people/search?relationship=payable", true)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("回归对象"));
+    assert!(app
+        .get("/debt-people/search?relationship=receivable", true)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("回归对象"));
+    let proof = app.get(&app.path(borrow).await, false).await;
+    assert_private_proof_policy(&proof);
+    let proof = proof.text().await.unwrap();
+    assert!(proof.contains("CNY 60.00"));
+    assert!(proof.contains("不再偿还的单方说明"));
+    assert!(proof.contains("单方强制平账"));
+    assert!(proof.contains("不代表对方已还款"));
+    assert_eq!(app.confirm(draft).await.status(), StatusCode::BAD_REQUEST);
+    assert!(app
+        .get(&app.path(draft).await, false)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("此分享不可用"));
+    assert!(app
+        .submit(draft, "1")
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("此分享不可用"));
+    assert_eq!(
+        app.create(
+            "repayment_paid",
+            account,
+            person,
+            "0.01",
+            Some(false),
+            Some(borrowed)
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.settle(lend, "对方不再归还").await.status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        crypto::decrypt_cents(
+            &app.dek,
+            &app.row(lend)
+                .await
+                .try_get::<String>("", "settled_amount")
+                .unwrap()
+        ),
+        4000
+    );
+    assert!(app
+        .get("/debt-people/search?relationship=settled", true)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("回归对象"));
+    assert_eq!(app.balance(account).await, balance);
+    assert_eq!(app.counts().await, before);
+    assert_eq!(
+        app.post(&format!("/debt-requests/{borrow}/delete"), &[])
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.post(&format!("/debts/{borrowed}/delete"), &[])
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    // Closed loans cannot absorb new debt or re-enable repayment against old origins.
+    let (new_loan, new_origin) = app.book("borrow", account, person, "3", None).await;
+    assert_eq!(
+        app.create(
+            "repayment_paid",
+            account,
+            person,
+            "3.01",
+            Some(false),
+            Some(new_origin)
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    app.book("repayment_paid", account, person, "3", Some(new_origin))
+        .await;
+    assert_eq!(
+        app.settle(new_loan, "").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert!(app
+        .get("/debt-people/search?relationship=settled", true)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("回归对象"));
+    // A changed ciphertext invalidates the appended proof instead of silently
+    // re-opening the debt or displaying a forged closure.
+    app.exec(&format!(
+        "UPDATE debt_requests SET settled_amount = settled_amount || 'x' WHERE id = {borrow}"
+    ))
+    .await;
+    assert!(app
+        .get(&app.path(borrow).await, false)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("此分享不可用"));
+    assert_eq!(
+        app.get("/debt-people", true).await.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+}
+
+#[tokio::test]
+async fn forced_settlement_serializes_with_repayment_and_rolls_back_failed_storage() {
+    let app = App::start().await;
+    let account = app.account("CNY").await;
+    let person = app.person().await;
+    let (borrow, origin) = app.book("borrow", account, person, "100", None).await;
+    app.exec("CREATE TRIGGER reject_settlement BEFORE UPDATE OF settled_at ON debt_requests WHEN NEW.settled_at IS NOT NULL BEGIN SELECT RAISE(ABORT, 'blocked closure'); END").await;
+    assert_eq!(
+        app.settle(borrow, "写入失败不能假结清").await.status(),
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    let failed = app.row(borrow).await;
+    assert!(failed
+        .try_get::<Option<DateTime<Utc>>>("", "settled_at")
+        .unwrap()
+        .is_none());
+    assert!(failed
+        .try_get::<String>("", "settled_amount")
+        .unwrap()
+        .is_empty());
+    assert_eq!(app.balance(account).await, "CNY 100.00");
+    app.exec("DROP TRIGGER reject_settlement").await;
+    let repayment = App::created_id(
+        &app.create(
+            "repayment_paid",
+            account,
+            person,
+            "30",
+            Some(true),
+            Some(origin),
+        )
+        .await,
+    );
+    assert_eq!(app.submit(repayment, "30").await.status(), StatusCode::OK);
+    let (closure, confirmation) =
+        tokio::join!(app.settle(borrow, "并发结清"), app.confirm(repayment));
+    assert_eq!(closure.status(), StatusCode::SEE_OTHER);
+    let (waived, balance, records) = match confirmation.status() {
+        StatusCode::SEE_OTHER => (7000, "CNY 70.00", 2),
+        StatusCode::BAD_REQUEST => (10000, "CNY 100.00", 1),
+        other => panic!("unexpected concurrent confirmation status: {other}"),
+    };
+    let closed = app.row(borrow).await;
+    assert_eq!(
+        crypto::decrypt_cents(
+            &app.dek,
+            &closed.try_get::<String>("", "settled_amount").unwrap()
+        ),
+        waived
+    );
+    assert_eq!(app.balance(account).await, balance);
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM debt_records")
+            .await,
+        records
+    );
+    assert!(app
+        .get("/debt-people/search?relationship=settled", true)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("回归对象"));
+    assert_eq!(app.confirm(repayment).await.status(), confirmation.status());
+}
+
+#[tokio::test]
+async fn foreign_currency_settlement_nets_before_conversion_without_rounding_debt() {
+    let app = App::start().await;
+    let account = app.account("USD").await;
+    let person = app.person().await;
+    let today = chrono::Local::now().date_naive();
+    app.db.execute(Statement::from_sql_and_values(DbBackend::Sqlite,
+        "INSERT INTO exchange_rates (id, requested_date, rate_date, base_currency, quote_currency, rate, fetched_at) VALUES (?, ?, ?, 'USD', 'CNY', '1.5', ?)",
+        vec![format!("{today}:USD:CNY").into(), today.into(), today.into(), Utc::now().into()]))
+        .await.unwrap();
+    let (loan, origin) = app.book("borrow", account, person, "0.03", None).await;
+    app.book("repayment_paid", account, person, "0.01", Some(origin))
+        .await;
+    app.book("repayment_paid", account, person, "0.01", Some(origin))
+        .await;
+    assert_eq!(
+        app.settle(loan, "剩余一美分").await.status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(app.balance(account).await, "USD 0.01");
+    assert!(app
+        .get("/debt-people/search?relationship=settled", true)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("回归对象"));
+    assert!(!app
+        .get("/debt-people/search?min_payable=0.01", true)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("回归对象"));
 }

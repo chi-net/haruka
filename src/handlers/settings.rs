@@ -35,7 +35,6 @@ struct PasskeyRow {
 struct SettingsTemplate {
     currencies: &'static [currency::CurrencyOption],
     default_currency: String,
-    owner_name: String,
     sms_token_custom: bool,
     recovery_configured: bool,
     passkeys: Vec<PasskeyRow>,
@@ -83,17 +82,12 @@ pub async fn show(
         .one(&state.db)
         .await
         .map_err(err500)?;
-    let owner_name = preferences
-        .as_ref()
-        .map(|item| crypto::decrypt_string(&dek, &item.owner_name))
-        .unwrap_or_default();
     let sms_token_custom = preferences
         .as_ref()
         .is_some_and(|item| !item.sms_api_token_hash.is_empty());
     let html = SettingsTemplate {
         currencies: currency::CURRENCIES,
         default_currency: currency::default_currency(&state).await.map_err(err500)?,
-        owner_name,
         sms_token_custom,
         recovery_configured,
         passkeys,
@@ -128,6 +122,9 @@ pub async fn update_owner_name(
     Form(form): Form<OwnerNameFormData>,
 ) -> HandlerResult<Redirect> {
     let name = form.owner_name.trim();
+    if name.is_empty() {
+        return Ok(Redirect::to("/settings"));
+    }
     if name.chars().count() > 80 {
         return Err(bad_request("本人姓名不能超过 80 个字符"));
     }

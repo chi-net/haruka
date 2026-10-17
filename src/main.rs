@@ -598,6 +598,10 @@ async fn main() {
             post(handlers::debt_requests::submit_repayment),
         )
         .route(
+            "/debt-requests/{id}/settle",
+            post(handlers::debt_requests::settle),
+        )
+        .route(
             "/debt-requests/{id}/revoke",
             post(handlers::debt_requests::revoke),
         )

@@ -51,9 +51,9 @@
   <h1 id="proof-title">{% if confirmed %}Haruka 借还账本证明{% else %}Haruka 借还提交回执（尚未核实入账）{% endif %}</h1>
   <p class="proof-small">本页记录账主账本及下列声明；“我”均指账主。它不是银行回单、实名电子签名或司法认定。保存为 PDF 不会使文件获得签名认证，也不单独证明真实资金已收付或对方真实身份。</p>
   <div class="proof-state">
-    <strong>{% if !requires_confirmation %}单方记录，未经对方确认或认可{% else if repaid %}历史还款已由对方确认收到{% else if repayment_pending %}历史还款已登记，等待对方确认{% else if confirmed %}账主已核实{% if incoming %}到账{% else %}付出{% endif %}并入账{% else %}仅对方已提交 / 确认，等待账主核实，尚未入账{% endif %}</strong>
+    <strong>{% if settled %}账主已单方强制平账（不是实际还款）{% else if !requires_confirmation %}单方记录，未经对方确认或认可{% else if repaid %}历史还款已由对方确认收到{% else if repayment_pending %}历史还款已登记，等待对方确认{% else if confirmed %}账主已核实{% if incoming %}到账{% else %}付出{% endif %}并入账{% else %}仅对方已提交 / 确认，等待账主核实，尚未入账{% endif %}</strong>
     <p>{% if !requires_confirmation %}以下对方姓名、收付金额、时间和说明均为账主单方填写；本记录不包含对方提交、确认或认可，不能通过此链接补成对方确认。{% else if repaid %}此历史证明保留原借款、登记还款及对方确认收到还款的追加记录；确认操作不会新增流水。{% else if repayment_pending %}此历史还款仅由账主登记；尚无对方确认收到还款。请对方核实实际到账后再确认。{% else if confirmed %}对方提交 / 确认与账主核实入账是两个不同阶段。{% else %}此回执只是提交记录，不是已入账证明；公开提交不会改变账本余额，仍需账主核实实际收付。{% endif %}</p>
-    {% if is_loan && !repayment_pending && !repaid %}<p>本页借款记录不表示已经偿还；如有后续还款，请另核对关联还款证明及其状态。</p>{% endif %}
+    {% if is_loan && !repayment_pending && !repaid && !settled %}<p>本页借款记录不表示已经偿还；如有后续还款，请另核对关联还款证明及其状态。</p>{% endif %}
   </div>
 
   <h2>借还方向与实际收付</h2>
@@ -82,6 +82,16 @@
   </dl>
   {% endif %}
 
+  {% if settled %}
+  <h2>账主单方强制平账记录</h2>
+  <dl class="proof-details">
+    <div><dt>强制结清金额</dt><dd class="proof-amount">{{ settlement_amount }}</dd></div>
+    <div><dt>结清性质</dt><dd>账主单方将剩余欠款从待收回 / 待归还中移除；没有生成实际还款、收入或支出，也没有改变账户余额。</dd></div>
+    {% if !settlement_note.is_empty() %}<div><dt>账主平账说明</dt><dd class="proof-note">{{ settlement_note }}</dd></div>{% endif %}
+  </dl>
+  <p><strong>此记录不代表对方已还款、同意结清或放弃债权，也不认定法律上的债务已经免除。原借款和已经发生的还款事实仍按上文记录保留。</strong></p>
+  {% endif %}
+
   <h2>收付与验证链事件时间</h2>
   <p class="proof-small">本地列使用访问者 ClientTimeZone：{{ time_zone }}（含 UTC 偏移）；UTC 列用于双方跨时区核对。实际收付时间来自上述声明，事件时间来自账本记录。</p>
   <table class="proof-times">
@@ -96,7 +106,7 @@
   <p class="proof-small">双方可分别打印或另存 PDF，并通过可信渠道逐字核对同一状态的验证指纹；状态追加后指纹会变化。新证明摘要约束确认策略、原借款关联和加密资料，并追加提交与入账记录。历史证明按其原有规则验证，不重签、不补造确认；单方记录不包含对方确认。</p>
   <p class="proof-small">此指纹用于核对账本验证链，并非 PDF 文件哈希、数字签名或第三方认证。PDF 可被编辑；核对时应使用当前有效的原证明页面，但不要公开分享含秘密令牌的网址。</p>
 
-  {% if repayment_pending && requires_confirmation %}
+  {% if repayment_pending && requires_confirmation && !settled %}
   <form method="post" action="/r/{{ token }}/verify" class="proof-confirm" onsubmit="return window.confirm('请核实你确已收到这笔历史登记的还款。继续确认？')">
     <p><strong>由对方确认收到历史登记的还款</strong></p>
     <p>仅在实际收到还款后确认；此操作不会再次生成流水。</p>

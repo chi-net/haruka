@@ -9,6 +9,10 @@ use reqwest::{header, Client, Response, StatusCode};
 use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
 use serde_json::{json, Value};
 
+#[allow(dead_code)]
+#[path = "../src/crypto.rs"]
+mod crypto;
+
 struct App {
     child: Child,
     directory: PathBuf,
@@ -589,4 +593,83 @@ async fn account_usernames_are_complete_but_cards_require_explicit_unlocked_acce
         assert!(card.status().is_redirection());
         assert_eq!(card.headers()[header::LOCATION], "/unlock");
     }
+}
+
+#[tokio::test]
+async fn owner_name_stays_private_and_only_nonblank_submissions_update_encrypted_storage() {
+    let app = App::start().await;
+    let meta = app
+        .db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT salt, dek_nonce, wrapped_dek FROM meta WHERE id = 1".to_owned(),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let salt: Vec<u8> = meta.try_get("", "salt").unwrap();
+    let nonce: Vec<u8> = meta.try_get("", "dek_nonce").unwrap();
+    let wrapped: Vec<u8> = meta.try_get("", "wrapped_dek").unwrap();
+    let kek = crypto::derive_kek("main-regression-password", &salt);
+    let dek = crypto::unwrap_dek(&nonce, &wrapped, kek.as_slice()).unwrap();
+    let original_name = "隐私姓名原值甲";
+    let original_ciphertext = crypto::encrypt(&dek, original_name.as_bytes());
+    app.db
+        .execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "UPDATE preferences SET owner_name = ? WHERE id = 1",
+            [original_ciphertext.clone().into()],
+        ))
+        .await
+        .unwrap();
+
+    let response = app.get("/settings", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!response.text().await.unwrap().contains(original_name));
+
+    for blank in ["", " \t\r\n\u{3000} "] {
+        let saved = app
+            .post("/settings/owner-name", &[("owner_name", blank)], None)
+            .await;
+        assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+        let stored: String = app
+            .db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT owner_name FROM preferences WHERE id = 1".to_owned(),
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "owner_name")
+            .unwrap();
+        assert_eq!(stored, original_ciphertext);
+        assert_eq!(crypto::decrypt_string(&dek, &stored), original_name);
+    }
+
+    let new_name = "隐私姓名新值乙";
+    let padded = format!(" \t{new_name}\u{3000} ");
+    let saved = app
+        .post("/settings/owner-name", &[("owner_name", &padded)], None)
+        .await;
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+    let updated: String = app
+        .db
+        .query_one(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT owner_name FROM preferences WHERE id = 1".to_owned(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "owner_name")
+        .unwrap();
+    assert_ne!(updated, original_ciphertext);
+    assert!(!updated.contains(new_name));
+    assert_eq!(crypto::decrypt_string(&dek, &updated), new_name);
+    let response = app.get("/settings", None).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = response.text().await.unwrap();
+    assert!(!html.contains(original_name));
+    assert!(!html.contains(new_name));
 }

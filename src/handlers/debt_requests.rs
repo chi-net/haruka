@@ -119,6 +119,12 @@ struct RequestView {
     can_confirm: bool,
     can_print: bool,
     can_submit_repayment: bool,
+    can_settle: bool,
+    settled: bool,
+    settlement_amount: String,
+    settlement_note: String,
+    settled_at: String,
+    origin_settled: bool,
     can_revoke: bool,
     repayment_pending: bool,
     repaid: bool,
@@ -187,6 +193,9 @@ struct DebtRequestReceiptTemplate {
     repaid: bool,
     repayment_note: String,
     repayment_amount: String,
+    settled: bool,
+    settlement_amount: String,
+    settlement_note: String,
     verification_code: String,
     requires_confirmation: bool,
     incoming: bool,
@@ -253,6 +262,19 @@ struct RepaymentSubmission {
     version: u8,
     amount_cents: i64,
     repaid_at: String,
+    note: String,
+}
+
+#[derive(Deserialize)]
+pub struct SettleForm {
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Settlement {
+    version: u8,
+    amount_cents: i64,
     note: String,
 }
 
@@ -363,6 +385,15 @@ fn render_receipt(
             time_zone,
         ));
     }
+    let settlement = if let Some(at) = request.settled_at {
+        let Some(settlement) = decrypt_settlement(request, token_bytes) else {
+            return render_public(UnavailableTemplate {});
+        };
+        times.push(proof_time("账主单方强制平账", at.naive_utc(), time_zone));
+        Some(settlement)
+    } else {
+        None
+    };
     times.push(proof_time("原链接有效期", request.expires_at, time_zone));
     let style_nonce = URL_SAFE_NO_PAD.encode(crypto::random_bytes::<16>());
     // Authorize only this response's business-template style block, not arbitrary inline CSS.
@@ -374,6 +405,12 @@ fn render_receipt(
         token,
         paid_amount: crate::currency::format(submission.amount_cents, &snapshot.currency),
         requested_amount: crate::currency::format(snapshot.amount_cents, &snapshot.currency),
+        settled: request.settled_at.is_some(),
+        settlement_amount: settlement
+            .as_ref()
+            .map(|item| crate::currency::format(item.amount_cents, &snapshot.currency))
+            .unwrap_or_default(),
+        settlement_note: settlement.map(|item| item.note).unwrap_or_default(),
         repayment_amount: repayment
             .as_ref()
             .map(|repayment| crate::currency::format(repayment.amount_cents, &snapshot.currency))
@@ -536,6 +573,21 @@ fn verified_digest(previous: &[u8], verified_at: chrono::DateTime<Utc>) -> Vec<u
     ])
 }
 
+fn settlement_digest(
+    previous: &[u8],
+    settlement: &str,
+    settled_amount: &str,
+    settled_at: chrono::DateTime<Utc>,
+) -> Vec<u8> {
+    digest(&[
+        b"unilateral-settlement",
+        previous,
+        settlement.as_bytes(),
+        settled_amount.as_bytes(),
+        settled_at.to_rfc3339().as_bytes(),
+    ])
+}
+
 fn digest_code(value: &[u8]) -> String {
     value
         .iter()
@@ -647,10 +699,43 @@ fn verify_chain(request: &debt_request::Model) -> bool {
             return false;
         }
     }
+    if let Some(at) = request.settled_at {
+        if !matches!(request.kind.as_str(), "borrow" | "lend")
+            || request.confirmed_debt_record_id.is_none()
+            || !matches!(
+                request.status.as_str(),
+                "confirmed" | "recorded" | "repayment_submitted" | "repaid"
+            )
+            || request.settlement.is_empty()
+            || request.settled_amount.is_empty()
+            || request.settlement_digest
+                != settlement_digest(
+                    booking_chain_head(request),
+                    &request.settlement,
+                    &request.settled_amount,
+                    at,
+                )
+        {
+            return false;
+        }
+    } else if !request.settlement.is_empty()
+        || !request.settled_amount.is_empty()
+        || !request.settlement_digest.is_empty()
+    {
+        return false;
+    }
     true
 }
 
 fn chain_head(request: &debt_request::Model) -> &[u8] {
+    if request.settled_at.is_some() {
+        &request.settlement_digest
+    } else {
+        booking_chain_head(request)
+    }
+}
+
+fn booking_chain_head(request: &debt_request::Model) -> &[u8] {
     if !request.verification_digest.is_empty() {
         &request.verification_digest
     } else if !request.repayment_digest.is_empty() {
@@ -785,6 +870,40 @@ fn decrypt_repayment(request: &debt_request::Model, token: &[u8]) -> Option<Repa
     (repayment.version == 1).then_some(repayment)
 }
 
+fn decrypt_settlement(request: &debt_request::Model, token: &[u8]) -> Option<Settlement> {
+    let key = request_key(token, &request.salt);
+    let plaintext = crypto::decrypt(&key, &request.settlement)?;
+    let settlement: Settlement = serde_json::from_slice(&plaintext).ok()?;
+    (settlement.version == 1 && settlement.amount_cents > 0).then_some(settlement)
+}
+
+pub(super) async fn settled_amounts(
+    state: &AppState,
+    dek: &crypto::Dek,
+) -> HandlerResult<HashMap<i64, i64>> {
+    let mut amounts = HashMap::new();
+    for request in debt_request::Entity::find()
+        .filter(debt_request::Column::SettledAt.is_not_null())
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+    {
+        if !verify_chain(&request) {
+            return Err(err500("借款结清验证链异常"));
+        }
+        let amount = crypto::decrypt_string(dek, &request.settled_amount)
+            .parse::<i64>()
+            .map_err(|_| err500("借款结清金额无法解密"))?;
+        let id = request
+            .confirmed_debt_record_id
+            .ok_or_else(|| err500("结清记录缺少原借款"))?;
+        if amount <= 0 || amounts.insert(id, amount).is_some() {
+            return Err(err500("借款结清金额或关联异常"));
+        }
+    }
+    Ok(amounts)
+}
+
 async fn find_public_request(
     state: &AppState,
     token: &str,
@@ -797,16 +916,31 @@ async fn find_public_request(
         .one(&state.db)
         .await
         .map_err(err500)?;
-    Ok(request
-        .filter(|item| {
-            item.status != "revoked"
-                && (item.expires_at > Utc::now().naive_utc()
-                    || matches!(
-                        item.status.as_str(),
-                        "confirmed" | "recorded" | "repayment_submitted" | "repaid"
-                    ))
-        })
-        .map(|item| (item, bytes)))
+    let Some(request) = request.filter(|item| {
+        item.status != "revoked"
+            && (item.expires_at > Utc::now().naive_utc()
+                || matches!(
+                    item.status.as_str(),
+                    "confirmed" | "recorded" | "repayment_submitted" | "repaid"
+                ))
+    }) else {
+        return Ok(None);
+    };
+    if request.confirmed_debt_record_id.is_none() {
+        if let Some(origin) = request.origin_debt_record_id {
+            if debt_request::Entity::find()
+                .filter(debt_request::Column::ConfirmedDebtRecordId.eq(origin))
+                .filter(debt_request::Column::SettledAt.is_not_null())
+                .one(&state.db)
+                .await
+                .map_err(err500)?
+                .is_some()
+            {
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some((request, bytes)))
 }
 
 /// The caller holds balance_writes. Historical unbound repayments consume the
@@ -853,6 +987,10 @@ async fn repayment_capacity(
     } else {
         None
     };
+    let settlements = settled_amounts(state, dek).await?;
+    if origin.is_some_and(|item| settlements.contains_key(&item.id)) {
+        return Ok(0);
+    }
     let mut outstanding = 0_i64;
     let mut repayment_amounts = HashMap::new();
     for record in &records {
@@ -863,7 +1001,9 @@ async fn repayment_capacity(
         {
             continue;
         }
-        let amount = crypto::decrypt_cents(dek, &record.amount);
+        let amount = crypto::decrypt_cents(dek, &record.amount)
+            .checked_sub(settlements.get(&record.id).copied().unwrap_or_default())
+            .ok_or_else(|| err500("借款结清金额超出范围"))?;
         if record.kind == original_kind {
             outstanding = outstanding
                 .checked_add(amount)
@@ -995,6 +1135,7 @@ pub async fn new_form(
             name: crypto::decrypt_string(&dek, &person.name),
         })
         .collect();
+    let settled_origins = settled_amounts(&state, &dek).await?;
     let mut origins = Vec::new();
     for record in debt_record::Entity::find()
         .filter(debt_record::Column::Kind.is_in(["borrow", "lend"]))
@@ -1003,6 +1144,9 @@ pub async fn new_form(
         .await
         .map_err(err500)?
     {
+        if settled_origins.contains_key(&record.id) {
+            continue;
+        }
         let Some(account) = account::Entity::find_by_id(record.account_id)
             .one(&state.db)
             .await
@@ -1313,12 +1457,17 @@ pub async fn list(
         .map(|account| (account.id, account.name.clone()))
         .collect::<HashMap<_, _>>();
     let mut views = Vec::new();
-    for request in debt_request::Entity::find()
+    let requests = debt_request::Entity::find()
         .order_by_desc(debt_request::Column::CreatedAt)
         .all(&state.db)
         .await
-        .map_err(err500)?
-    {
+        .map_err(err500)?;
+    let settled_origins: std::collections::HashSet<_> = requests
+        .iter()
+        .filter(|request| request.settled_at.is_some())
+        .filter_map(|request| request.confirmed_debt_record_id)
+        .collect();
+    for request in requests {
         let token = crypto::decrypt_string(&dek, &request.token);
         let Some(token_bytes) = decode_token(&token) else {
             continue;
@@ -1326,8 +1475,22 @@ pub async fn list(
         let snapshot = decrypt_snapshot(&request, token_bytes.as_slice()).unwrap_or_default();
         let submission = decrypt_submission(&request, token_bytes.as_slice());
         let repayment = decrypt_repayment(&request, token_bytes.as_slice());
+        let settled = request.settled_at.is_some();
+        let settlement = if settled {
+            decrypt_settlement(&request, token_bytes.as_slice())
+        } else {
+            None
+        };
+        let origin_settled = request
+            .origin_debt_record_id
+            .is_some_and(|id| settled_origins.contains(&id));
+        let verified = verify_chain(&request) && (!settled || settlement.is_some());
         let expired = request.expires_at <= now;
         let status_label = match request.status.as_str() {
+            _ if settled => "已强制平账（账主单方结清，非实际还款）",
+            _ if origin_settled && request.confirmed_debt_record_id.is_none() => {
+                "原借款已强制平账，本请求不能入账"
+            }
             "recorded" => "单方记录，未经对方确认",
             "submitted" if incoming(&request.kind) => "对方已提交打款，待账主核实到账",
             "submitted" => "对方已确认收款，待账主核实付出",
@@ -1365,16 +1528,38 @@ pub async fn list(
             has_submission,
             can_confirm: request.requires_confirmation
                 && request.status == "submitted"
-                && verify_chain(&request),
+                && !origin_settled
+                && verified,
             can_print: has_submission
-                && verify_chain(&request)
+                && verified
+                && (!origin_settled || request.confirmed_debt_record_id.is_some())
                 && (matches!(
                     request.status.as_str(),
                     "confirmed" | "recorded" | "repayment_submitted" | "repaid"
                 ) || (request.status == "submitted" && !expired)),
             can_submit_repayment: matches!(request.kind.as_str(), "borrow" | "lend")
                 && matches!(request.status.as_str(), "confirmed" | "recorded")
-                && verify_chain(&request),
+                && !settled
+                && verified,
+            can_settle: matches!(request.kind.as_str(), "borrow" | "lend")
+                && request.confirmed_debt_record_id.is_some()
+                && matches!(
+                    request.status.as_str(),
+                    "confirmed" | "recorded" | "repayment_submitted" | "repaid"
+                )
+                && !settled
+                && verified,
+            settled,
+            settlement_amount: settlement
+                .as_ref()
+                .map(|item| crate::currency::format(item.amount_cents, &snapshot.currency))
+                .unwrap_or_default(),
+            settlement_note: settlement.map(|item| item.note).unwrap_or_default(),
+            settled_at: request
+                .settled_at
+                .map(|at| at.format(TIME_FMT).to_string())
+                .unwrap_or_default(),
+            origin_settled,
             can_revoke: matches!(request.status.as_str(), "open" | "submitted"),
             repayment_pending: request.status == "repayment_submitted",
             repaid: request.status == "repaid",
@@ -1390,7 +1575,7 @@ pub async fn list(
                 .cloned()
                 .unwrap_or_default(),
             confirmed_debt_record_id: request.confirmed_debt_record_id.unwrap_or_default(),
-            verification_ok: verify_chain(&request),
+            verification_ok: verified,
             verification_code: digest_code(chain_head(&request)),
             requires_confirmation: request.requires_confirmation,
             incoming: incoming(&request.kind),
@@ -1560,6 +1745,7 @@ pub async fn submit_repayment(
         .ok_or((StatusCode::NOT_FOUND, "借还请求不存在".into()))?;
     if !matches!(request.kind.as_str(), "borrow" | "lend")
         || !matches!(request.status.as_str(), "confirmed" | "recorded")
+        || request.settled_at.is_some()
         || !verify_chain(&request)
     {
         return Err(bad_request("只有已入账的原借款可以登记还款"));
@@ -1620,6 +1806,96 @@ pub async fn submit_repayment(
     create(State(state), Extension(SessionDek(dek)), Form(create_form)).await
 }
 
+/// 单方放弃剩余债权 / 不再记录应付款，不产生任何资金流水。
+pub async fn settle(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+    Form(form): Form<SettleForm>,
+) -> HandlerResult<Redirect> {
+    let _guard = state.balance_writes.lock().await;
+    let request = debt_request::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "借还请求不存在".into()))?;
+    if !verify_chain(&request)
+        || !matches!(request.kind.as_str(), "borrow" | "lend")
+        || !matches!(
+            request.status.as_str(),
+            "confirmed" | "recorded" | "repayment_submitted" | "repaid"
+        )
+        || request.confirmed_debt_record_id.is_none()
+    {
+        return Err(bad_request("只有验证链完整且已入账的原借款可以强制平账"));
+    }
+    if request.settled_at.is_some() {
+        return Ok(Redirect::to("/debt-requests"));
+    }
+    let note = form.note.trim();
+    if note.chars().count() > 1000 {
+        return Err(bad_request("平账说明不能超过 1000 个字符"));
+    }
+    let original = debt_record::Entity::find_by_id(request.confirmed_debt_record_id.unwrap())
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("原借款流水不存在"))?;
+    if original.kind != request.kind || original.account_id != request.account_id {
+        return Err(bad_request("请求与原借款流水不一致"));
+    }
+    let account = account::Entity::find_by_id(original.account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("原借款账户不存在"))?;
+    let amount = repayment_capacity(
+        &state,
+        &dek,
+        if original.kind == "borrow" {
+            "repayment_paid"
+        } else {
+            "repayment_received"
+        },
+        original.person_id,
+        &account.currency,
+        Some(original.id),
+    )
+    .await?;
+    if amount <= 0 {
+        return Err(bad_request("没有待结清金额，无需强制平账"));
+    }
+    let token = crypto::decrypt_string(&dek, &request.token);
+    let bytes = decode_token(&token).ok_or_else(|| err500("请求令牌无法解密"))?;
+    let key = request_key(bytes.as_slice(), &request.salt);
+    let settlement = crypto::encrypt(
+        &key,
+        &serde_json::to_vec(&Settlement {
+            version: 1,
+            amount_cents: amount,
+            note: note.into(),
+        })
+        .map_err(err500)?,
+    );
+    let settled_amount = crypto::encrypt_cents(&dek, amount);
+    let at = Utc::now();
+    let hash = settlement_digest(
+        booking_chain_head(&request),
+        &settlement,
+        &settled_amount,
+        at,
+    );
+    let transaction = state.db.begin().await.map_err(err500)?;
+    let mut active = request.into_active_model();
+    active.settlement = Set(settlement);
+    active.settled_amount = Set(settled_amount);
+    active.settled_at = Set(Some(at));
+    active.settlement_digest = Set(hash);
+    active.update(&transaction).await.map_err(err500)?;
+    transaction.commit().await.map_err(err500)?;
+    Ok(Redirect::to("/debt-requests"))
+}
+
 /// 出借人在借款人登记还款后，通过原公开链接确认自己确已收到还款。
 pub async fn verify(
     State(state): State<AppState>,
@@ -1631,6 +1907,11 @@ pub async fn verify(
     };
     if request.proof_version != 1 || !request.requires_confirmation {
         return render_public(UnavailableTemplate {});
+    }
+    if request.settled_at.is_some() && verify_chain(&request) {
+        return Ok(public_response(
+            Redirect::to(&format!("/r/{token}")).into_response(),
+        ));
     }
     if request.status == "repaid" && verify_chain(&request) {
         return Ok(public_response(

@@ -4,9 +4,8 @@ use axum::{
     http::StatusCode,
     response::{Html, Redirect},
 };
-use chrono::{Duration, NaiveDate, Timelike};
+use chrono::{Duration, NaiveDate};
 use sea_orm::{EntityTrait, QueryOrder};
-use serde::Serialize;
 use std::collections::HashMap;
 
 use crate::{
@@ -76,27 +75,6 @@ struct AutoDebitWarning {
     overdue: bool,
 }
 
-#[derive(Serialize)]
-struct ReportSeries {
-    labels: Vec<String>,
-    income: Vec<i64>,
-    expense: Vec<i64>,
-}
-
-#[derive(Serialize)]
-struct Reports {
-    daily: ReportSeries,
-    weekly: ReportSeries,
-    monthly: ReportSeries,
-    yearly: ReportSeries,
-}
-
-struct BillValue {
-    happened_at: chrono::DateTime<chrono_tz::Tz>,
-    kind: String,
-    amount: i64,
-}
-
 struct FundValuationReminder {
     parent_id: i64,
     name: String,
@@ -116,8 +94,6 @@ struct DashboardTemplate {
     total_expense: String,
     receivable: String,
     payable: String,
-    reports_json: String,
-    default_currency: String,
     time_zone: String,
     subscription_reminders: Vec<ReminderRow>,
     installment_reminders: Vec<ReminderRow>,
@@ -205,66 +181,6 @@ fn snapshot_balances(
     }
     crate::investment_funds::roll_up_balances(accounts, &mut balances)?;
     Ok(balances)
-}
-
-fn add_value(series: &mut ReportSeries, index: usize, bill: &BillValue) -> HandlerResult<()> {
-    let target = if bill.kind == "income" {
-        &mut series.income[index]
-    } else {
-        &mut series.expense[index]
-    };
-    *target = target
-        .checked_add(bill.amount)
-        .ok_or_else(|| err500("报表金额超出范围"))?;
-    Ok(())
-}
-
-fn build_date_series(
-    today: NaiveDate,
-    days: i64,
-    bills: &[BillValue],
-) -> HandlerResult<ReportSeries> {
-    let dates = (0..days)
-        .map(|offset| today - Duration::days(days - 1 - offset))
-        .collect::<Vec<_>>();
-    let mut series = ReportSeries {
-        labels: dates
-            .iter()
-            .map(|date| date.format("%m-%d").to_string())
-            .collect(),
-        income: vec![0; dates.len()],
-        expense: vec![0; dates.len()],
-    };
-    let indexes: HashMap<NaiveDate, usize> = dates
-        .iter()
-        .enumerate()
-        .map(|(index, date)| (*date, index))
-        .collect();
-    for bill in bills {
-        if let Some(index) = indexes.get(&bill.happened_at.date_naive()) {
-            add_value(&mut series, *index, bill)?;
-        }
-    }
-    Ok(series)
-}
-
-fn build_reports(today: NaiveDate, bills: &[BillValue]) -> HandlerResult<Reports> {
-    let mut daily = ReportSeries {
-        labels: (0..24).map(|hour| format!("{hour:02}:00")).collect(),
-        income: vec![0; 24],
-        expense: vec![0; 24],
-    };
-    for bill in bills {
-        if bill.happened_at.date_naive() == today {
-            add_value(&mut daily, bill.happened_at.hour() as usize, bill)?;
-        }
-    }
-    Ok(Reports {
-        daily,
-        weekly: build_date_series(today, 7, bills)?,
-        monthly: build_date_series(today, 30, bills)?,
-        yearly: build_date_series(today, 365, bills)?,
-    })
 }
 
 pub async fn show(
@@ -601,71 +517,45 @@ pub async fn show(
 
     let mut receivable = 0i64;
     let mut payable = 0i64;
-    for record in &debt_records {
-        let native_amount = crypto::decrypt_cents(&dek, &record.amount);
-        let record_currency = account_currencies
-            .get(&record.account_id)
+    for (remaining_receivable, remaining_payable) in super::debts::outstanding_balances(
+        &state,
+        &dek,
+        &debt_records,
+        &account_currencies,
+        &rates,
+        &default_currency,
+    )
+    .await?
+    .into_values()
+    {
+        receivable = receivable
+            .checked_add(remaining_receivable)
+            .ok_or_else(|| err500("借贷金额超出范围"))?;
+        payable = payable
+            .checked_add(remaining_payable)
+            .ok_or_else(|| err500("借贷金额超出范围"))?;
+    }
+
+    let mut total_income = 0i64;
+    let mut total_expense = 0i64;
+    for bill in &bills {
+        let native_amount = crypto::decrypt_cents(&dek, &bill.amount);
+        let bill_currency = account_currencies
+            .get(&bill.account_id)
             .map(String::as_str)
             .unwrap_or(&default_currency);
         let amount = rates
-            .convert(native_amount, record_currency)
+            .convert(native_amount, bill_currency)
             .map_err(err500)?;
-        match record.kind.as_str() {
-            "lend" => {
-                receivable = receivable
-                    .checked_add(amount)
-                    .ok_or_else(|| err500("借贷金额超出范围"))?
-            }
-            "repayment_received" => {
-                receivable = receivable
-                    .checked_sub(amount)
-                    .ok_or_else(|| err500("借贷金额超出范围"))?
-            }
-            "borrow" => {
-                payable = payable
-                    .checked_add(amount)
-                    .ok_or_else(|| err500("借贷金额超出范围"))?
-            }
-            "repayment_paid" => {
-                payable = payable
-                    .checked_sub(amount)
-                    .ok_or_else(|| err500("借贷金额超出范围"))?
-            }
-            _ => {}
-        }
-    }
-
-    let bill_values = bills
-        .into_iter()
-        .map(|bill| {
-            let native_amount = crypto::decrypt_cents(&dek, &bill.amount);
-            let bill_currency = account_currencies
-                .get(&bill.account_id)
-                .map(String::as_str)
-                .unwrap_or(&default_currency);
-            Ok(BillValue {
-                happened_at: time_zone.local_datetime(bill.happened_at),
-                kind: bill.kind,
-                amount: rates
-                    .convert(native_amount, bill_currency)
-                    .map_err(err500)?,
-            })
-        })
-        .collect::<HandlerResult<Vec<_>>>()?;
-    let mut total_income = 0i64;
-    let mut total_expense = 0i64;
-    for bill in &bill_values {
         let target = if bill.kind == "income" {
             &mut total_income
         } else {
             &mut total_expense
         };
         *target = target
-            .checked_add(bill.amount)
+            .checked_add(amount)
             .ok_or_else(|| err500("报表金额超出范围"))?;
     }
-    let reports_json =
-        serde_json::to_string(&build_reports(today, &bill_values)?).map_err(err500)?;
     let budget_statuses = super::budgets::current_statuses(&state, &dek, time_zone).await?;
     let html = DashboardTemplate {
         account_summaries,
@@ -676,8 +566,6 @@ pub async fn show(
         total_expense: currency::format(total_expense, &default_currency),
         receivable: currency::format(receivable, &default_currency),
         payable: currency::format(payable, &default_currency),
-        reports_json,
-        default_currency,
         time_zone: time_zone.0.name().into(),
         subscription_reminders,
         installment_reminders,

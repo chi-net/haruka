@@ -373,6 +373,34 @@ pub async fn init() -> DatabaseConnection {
     ensure_column(&db, "debt_requests", "verified_at", "TIMESTAMP").await;
     ensure_column(&db, "debt_requests", "repayment_debt_record_id", "INTEGER").await;
     ensure_column(&db, "debt_requests", "repayment_account_id", "INTEGER").await;
+    ensure_column(
+        &db,
+        "debt_requests",
+        "settled_amount",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    ensure_column(&db, "debt_requests", "settled_at", "TIMESTAMP").await;
+    ensure_column(
+        &db,
+        "debt_requests",
+        "settlement",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "debt_requests",
+        "settlement_digest",
+        "BLOB NOT NULL DEFAULT X''",
+    )
+    .await;
+    db.execute(Statement::from_string(
+        DbBackend::Sqlite,
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_debt_request_settled_origin ON debt_requests (confirmed_debt_record_id) WHERE settled_at IS NOT NULL".to_string(),
+    ))
+    .await
+    .expect("创建借款结清索引失败");
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
         "UPDATE debt_requests SET status = 'confirmed', verification_digest = X'', verified_at = NULL WHERE status = 'verified'".to_string(),

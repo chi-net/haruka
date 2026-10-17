@@ -26,9 +26,9 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium">本人姓名</h2>
-  <p class="text-sm text-gray-500 mt-1 mb-3">仅用于判断招商银行短信中的收款人或信用卡还款人是否是你本人，以推测可能的转账或支出。你的姓名将会受到加密保护。</p>
+  <p class="text-sm text-gray-500 mt-1 mb-3">仅用于判断招商银行短信中的收款人或信用卡还款人是否是你本人，以推测可能的转账或支出。你的姓名将会受到加密保护，不会在此显示。仅填写新姓名时更新，留空保存会保留原姓名。</p>
   <form method="post" action="/settings/owner-name" class="flex flex-wrap gap-2">
-    <input name="owner_name" value="{{ owner_name }}" maxlength="80" placeholder="例如：张三" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
+    <input name="owner_name" maxlength="80" autocomplete="off" placeholder="输入新的本人姓名" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
     <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">保存本人姓名</button>
   </form>
 </section>
