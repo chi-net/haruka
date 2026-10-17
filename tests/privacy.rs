@@ -2,6 +2,7 @@ use std::{
     net::TcpListener,
     path::PathBuf,
     process::{Child, Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -24,12 +25,16 @@ struct App {
 
 impl App {
     async fn start() -> Self {
+        static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+        let sequence = NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let directory =
-            std::env::temp_dir().join(format!("haruka-privacy-{}-{nonce}", std::process::id()));
+        let directory = std::env::temp_dir().join(format!(
+            "haruka-privacy-{}-{nonce}-{sequence}",
+            std::process::id()
+        ));
         std::fs::create_dir(&directory).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -672,4 +677,235 @@ async fn owner_name_stays_private_and_only_nonblank_submissions_update_encrypted
     let html = response.text().await.unwrap();
     assert!(!html.contains(original_name));
     assert!(!html.contains(new_name));
+}
+
+#[tokio::test]
+async fn site_footer_is_public_escaped_authorized_and_atomically_saved_without_private_changes() {
+    async fn preferences(app: &App) -> (String, String, String) {
+        let row = app
+            .db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT footer_text, icp_record, owner_name FROM preferences WHERE id = 1"
+                    .to_owned(),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        (
+            row.try_get("", "footer_text").unwrap(),
+            row.try_get("", "icp_record").unwrap(),
+            row.try_get("", "owner_name").unwrap(),
+        )
+    }
+
+    let app = App::start().await;
+    let owner_name = "footer-regression-private-owner";
+    assert_eq!(
+        app.post("/settings/owner-name", &[("owner_name", owner_name)], None)
+            .await
+            .status(),
+        StatusCode::SEE_OTHER,
+    );
+    let (_, _, owner_ciphertext) = preferences(&app).await;
+    assert!(!owner_ciphertext.is_empty());
+    assert!(!owner_ciphertext.contains(owner_name));
+
+    // Limits are in characters, not UTF-8 bytes, and accept the exact boundaries.
+    let maximum_text = "页".repeat(2000);
+    let maximum_record = "备".repeat(80);
+    assert_eq!(
+        app.post(
+            "/settings/footer",
+            &[
+                ("footer_text", &maximum_text),
+                ("icp_record", &maximum_record),
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER,
+    );
+    assert_eq!(
+        preferences(&app).await,
+        (maximum_text, maximum_record, owner_ciphertext.clone()),
+    );
+
+    let footer_text =
+        "<script>alert(\"footer-xss\")</script> & footer-public-line-one\nfooter-public-line-two";
+    let icp_record = "京ICP备2026101701号-1";
+    let padded_text = format!(" \t{footer_text}\r\n\u{3000}");
+    let padded_record = format!("\u{3000}{icp_record} \t");
+    assert_eq!(
+        app.post(
+            "/settings/footer",
+            &[
+                ("footer_text", &padded_text),
+                ("icp_record", &padded_record),
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER,
+    );
+    let saved = (
+        footer_text.to_owned(),
+        icp_record.to_owned(),
+        owner_ciphertext.clone(),
+    );
+    assert_eq!(preferences(&app).await, saved);
+
+    let pages = [
+        ("/settings", true, StatusCode::OK),
+        ("/unlock", false, StatusCode::OK),
+        ("/recover", false, StatusCode::OK),
+        (
+            "/footer-regression-missing-page",
+            true,
+            StatusCode::NOT_FOUND,
+        ),
+        ("/s/footer-regression-invalid", false, StatusCode::OK),
+        ("/r/footer-regression-invalid", false, StatusCode::OK),
+    ];
+    for (path, authenticated, status) in pages {
+        let response = if authenticated {
+            app.get(path, None).await
+        } else {
+            app.client
+                .get(format!("{}{path}", app.url))
+                .send()
+                .await
+                .unwrap()
+        };
+        assert_eq!(response.status(), status, "{path}");
+        assert!(
+            response.headers()[header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html"),
+            "{path}",
+        );
+        let html = response.text().await.unwrap();
+        assert!(html.contains("footer-xss"), "{path}");
+        assert!(
+            !html.contains("<script>alert(\"footer-xss\")</script>"),
+            "{path}"
+        );
+        assert!(html.contains("footer-public-line-two"), "{path}");
+        let record_link = html
+            .split_once("href=\"https://beian.miit.gov.cn/\"")
+            .unwrap_or_else(|| panic!("missing official record link: {path}"))
+            .1
+            .split_once("</a>")
+            .unwrap_or_else(|| panic!("unclosed official record link: {path}"))
+            .0;
+        assert!(record_link.contains(icp_record), "{path}");
+        assert!(!html.contains(owner_name), "{path}");
+    }
+
+    // App::post adds the unlocked cookie; bypass it to test anonymous mutation.
+    let unauthorized = app
+        .client
+        .post(format!("{}/settings/footer", app.url))
+        .form(&[
+            ("footer_text", "unauthorized-footer-replacement"),
+            ("icp_record", "unauthorized-record-replacement"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::SEE_OTHER);
+    assert_eq!(unauthorized.headers()[header::LOCATION], "/unlock");
+    assert_eq!(preferences(&app).await, saved);
+
+    for (text, record) in [
+        (
+            "页".repeat(2001),
+            "invalid-text-record-replacement".to_owned(),
+        ),
+        (
+            "invalid-record-text-replacement".to_owned(),
+            "备".repeat(81),
+        ),
+    ] {
+        let rejected = app
+            .post(
+                "/settings/footer",
+                &[("footer_text", &text), ("icp_record", &record)],
+                None,
+            )
+            .await;
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(preferences(&app).await, saved);
+        let html = app
+            .client
+            .get(format!("{}/unlock", app.url))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(html.contains("footer-public-line-two"));
+        assert!(html.contains(icp_record));
+        assert!(!html.contains("invalid-text-record-replacement"));
+        assert!(!html.contains("invalid-record-text-replacement"));
+    }
+
+    let sms = app
+        .client
+        .get(format!("{}/api/sms", app.url))
+        .header(header::ACCEPT, "text/html")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sms.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(sms.headers()[header::ALLOW], "POST");
+    assert!(sms.headers()[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .starts_with("application/json"),);
+    let body = sms.text().await.unwrap();
+    let error: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(error["status"], 405);
+    assert!(!body.contains("footer-public-line"));
+    assert!(!body.contains(icp_record));
+    assert!(!body.contains("beian.miit.gov.cn"));
+    assert!(!body.contains("<footer"));
+
+    assert_eq!(
+        app.post(
+            "/settings/footer",
+            &[
+                ("footer_text", " \t\r\n\u{3000}"),
+                ("icp_record", "\u{3000} ")
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER,
+    );
+    assert_eq!(
+        preferences(&app).await,
+        (String::new(), String::new(), owner_ciphertext),
+    );
+    for (path, authenticated, status) in pages {
+        let response = if authenticated {
+            app.get(path, None).await
+        } else {
+            app.client
+                .get(format!("{}{path}", app.url))
+                .send()
+                .await
+                .unwrap()
+        };
+        assert_eq!(response.status(), status, "{path}");
+        let html = response.text().await.unwrap();
+        assert!(!html.contains("footer-xss"), "{path}");
+        assert!(!html.contains("footer-public-line"), "{path}");
+        assert!(!html.contains(icp_record), "{path}");
+    }
 }

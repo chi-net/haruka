@@ -57,6 +57,14 @@ pub async fn init() -> DatabaseConnection {
         "TEXT NOT NULL DEFAULT ''",
     )
     .await;
+    ensure_column(
+        &db,
+        "preferences",
+        "footer_text",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    ensure_column(&db, "preferences", "icp_record", "TEXT NOT NULL DEFAULT ''").await;
     db.execute(Statement::from_string(
         DbBackend::Sqlite,
         "INSERT OR IGNORE INTO preferences (id, default_currency, owner_name, sms_api_token_hash) VALUES (1, 'CNY', '', '')".to_string(),

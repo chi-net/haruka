@@ -7,6 +7,7 @@ use axum::{
 };
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QueryOrder, Set};
 use serde::Deserialize;
+use std::sync::Arc;
 
 use crate::{
     crypto, currency,
@@ -38,6 +39,7 @@ struct SettingsTemplate {
     sms_token_custom: bool,
     recovery_configured: bool,
     passkeys: Vec<PasskeyRow>,
+    footer: Arc<crate::site_footer::FooterConfig>,
 }
 
 #[derive(Deserialize)]
@@ -91,10 +93,19 @@ pub async fn show(
         sms_token_custom,
         recovery_configured,
         passkeys,
+        footer: crate::site_footer::current(),
     }
     .render()
     .map_err(err500)?;
     Ok(Html(html))
+}
+
+pub async fn update_footer(
+    State(state): State<AppState>,
+    Form(config): Form<crate::site_footer::FooterConfig>,
+) -> HandlerResult<Redirect> {
+    crate::site_footer::save(&state, config).await?;
+    Ok(Redirect::to("/settings"))
 }
 
 pub async fn update_currency(

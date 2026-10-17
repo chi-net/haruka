@@ -4,10 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }} - Haruka</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v={{ crate::handlers::stylesheet_version() }}">
 </head>
-<body class="bg-gray-50 text-gray-900 min-h-screen">
-  <main class="max-w-xl mx-auto px-4 py-16">
+<body class="bg-gray-50 text-gray-900 min-h-screen flex flex-col print:block">
+  <main class="w-full flex-1 max-w-xl mx-auto px-4 py-16">
     <section class="bg-white rounded-lg border border-red-200 p-5">
       <div class="text-sm font-medium text-red-700">{{ title }}（HTTP {{ status }}）</div>
       <p class="text-sm text-gray-600 mt-2">啊哦！我们遇到了一些无法恢复的错误：</p>
@@ -18,5 +18,6 @@
       </div>
     </section>
   </main>
+{% include "footer.html" %}
 </body>
 </html>

@@ -11,6 +11,7 @@ mod investment_funds;
 mod market_data;
 mod password_attempts;
 mod privacy;
+mod site_footer;
 mod sms_templates;
 
 use std::{
@@ -312,6 +313,7 @@ async fn main() {
         process::exit(2);
     });
     let db = db::init().await;
+    site_footer::load(&db).await.expect("加载网站页脚配置失败");
     let passkey_origin =
         env::var("PASSKEY_ORIGIN").unwrap_or_else(|_| default_passkey_origin(&addr));
     let passkey_rp_id = env::var("PASSKEY_RP_ID").unwrap_or_else(|_| {
@@ -616,6 +618,7 @@ async fn main() {
             "/settings/currency",
             post(handlers::settings::update_currency),
         )
+        .route("/settings/footer", post(handlers::settings::update_footer))
         .route(
             "/settings/owner-name",
             post(handlers::settings::update_owner_name),

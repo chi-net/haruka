@@ -53,7 +53,7 @@ document.addEventListener('htmx:beforeCleanupElement', event => {
 });
 </script>
 </head>
-<body class="bg-gray-50 text-gray-900 min-h-screen" hx-boost="true" hx-history="false">
+<body class="bg-gray-50 text-gray-900 min-h-screen flex flex-col print:block" hx-boost="true" hx-history="false">
 {% block navigation %}
 <nav data-site-nav aria-label="主导航" class="sticky top-0 z-30 border-b border-gray-200 bg-white">
   <div class="relative mx-auto flex min-h-14 max-w-6xl items-center gap-3 px-4">
@@ -76,9 +76,10 @@ document.addEventListener('htmx:beforeCleanupElement', event => {
   </div>
 </nav>
 {% endblock %}
-<main class="max-w-6xl mx-auto px-4 py-6">
+<main class="w-full flex-1 max-w-6xl mx-auto px-4 py-6">
 {% block content %}{% endblock %}
 </main>
+{% include "footer.html" %}
 {% include "privacy_script.html" %}
 <script>
 (() => {

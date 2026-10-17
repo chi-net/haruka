@@ -10,6 +10,12 @@ pub struct Model {
     pub owner_name: String,
     /// 自定义短信 API Token 的 SHA-256 校验值；空值使用启动配置或兼容默认值。
     pub sms_api_token_hash: String,
+    /// 公开明文网站页脚，不受账务数据加密保护。
+    #[sea_orm(column_type = "Text", default_value = "")]
+    pub footer_text: String,
+    /// 公开明文 ICP 备案号，仅链接到工信部备案网站。
+    #[sea_orm(column_type = "Text", default_value = "")]
+    pub icp_record: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
