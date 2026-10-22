@@ -63,9 +63,11 @@ pub struct AccountBalanceResponse {
     ok: bool,
     account_id: i64,
     balance: String,
+    balance_cents: String,
     currency: String,
     kind: String,
     can_transfer_out: bool,
+    can_transfer_in: bool,
 }
 
 struct AccountLedgerRow {
@@ -457,18 +459,18 @@ pub(crate) async fn current_balance_on<C: ConnectionTrait>(
         .ok_or_else(|| err500("余额超出范围"))
 }
 
-pub(crate) async fn ensure_allowed_balance(
-    state: &AppState,
+pub(crate) async fn ensure_allowed_balance<C: ConnectionTrait>(
+    db: &C,
     dek: &crypto::Dek,
     account_id: i64,
     balance: i64,
 ) -> HandlerResult<()> {
     let account = account::Entity::find_by_id(account_id)
-        .one(&state.db)
+        .one(db)
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("账户不存在"))?;
-    crate::investment_funds::validate_money_account(state, &account).await?;
+    crate::investment_funds::validate_money_account_on(db, &account).await?;
     if !matches!(account.kind.as_str(), "credit_card" | "credit_service") {
         if balance < 0 {
             return Err(bad_request("该账户不允许透支"));
@@ -476,7 +478,7 @@ pub(crate) async fn ensure_allowed_balance(
         return Ok(());
     }
     let detail = account_detail::Entity::find_by_id(account_id)
-        .one(&state.db)
+        .one(db)
         .await
         .map_err(err500)?
         .ok_or_else(|| err500("信用账户缺少授信配置"))?;
@@ -499,11 +501,20 @@ pub(crate) async fn ensure_balance_delta(
     account_id: i64,
     delta: i64,
 ) -> HandlerResult<()> {
-    let projected = current_balance(state, dek, account_id)
+    ensure_balance_delta_on(&state.db, dek, account_id, delta).await
+}
+
+pub(crate) async fn ensure_balance_delta_on<C: ConnectionTrait>(
+    db: &C,
+    dek: &crypto::Dek,
+    account_id: i64,
+    delta: i64,
+) -> HandlerResult<()> {
+    let projected = current_balance_on(db, dek, account_id)
         .await?
         .checked_add(delta)
         .ok_or_else(|| bad_request("余额超出范围"))?;
-    ensure_allowed_balance(state, dek, account_id, projected).await
+    ensure_allowed_balance(db, dek, account_id, projected).await
 }
 
 pub async fn balance_summary(
@@ -511,6 +522,7 @@ pub async fn balance_summary(
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Path(id): Path<i64>,
 ) -> HandlerResult<impl IntoResponse> {
+    let _balance_guard = state.balance_writes.lock().await;
     let account = account::Entity::find_by_id(id)
         .one(&state.db)
         .await
@@ -523,7 +535,12 @@ pub async fn balance_summary(
             ok: true,
             account_id: id,
             balance: currency::format(balance, &account.currency),
-            can_transfer_out: balance > 0 && crate::investment_funds::is_money_account(&account),
+            balance_cents: balance.to_string(),
+            can_transfer_out: balance > 0
+                && crate::investment_funds::is_money_account(&account)
+                && account.kind != "credit_service",
+            can_transfer_in: crate::investment_funds::is_money_account(&account)
+                && !matches!(account.kind.as_str(), "credit_card" | "credit_service"),
             currency: account.currency,
             kind: account.kind,
         }),
@@ -770,8 +787,9 @@ pub async fn detail(
     let mut month_expense = 0i64;
     let mut total_income = 0i64;
     let mut total_expense = 0i64;
+    let refunds = super::refunds::RefundTotals::new(&dek, &account_bills);
     for item in &account_bills {
-        let amount = crypto::decrypt_cents(&dek, &item.amount);
+        let amount = refunds.amount(&dek, item);
         let total = if item.kind == "income" {
             &mut total_income
         } else {
@@ -821,7 +839,7 @@ pub async fn detail(
         .await
         .map_err(err500)?
         .into_iter()
-        .map(|plan| (plan.bill_id, plan.id))
+        .filter_map(|plan| plan.bill_id.map(|bill_id| (bill_id, plan.id)))
         .collect();
     let transfer_fee_bill_ids: HashSet<i64> = account_transfers
         .iter()
@@ -841,7 +859,11 @@ pub async fn detail(
             item.happened_at,
             AccountLedgerRow {
                 happened_at: item.happened_at.format("%Y-%m-%dT%H:%M").to_string(),
-                record_type: if incoming {
+                record_type: if item.refund_of_bill_id.is_some() {
+                    "退款".into()
+                } else if !refunds.status(&dek, &item).is_empty() {
+                    format!("支出 · {}", refunds.status(&dek, &item))
+                } else if incoming {
                     "收入".into()
                 } else if transfer_fee_bill_ids.contains(&item.id) {
                     "支出 · 转账手续费（自动）".into()
@@ -1316,6 +1338,32 @@ pub async fn update(
             return Err(bad_request("投资分组货币不可修改；请新建对应货币分组"));
         }
     }
+    if matches!(account.kind.as_str(), "credit_card" | "credit_service")
+        && !matches!(form.account_kind.as_str(), "credit_card" | "credit_service")
+    {
+        let converted_plans = installment_plan::Entity::find()
+            .select_only()
+            .column(installment_plan::Column::Id)
+            .filter(installment_plan::Column::AccountId.eq(id))
+            .filter(installment_plan::Column::BillId.is_null())
+            .into_tuple::<i64>()
+            .all(&state.db)
+            .await
+            .map_err(err500)?;
+        if !converted_plans.is_empty()
+            && installment_item::Entity::find()
+                .filter(installment_item::Column::PlanId.is_in(converted_plans))
+                .filter(installment_item::Column::PaidAt.is_null())
+                .one(&state.db)
+                .await
+                .map_err(err500)?
+                .is_some()
+        {
+            return Err(bad_request(
+                "账户仍有未还的最低还款余款分期，请先还清或撤销转换再改为普通账户",
+            ));
+        }
+    }
     let balance = current_balance(&state, &dek, id).await?;
     if account.currency != form.currency {
         let has_activity = bill::Entity::find()
@@ -1476,7 +1524,7 @@ pub async fn force_balance(
         return Err(bad_request("请使用基金批量估值页面；不允许覆盖分组总余额"));
     }
     let target = parse_balance(&form.balance)?;
-    ensure_allowed_balance(&state, &dek, id, target).await?;
+    ensure_allowed_balance(&state.db, &dek, id, target).await?;
     let previous = current_balance(&state, &dek, id).await?;
     let offset = target
         .checked_sub(transaction_balance(&state.db, &dek, id).await?)
@@ -1570,6 +1618,16 @@ pub async fn delete(
     }
     let mut balance_changes: HashMap<i64, i64> = HashMap::new();
     let mut fee_bill_ids = HashSet::new();
+    let minimum_payment_transfers: HashSet<i64> = installment_plan::Entity::find()
+        .select_only()
+        .column(installment_plan::Column::RepaymentTransferId)
+        .filter(installment_plan::Column::RepaymentTransferId.is_not_null())
+        .into_tuple::<i64>()
+        .all(&state.db)
+        .await
+        .map_err(err500)?
+        .into_iter()
+        .collect();
     for transfer in transfer::Entity::find()
         .filter(
             Condition::any()
@@ -1580,6 +1638,11 @@ pub async fn delete(
         .await
         .map_err(err500)?
     {
+        if minimum_payment_transfers.contains(&transfer.id) {
+            return Err(bad_request(
+                "账户关联最低还款余款分期，不能通过删除账户撤销最低还款流水",
+            ));
+        }
         let from_amount = crypto::decrypt_cents(&dek, &transfer.amount);
         let to_amount = super::transfer_to_cents(&dek, &transfer);
         let (other_id, delta) = if transfer.from_account_id == id {

@@ -64,6 +64,7 @@ struct Event {
     source: u8,
     id: i64,
     delta: i64,
+    refund_for: Option<i64>,
 }
 
 struct Outstanding {
@@ -100,11 +101,11 @@ pub(crate) fn calculate(
     today: NaiveDate,
 ) -> Result<Statement, String> {
     let mut statement = Statement::default();
-    let installment_bills: HashSet<i64> = ledger
+    let installment_bills: HashMap<i64, &installment_plan::Model> = ledger
         .plans
         .values()
-        .filter(|plan| plan.account_id == account.id)
-        .map(|plan| plan.bill_id)
+        .filter(|plan| plan.account_id == account.id && plan.deleted_at.is_none())
+        .filter_map(|plan| plan.bill_id.map(|bill_id| (bill_id, plan)))
         .collect();
     let principal_transfers: HashSet<i64> = ledger
         .items
@@ -113,12 +114,30 @@ pub(crate) fn calculate(
             ledger
                 .plans
                 .get(&item.plan_id)
-                .is_some_and(|plan| plan.account_id == account.id)
+                .is_some_and(|plan| plan.account_id == account.id && plan.deleted_at.is_none())
         })
         .filter_map(|item| item.principal_transfer_id)
         .collect();
     let mut eligible_installment_bills = HashSet::new();
     let mut events = Vec::new();
+    let refund_context = crate::installment_state::RefundContext::new(
+        dek,
+        ledger
+            .bills
+            .iter()
+            .filter(|bill| bill.account_id == account.id),
+    )?;
+    let mut paid_principal = HashMap::<i64, i64>::new();
+    for item in ledger.items.iter().filter(|item| {
+        item.paid_at
+            .is_some_and(|paid| time_zone.date(paid.naive_utc()) <= today)
+    }) {
+        let amount = paid_principal.entry(item.plan_id).or_default();
+        *amount = add(*amount, crypto::decrypt_cents(dek, &item.principal))?;
+    }
+    let mut original_principals = HashMap::new();
+    let mut refund_capacity = HashMap::new();
+    let mut eligible_statement_plans = HashSet::new();
 
     for bill in ledger
         .bills
@@ -129,14 +148,27 @@ pub(crate) fn calculate(
             statement.has_future_entries = true;
             continue;
         }
-        if installment_bills.contains(&bill.id) {
+        if let Some(plan) = installment_bills.get(&bill.id) {
             eligible_installment_bills.insert(bill.id);
+            let principal = crypto::decrypt_cents(dek, &bill.amount);
+            original_principals.insert(bill.id, principal);
+            refund_capacity.insert(
+                bill.id,
+                sub(
+                    principal,
+                    paid_principal.get(&plan.id).copied().unwrap_or(0),
+                )?
+                .max(0),
+            );
             continue;
         }
         events.push(Event {
             happened_at: bill.happened_at,
             source: 1,
             id: bill.id,
+            refund_for: bill
+                .refund_of_bill_id
+                .filter(|id| installment_bills.contains_key(id)),
             delta: signed(
                 crypto::decrypt_cents(dek, &bill.amount),
                 bill.kind == "income",
@@ -163,6 +195,7 @@ pub(crate) fn calculate(
             source: 2,
             id: transfer.id,
             delta,
+            refund_for: None,
         });
     }
     for debt in ledger
@@ -178,6 +211,7 @@ pub(crate) fn calculate(
             happened_at: debt.happened_at,
             source: 3,
             id: debt.id,
+            refund_for: None,
             delta: signed(
                 crypto::decrypt_cents(dek, &debt.amount),
                 matches!(debt.kind.as_str(), "borrow" | "repayment_received"),
@@ -208,6 +242,7 @@ pub(crate) fn calculate(
             source: 4,
             id: adjustment.id,
             delta,
+            refund_for: None,
         });
     }
     let initial_offset = sub(
@@ -225,8 +260,32 @@ pub(crate) fn calculate(
                 source: 0,
                 id: account.id,
                 delta: initial_offset,
+                refund_for: None,
             });
         }
+    }
+    for plan in ledger.plans.values().filter(|plan| {
+        plan.account_id == account.id && plan.bill_id.is_none() && plan.deleted_at.is_none()
+    }) {
+        let converted_at = plan.converted_at.ok_or("余额分期缺少转换时间")?;
+        if time_zone.date(converted_at) > today {
+            statement.has_future_entries = true;
+            continue;
+        }
+        let principal = crypto::decrypt_string(dek, &plan.principal)
+            .parse::<i64>()
+            .map_err(|_| "余额分期本金无效")?;
+        if principal <= 0 {
+            return Err("余额分期本金必须大于 0".into());
+        }
+        eligible_statement_plans.insert(plan.id);
+        events.push(Event {
+            happened_at: converted_at,
+            source: 5,
+            id: plan.id,
+            delta: principal,
+            refund_for: None,
+        });
     }
 
     // 同一 UTC 时间使用固定来源顺序和主键，数据库返回顺序不影响 FIFO。
@@ -237,6 +296,12 @@ pub(crate) fn calculate(
     for event in events {
         if event.delta >= 0 {
             let mut credit = event.delta;
+            if let Some(original) = event.refund_for {
+                let capacity = refund_capacity.entry(original).or_default();
+                let absorbed = credit.min(*capacity);
+                *capacity = sub(*capacity, absorbed)?;
+                credit = sub(credit, absorbed)?;
+            }
             while credit > 0 {
                 let Some(oldest) = outstanding.front_mut() else {
                     break;
@@ -275,11 +340,47 @@ pub(crate) fn calculate(
             statement.unbilled = add(statement.unbilled, debit.amount)?;
         }
     }
+    let mut active_plans = HashSet::new();
+    for plan in ledger.plans.values().filter(|plan| {
+        plan.account_id == account.id
+            && plan.deleted_at.is_none()
+            && match plan.bill_id {
+                Some(id) => eligible_installment_bills.contains(&id),
+                None => eligible_statement_plans.contains(&plan.id),
+            }
+    }) {
+        let refund = refund_context.state(dek, plan)?;
+        if refund.full_refund {
+            continue;
+        }
+        if refund.needs_review {
+            let principal = if plan.principal.is_empty() {
+                plan.bill_id
+                    .and_then(|id| original_principals.get(&id).copied())
+                    .ok_or("分期原始本金不存在")?
+            } else {
+                crypto::decrypt_string(dek, &plan.principal)
+                    .parse::<i64>()
+                    .map_err(|_| "分期本金无效")?
+            };
+            let unpaid = sub(
+                sub(
+                    principal,
+                    paid_principal.get(&plan.id).copied().unwrap_or(0),
+                )?,
+                refund.refunded,
+            )?
+            .max(0);
+            statement.installment_principal = add(statement.installment_principal, unpaid)?;
+            continue;
+        }
+        active_plans.insert(plan.id);
+    }
     for item in ledger.items.iter().filter(|item| item.paid_at.is_none()) {
         let Some(plan) = ledger.plans.get(&item.plan_id) else {
             continue;
         };
-        if plan.account_id != account.id || !eligible_installment_bills.contains(&plan.bill_id) {
+        if !active_plans.contains(&plan.id) {
             continue;
         }
         statement.installment_principal = add(
@@ -436,7 +537,7 @@ mod tests {
                 id,
                 installment_plan::Model {
                     id,
-                    bill_id,
+                    bill_id: Some(bill_id),
                     account_id: 1,
                     term_months: 3,
                     method: "flat".into(),
@@ -444,6 +545,11 @@ mod tests {
                     fee: crypto::encrypt_cents(&self.dek, 900),
                     first_due_date: date(first_due),
                     created_at: time("2026-01-01 00:00:00").and_utc(),
+                    principal: String::new(),
+                    repayment_transfer_id: None,
+                    converted_at: None,
+                    refund_reviewed_amount: String::new(),
+                    deleted_at: None,
                 },
             );
         }
@@ -702,6 +808,101 @@ mod tests {
         f.bills.reverse();
         assert_eq!(f.calculate("2026-10-10").unwrap(), expected);
         assert_eq!(expected.due, vec![due("2026-10-28", 25000, 0)]);
+    }
+
+    #[test]
+    fn installment_refund_cancels_schedule_without_repaying_unrelated_debt() {
+        let mut f = Fixture::new(10, 28);
+        f.bill(1, "2026-10-01 00:00:00", "expense", 30000);
+        f.plan(1, 1, "2026-10-28");
+        f.item(1, 1, "2026-10-28", 10000, 0, 100);
+        f.item(2, 1, "2026-11-28", 10000, 0, 100);
+        f.item(3, 1, "2026-12-28", 10000, 0, 100);
+        f.bill(2, "2026-10-02 00:00:00", "expense", 10000);
+        f.bill(3, "2026-10-03 00:00:00", "income", 5000);
+        f.bills.last_mut().unwrap().refund_of_bill_id = Some(1);
+        let paused = f.calculate("2026-10-10").unwrap();
+        assert_eq!(paused.installment_principal, 25000);
+        assert_eq!(paused.next_installment, None);
+        assert_eq!(paused.due, vec![due("2026-10-28", 10000, 0)]);
+
+        f.bills[2].amount = crypto::encrypt_cents(&f.dek, 30000);
+        let refunded = f.calculate("2026-10-10").unwrap();
+        assert_eq!(refunded.installment_principal, 0);
+        assert_eq!(refunded.next_installment, None);
+        assert_eq!(refunded.due, vec![due("2026-10-28", 10000, 0)]);
+
+        // A real principal payment plus full cash refund leaves a genuine credit.
+        f.transfer(1, "2026-10-02 12:00:00", true, 10000, 10000);
+        f.items[0].paid_at = Some(time("2026-10-02 12:00:00").and_utc());
+        f.items[0].principal_transfer_id = Some(1);
+        let with_credit = f.calculate("2026-10-10").unwrap();
+        assert!(with_credit.due.is_empty());
+        assert_eq!(with_credit.installment_principal, 0);
+    }
+
+    #[test]
+    fn deleted_returned_plan_rejoins_ordinary_debt_with_real_payments_and_refunds() {
+        let mut f = Fixture::new(10, 28);
+        f.bill(1, "2026-10-01 00:00:00", "expense", 30000);
+        f.plan(1, 1, "2026-10-28");
+        f.item(1, 1, "2026-10-28", 10000, 0, 100);
+        f.item(2, 1, "2026-11-28", 10000, 0, 100);
+        f.item(3, 1, "2026-12-28", 10000, 0, 100);
+        f.transfer(1, "2026-10-02 12:00:00", true, 10000, 10000);
+        f.items[0].paid_at = Some(time("2026-10-02 12:00:00").and_utc());
+        f.items[0].principal_transfer_id = Some(1);
+        f.bill(2, "2026-10-03 00:00:00", "expense", 7000);
+        f.bill(3, "2026-10-04 00:00:00", "income", 5000);
+        f.bills.last_mut().unwrap().refund_of_bill_id = Some(1);
+        f.plans.get_mut(&1).unwrap().deleted_at = Some(time("2026-10-05 12:00:00").and_utc());
+
+        let deleted = f.calculate("2026-10-10").unwrap();
+        assert_eq!(deleted.due, vec![due("2026-10-28", 22000, 0)]);
+        assert_eq!(deleted.installment_principal, 0);
+        assert_eq!(deleted.next_installment, None);
+
+        // Full refund after a real payment leaves genuine prepaid funds, not debt.
+        f.bills[2].amount = crypto::encrypt_cents(&f.dek, 30000);
+        let full = f.calculate("2026-10-10").unwrap();
+        assert!(full.due.is_empty());
+        assert_eq!(full.unbilled, 0);
+        f.bill(4, "2026-10-06 00:00:00", "expense", 4000);
+        assert_eq!(
+            f.calculate("2026-10-10").unwrap().due,
+            vec![due("2026-10-28", 1000, 0)]
+        );
+    }
+
+    #[test]
+    fn minimum_payment_conversion_reclassifies_debt_without_counting_payment_twice() {
+        let mut f = Fixture::new(10, 28);
+        f.bill(1, "2026-10-01 00:00:00", "expense", 100000);
+        f.transfer(1, "2026-10-02 12:00:00", true, 10000, 10000);
+        f.plan(1, 1, "2026-10-28");
+        let plan = f.plans.get_mut(&1).unwrap();
+        plan.bill_id = None;
+        plan.principal = crypto::encrypt_cents(&f.dek, 90000);
+        plan.converted_at = Some(time("2026-10-02 12:00:00"));
+        plan.repayment_transfer_id = Some(1);
+        f.item(1, 1, "2026-10-28", 30000, 0, 100);
+        f.item(2, 1, "2026-11-28", 30000, 0, 100);
+        f.item(3, 1, "2026-12-28", 30000, 0, 100);
+        let converted = f.calculate("2026-10-10").unwrap();
+        assert_eq!(converted.unbilled, 0);
+        assert_eq!(converted.due, vec![due("2026-10-28", 0, 30100)]);
+        assert_eq!(converted.installment_principal, 90000);
+        f.transfer(2, "2026-10-04 12:00:00", true, 30000, 30000);
+        f.items[0].paid_at = Some(time("2026-10-04 12:00:00").and_utc());
+        f.items[0].principal_transfer_id = Some(2);
+        let paid = f.calculate("2026-10-10").unwrap();
+        assert_eq!(paid.installment_principal, 60000);
+        assert!(paid.due.is_empty());
+        f.bill(2, "2026-10-05 00:00:00", "expense", 5000);
+        assert_eq!(
+            f.calculate("2026-10-10").unwrap().due,
+            vec![due("2026-10-28", 5000, 0)]
+        );
     }
 
     #[test]

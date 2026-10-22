@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}删除分期 - Haruka{% endblock %}
+{% block content %}
+<section class="max-w-2xl mx-auto bg-white border rounded-lg p-5">
+<h1 class="text-xl font-bold">删除分期安排</h1>
+<p class="mt-3">{{ title }} · {{ account_name }} · 原币 {{ currency }}</p>
+{% if deleted %}
+<p class="my-4">此分期已删除，仅保留历史，不会再次退款。</p>
+{% else %}
+<p class="my-4">删除只取消分期安排，不撤销已还本金转账或费用，不更改已还记录。未退款的消费净额和已还本金将按普通流水计算欠款；删除安排不代表银行取消真实债务。</p>
+{% if has_refund %}
+<p class="my-4">已记录实际退款 {{ refunded_amount }}。删除不会多退钱，账户余额不变；消费未退回金额为 {{ remaining_amount }}，欠款会结合既有已还本金按普通流水重新计算。</p>
+<form method="post" action="/installments/{{ plan_id }}/delete">
+<input type="hidden" name="refunded_cents" value="{{ refunded_cents }}">
+<button class="bg-red-700 text-white px-4 py-2 rounded">确认删除分期安排（不追加退款）</button>
+</form>
+{% else %}
+<h2 class="font-bold text-red-700">尚无退款：是否按实际退货处理？</h2>
+<p class="my-4">只有已实际收到全额退款，才可补记退款并删除。将向原账户补记 {{ remaining_amount }} 的实际退款流水（不计收入统计），原账户余额增加同额，信用账户欠款相应减少；不撤销任何已还流水。未实际收到退款，请取消，不会写入任何变更。</p>
+{% if refund_authorized %}
+<form method="post" action="/installments/{{ plan_id }}/delete">
+<input type="hidden" name="refunded_cents" value="{{ refunded_cents }}">
+<input type="hidden" name="treat_as_return" value="true">
+<button class="bg-red-700 text-white px-4 py-2 rounded">确认已实际收到全额退款，补记退款并删除分期</button>
+</form>
+{% else %}
+<p class="text-amber-800 my-4">这是隐私消费，普通会话不能补记隐私退款。请先在隐私模式中完成实际退款，再返回此页删除分期安排。</p>
+<a href="/privacy/bills" class="text-blue-600 underline">进入隐私账本处理退款</a>
+{% endif %}
+{% endif %}
+{% endif %}
+<a href="/installments/{{ plan_id }}" class="block mt-4 text-blue-600 underline">取消，返回详情（不作变更）</a>
+</section>
+{% endblock %}

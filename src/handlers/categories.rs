@@ -127,8 +127,6 @@ pub async fn show(
         .any(|category| category.kind == "expense" && !category.count_limit.is_empty())
     {
         bill::Entity::find()
-            .filter(bill::Column::Kind.eq("expense"))
-            .filter(bill::Column::CategoryId.gt(0))
             .filter(bill::Column::IsPrivate.eq(false))
             .all(&state.db)
             .await

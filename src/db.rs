@@ -1,4 +1,6 @@
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema, Statement};
+use sea_orm::{
+    ConnectionTrait, Database, DatabaseConnection, DbBackend, Schema, Statement, TransactionTrait,
+};
 
 use crate::entity::{
     account, account_detail, balance_adjustment, bill, bill_share, budget, category, debt_person,
@@ -188,6 +190,36 @@ pub async fn init() -> DatabaseConnection {
     ensure_column(&db, "installment_items", "repayment_account_id", "INTEGER").await;
     ensure_column(&db, "installment_items", "principal_transfer_id", "INTEGER").await;
     ensure_column(&db, "installment_items", "charge_bill_id", "INTEGER").await;
+    ensure_column(
+        &db,
+        "installment_plans",
+        "principal",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "installment_plans",
+        "repayment_transfer_id",
+        "INTEGER DEFAULT NULL",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "installment_plans",
+        "converted_at",
+        "TEXT DEFAULT NULL",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "installment_plans",
+        "refund_reviewed_amount",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    ensure_column(&db, "installment_plans", "deleted_at", "TEXT DEFAULT NULL").await;
+    upgrade_nullable_installment_bill(&db).await;
     let mut create_transfers = schema.create_table_from_entity(transfer::Entity);
     db.execute(builder.build(create_transfers.if_not_exists()))
         .await
@@ -463,6 +495,62 @@ pub async fn init() -> DatabaseConnection {
     .await;
 
     db
+}
+
+/// SQLite cannot drop NOT NULL in place. Keep both related tables on the same
+/// transaction connection, removing children before their parent to avoid cascades.
+async fn upgrade_nullable_installment_bill(db: &DatabaseConnection) {
+    let rows = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "PRAGMA table_info(installment_plans)".to_string(),
+        ))
+        .await
+        .expect("读取分期表结构失败");
+    if !rows.iter().any(|row| {
+        row.try_get::<String>("", "name")
+            .is_ok_and(|name| name == "bill_id")
+            && row
+                .try_get::<i64>("", "notnull")
+                .is_ok_and(|value| value != 0)
+    }) {
+        return;
+    }
+    let tx = db.begin().await.expect("开始升级分期表失败");
+    let suffix = format!("{:032x}", rand::random::<u128>());
+    let plans_backup = format!("installment_plans_backup_{suffix}");
+    let items_backup = format!("installment_items_backup_{suffix}");
+    const PLANS: &str = "id, bill_id, account_id, principal, repayment_transfer_id, converted_at, refund_reviewed_amount, term_months, method, annual_rate_bps, fee, first_due_date, deleted_at, created_at";
+    const ITEMS: &str = "id, plan_id, sequence, due_date, principal, interest, fee, total, paid_at, repayment_account_id, principal_transfer_id, charge_bill_id, created_at";
+    for sql in [
+        format!("CREATE TEMP TABLE {plans_backup} AS SELECT {PLANS} FROM installment_plans"),
+        format!("CREATE TEMP TABLE {items_backup} AS SELECT {ITEMS} FROM installment_items"),
+        "DROP TABLE installment_items".into(),
+        "DROP TABLE installment_plans".into(),
+    ] {
+        tx.execute(Statement::from_string(DbBackend::Sqlite, sql))
+            .await
+            .expect("备份分期表失败");
+    }
+    let schema = Schema::new(DbBackend::Sqlite);
+    let builder = tx.get_database_backend();
+    tx.execute(builder.build(&schema.create_table_from_entity(installment_plan::Entity)))
+        .await
+        .expect("重建分期计划表失败");
+    tx.execute(builder.build(&schema.create_table_from_entity(installment_item::Entity)))
+        .await
+        .expect("重建分期明细表失败");
+    for sql in [
+        format!("INSERT INTO installment_plans ({PLANS}) SELECT {PLANS} FROM {plans_backup}"),
+        format!("INSERT INTO installment_items ({ITEMS}) SELECT {ITEMS} FROM {items_backup}"),
+        format!("DROP TABLE {items_backup}"),
+        format!("DROP TABLE {plans_backup}"),
+    ] {
+        tx.execute(Statement::from_string(DbBackend::Sqlite, sql))
+            .await
+            .expect("恢复分期数据失败");
+    }
+    tx.commit().await.expect("提交分期表升级失败");
 }
 
 async fn seed_market_closed_days(db: &DatabaseConnection) {

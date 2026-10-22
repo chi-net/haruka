@@ -144,8 +144,10 @@ pub(crate) fn statuses<'a>(
     if result.is_empty() {
         return Ok(result);
     }
+    let bills: Vec<_> = bills.into_iter().collect();
+    let refunds = crate::handlers::refunds::RefundTotals::new(dek, bills.iter().copied());
     for bill in bills {
-        if bill.kind != "expense" {
+        if bill.kind != "expense" || refunds.status(dek, bill) == "已退款" {
             continue;
         }
         let Some(id) = bill.category_id.filter(|id| *id > 0) else {

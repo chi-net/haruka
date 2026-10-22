@@ -12,7 +12,10 @@ use sea_orm::{
     TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::{BTreeMap, HashMap},
+    str::FromStr,
+};
 
 use crate::{
     crypto, currency,
@@ -45,6 +48,8 @@ struct SubscriptionRow {
     id: i64,
     name: String,
     amount: String,
+    annual_amount: String,
+    annual_cents: i64,
     category: String,
     period_label: String,
     expires_at: String,
@@ -66,6 +71,7 @@ struct SubscriptionsTemplate {
     advanced_search: bool,
     search_action: String,
     subscriptions: Vec<SubscriptionRow>,
+    annual_estimates: Vec<String>,
     accounts: Vec<AccountOption>,
     total_count: usize,
     due_soon_count: usize,
@@ -245,6 +251,27 @@ fn period_label(period: &str) -> &'static str {
     }
 }
 
+fn annual_estimate_cents(amount: i64, period: &str) -> HandlerResult<i64> {
+    if amount < 0 {
+        return Err(bad_request("订阅金额不能为负数"));
+    }
+    let (multiplier, divisor) = match period {
+        "day" => (365, 1),
+        "week" => (365, 7),
+        "month" => (12, 1),
+        "quarter" => (4, 1),
+        "year" => (1, 1),
+        _ => return Err(bad_request("订阅周期无效，无法估算全年费用")),
+    };
+    let annual = i128::from(amount)
+        .checked_mul(multiplier)
+        .and_then(|value| value.checked_add(divisor / 2))
+        .map(|value| value / divisor)
+        .and_then(|value| i64::try_from(value).ok())
+        .ok_or_else(|| bad_request("订阅全年费用估算超出金额范围"))?;
+    Ok(annual)
+}
+
 fn renewed_expiry(
     expires_at: NaiveDateTime,
     period: &str,
@@ -412,13 +439,14 @@ async fn render_list(
                 "有效"
             };
             let category = crypto::decrypt_string(dek, &subscription.category);
-            SubscriptionRow {
+            let amount = crypto::decrypt_cents(dek, &subscription.amount);
+            let annual_cents = annual_estimate_cents(amount, &subscription.period)?;
+            Ok(SubscriptionRow {
                 id: subscription.id,
                 name: crypto::decrypt_string(dek, &subscription.name),
-                amount: currency::format(
-                    crypto::decrypt_cents(dek, &subscription.amount),
-                    &subscription.currency,
-                ),
+                amount: currency::format(amount, &subscription.currency),
+                annual_amount: currency::format(annual_cents, &subscription.currency),
+                annual_cents,
                 category,
                 period_label: period_label(&subscription.period).into(),
                 expires_at: subscription.expires_at.format(TIME_FMT).to_string(),
@@ -440,8 +468,10 @@ async fn render_list(
                         )
                     })
                     .unwrap_or_default(),
-            }
+            })
         })
+        .collect::<HandlerResult<Vec<_>>>()?
+        .into_iter()
         .filter(|row| {
             let mut conditions = Vec::new();
             if !keyword.is_empty() {
@@ -495,6 +525,20 @@ async fn render_list(
     let total_records = subscriptions.len();
     let expired_count = subscriptions.iter().filter(|row| row.expired).count();
     let due_soon_count = subscriptions.iter().filter(|row| row.due_soon).count();
+    let mut annual_totals = BTreeMap::<String, i64>::new();
+    for row in &subscriptions {
+        let total = annual_totals.entry(row.currency.clone()).or_default();
+        *total = total.checked_add(row.annual_cents).ok_or_else(|| {
+            bad_request(&format!(
+                "{} 订阅全年费用估算汇总超出金额范围",
+                row.currency
+            ))
+        })?;
+    }
+    let annual_estimates = annual_totals
+        .into_iter()
+        .map(|(currency, cents)| currency::format(cents, &currency))
+        .collect();
     let pagination = super::pagination(total_records, query.page, query.per_page);
     let subscriptions = subscriptions
         .into_iter()
@@ -517,6 +561,7 @@ async fn render_list(
         .into(),
         total_count: total_records,
         subscriptions,
+        annual_estimates,
         accounts,
         due_soon_count,
         expired_count,
@@ -812,4 +857,48 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> Handl
         .await
         .map_err(err500)?;
     Ok(Redirect::to("/subscriptions"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::annual_estimate_cents;
+
+    #[test]
+    fn annual_estimates_follow_each_period() {
+        for (period, expected) in [
+            ("day", 3_650_000),
+            ("week", 521_429),
+            ("month", 120_000),
+            ("quarter", 40_000),
+            ("year", 10_000),
+        ] {
+            assert_eq!(annual_estimate_cents(10_000, period).unwrap(), expected);
+        }
+        assert_eq!(annual_estimate_cents(19_800, "year").unwrap(), 19_800);
+        assert_eq!(annual_estimate_cents(0, "day").unwrap(), 0);
+    }
+
+    #[test]
+    fn weekly_estimates_round_to_the_nearest_cent() {
+        assert_eq!(annual_estimate_cents(1, "week").unwrap(), 52);
+        assert_eq!(annual_estimate_cents(3, "week").unwrap(), 156);
+        assert_eq!(annual_estimate_cents(4, "week").unwrap(), 209);
+        assert_eq!(annual_estimate_cents(7, "week").unwrap(), 365);
+    }
+
+    #[test]
+    fn annual_estimates_reject_invalid_or_overflowing_values() {
+        assert!(annual_estimate_cents(-1, "month").is_err());
+        assert!(annual_estimate_cents(100, "unknown").is_err());
+        for period in ["day", "week", "month", "quarter"] {
+            assert!(annual_estimate_cents(i64::MAX, period).is_err());
+        }
+        assert_eq!(annual_estimate_cents(i64::MAX, "year").unwrap(), i64::MAX);
+        let monthly_limit = i64::MAX / 12;
+        assert_eq!(
+            annual_estimate_cents(monthly_limit, "month").unwrap(),
+            monthly_limit * 12
+        );
+        assert!(annual_estimate_cents(monthly_limit + 1, "month").is_err());
+    }
 }

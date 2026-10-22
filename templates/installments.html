@@ -5,12 +5,13 @@
   <div class="flex items-start justify-between gap-3"><div><h1 class="text-xl font-bold">{{ page_heading }}</h1>
   </div>{% if advanced_search %}<a href="/installments" class="text-sm text-blue-600 hover:underline">返回分期</a>{% endif %}</div>
 </div>
+<aside class="bg-amber-50 border border-amber-300 rounded p-4 mb-4">已有退款、尚未删除的分期共 {{ returned_count }} 个（包含部分退款、已核对和已还清的历史计划，不受当前筛选或分页影响）。<a href="/installments/search?status=returned" class="text-blue-600 underline">查看待清理退款分期</a> · <a href="/installments/search?status=deleted" class="text-blue-600 underline">查看已删除历史</a></aside>
 
 <form method="get" action="{{ search_action }}" class="bg-white rounded-lg border border-gray-200 p-4 mb-4">
   <div class="flex flex-wrap items-end gap-3">
     <div class="flex-1 min-w-48"><label class="block text-xs text-gray-500 mb-1">关键词</label><input name="keyword" value="{{ keyword }}" placeholder="账单、账户、方式或期限" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
     {% if advanced_search %}
-    <div><label class="block text-xs text-gray-500 mb-1">状态</label><select name="status" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option><option value="open" {% if status == "open" %}selected{% endif %}>还款中</option><option value="due_soon" {% if status == "due_soon" %}selected{% endif %}>7 天内还款</option><option value="overdue" {% if status == "overdue" %}selected{% endif %}>有逾期</option><option value="completed" {% if status == "completed" %}selected{% endif %}>已还清</option></select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">状态</label><select name="status" class="border rounded px-2 py-1.5 text-sm"><option value="">默认（不含全额退款与已删除）</option><option value="open" {% if status == "open" %}selected{% endif %}>还款中</option><option value="due_soon" {% if status == "due_soon" %}selected{% endif %}>7 天内还款</option><option value="overdue" {% if status == "overdue" %}selected{% endif %}>有逾期</option><option value="completed" {% if status == "completed" %}selected{% endif %}>已还清</option><option value="needs_review" {% if status == "needs_review" %}selected{% endif %}>待核对</option><option value="refunded" {% if status == "refunded" %}selected{% endif %}>已退款终止</option><option value="returned" {% if status == "returned" %}selected{% endif %}>已有退款未删除</option><option value="deleted" {% if status == "deleted" %}selected{% endif %}>已删除历史</option></select></div>
     <div><label class="block text-xs text-gray-500 mb-1">方式</label><select name="method" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option><option value="equal_payment" {% if method == "equal_payment" %}selected{% endif %}>等额本息</option><option value="equal_principal" {% if method == "equal_principal" %}selected{% endif %}>等额本金</option><option value="flat" {% if method == "flat" %}selected{% endif %}>等本等息</option></select></div>
     <div><label class="block text-xs text-gray-500 mb-1">下期开始</label><input type="date" name="start_date" value="{{ start_date }}" class="border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
     <div><label class="block text-xs text-gray-500 mb-1">下期结束</label><input type="date" name="end_date" value="{{ end_date }}" class="border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
@@ -22,14 +23,37 @@
   </div>
 </form>
 
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-4" aria-labelledby="annual-heading">
+  <h2 id="annual-heading" class="font-medium">{{ current_year }} 年还款安排</h2>
+  <p class="text-xs text-gray-500 mt-1">按当前筛选全部 {{ filtered_count }} 个计划汇总，不受分页影响；按还款日所属自然年统计全年月供，包含本金、利息和手续费，逾期未还仍保留，提前还款不改变归属年份。各原币分别展示，不跨币相加。</p>
+  <p class="text-xs text-gray-500 mt-1">仅展示年度还款安排，并非新增统计支出，不改变余额、资金流水或分期计划。</p>
+  <p class="text-xs text-gray-500 mt-1">已删除或全额退款终止的未还期次不计入；待核对计划仅计入已还历史，暂不估算未还金额，不代表没有欠款。</p>
+  {% if annual_summary.is_empty() %}
+  <p class="text-sm text-gray-500 mt-3">当前筛选没有分期计划。</p>
+  {% else %}
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+    {% for annual in annual_summary %}
+    <div class="border border-gray-200 rounded p-3 min-w-0">
+      <h3 class="text-sm font-medium">{{ annual.currency }}</h3>
+      <dl class="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2 text-sm">
+        <div class="min-w-0"><dt class="text-xs text-gray-500">全年应还</dt><dd class="font-mono break-words mt-1">{{ annual.total }}</dd></div>
+        <div class="min-w-0"><dt class="text-xs text-gray-500">全年未还</dt><dd class="font-mono break-words mt-1">{{ annual.unpaid }}</dd></div>
+      </dl>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
 {% if plans.is_empty() %}
 <div class="bg-white rounded-lg border border-gray-200 p-6 text-sm text-gray-500">{% if has_filters %}没有符合条件的分期计划。{% else %}还没有分期计划。{% endif %}</div>
 {% else %}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
   {% for plan in plans %}
-  <a href="/installments/{{ plan.id }}" class="block bg-white rounded-lg border border-gray-200 p-4 hover:border-blue-300 hover:shadow-sm">
+  <article class="block bg-white rounded-lg border border-gray-200 p-4 hover:border-blue-300 hover:shadow-sm">
     <div class="flex items-start justify-between gap-3">
-      <div class="min-w-0"><h2 class="font-medium truncate">{{ plan.title }}</h2><p class="text-xs text-gray-500 mt-1 truncate">{{ plan.account_name }}</p></div>
+      <div class="min-w-0"><h2 class="font-medium truncate"><a href="/installments/{{ plan.id }}" class="text-blue-600 hover:underline">{{ plan.title }}</a></h2><p class="text-xs text-gray-500 mt-1 truncate">{{ plan.account_name }}</p></div>
+      {% if plan.deleted %}<span>已删除 · 历史</span>{% endif %}{% if plan.refunded %}<span>已退款终止</span>{% endif %}{% if plan.needs_review %}<span class="text-amber-700">待核对 · 已暂停</span>{% endif %}
       {% if plan.overdue_count > 0 %}<span class="shrink-0 text-xs rounded-full px-2 py-0.5 bg-red-100 text-red-700">逾期 {{ plan.overdue_count }} 期</span>{% else %}<span class="shrink-0 text-xs rounded-full px-2 py-0.5 bg-blue-50 text-blue-700">已还 {{ plan.progress }}</span>{% endif %}
     </div>
     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-4 text-sm">
@@ -38,9 +62,12 @@
       <div><div class="text-xs text-gray-400">年利率</div><div class="font-mono mt-0.5">{{ plan.annual_rate }}</div></div>
       <div><div class="text-xs text-gray-400">总还款</div><div class="font-mono mt-0.5">{{ plan.total_repayment }}</div></div>
       <div><div class="text-xs text-gray-400">剩余计划</div><div class="font-mono mt-0.5">{{ plan.remaining }}</div></div>
+      <div class="min-w-0"><div class="text-xs text-gray-400">{{ current_year }} 年应还</div><div class="font-mono break-words mt-0.5">{{ plan.annual_repayment }}</div></div>
+      <div class="min-w-0"><div class="text-xs text-gray-400">{{ current_year }} 年未还</div><div class="font-mono break-words mt-0.5">{{ plan.annual_unpaid }}</div></div>
       <div><div class="text-xs text-gray-400">下一期</div><div class="mt-0.5">{{ plan.next_due }}</div></div>
     </div>
-  </a>
+    <div class="flex gap-4 mt-3 text-sm"><a href="/installments/{{ plan.id }}" class="text-blue-600 hover:underline">查看详情</a>{% if plan.can_delete %}<a href="/installments/{{ plan.id }}/delete" class="text-red-700 hover:underline">删除分期安排</a>{% endif %}</div>
+  </article>
   {% endfor %}
 </div>
 {% include "pagination.html" %}

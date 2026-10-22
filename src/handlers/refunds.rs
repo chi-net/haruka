@@ -23,6 +23,51 @@ type HandlerResult<T> = Result<T, (StatusCode, String)>;
 const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
 const REFUND_CATEGORY: &str = "退款收入";
 
+/// Refunds remain real cash flows, but statistics attribute them to the original expense.
+pub(crate) struct RefundTotals(HashMap<i64, i64>);
+
+impl RefundTotals {
+    pub(crate) fn new<'a>(
+        dek: &crypto::Dek,
+        bills: impl IntoIterator<Item = &'a bill::Model>,
+    ) -> Self {
+        let mut totals = HashMap::new();
+        for item in bills {
+            if let Some(original) = item.refund_of_bill_id {
+                let total = totals.entry(original).or_insert(0_i64);
+                *total = total.saturating_add(crypto::decrypt_cents(dek, &item.amount));
+            }
+        }
+        Self(totals)
+    }
+
+    pub(crate) fn amount(&self, dek: &crypto::Dek, item: &bill::Model) -> i64 {
+        if item.refund_of_bill_id.is_some() || !matches!(item.kind.as_str(), "income" | "expense") {
+            return 0;
+        }
+        let amount = crypto::decrypt_cents(dek, &item.amount);
+        if item.kind == "expense" {
+            amount
+                .saturating_sub(self.0.get(&item.id).copied().unwrap_or(0))
+                .max(0)
+        } else {
+            amount
+        }
+    }
+
+    pub(crate) fn status(&self, dek: &crypto::Dek, item: &bill::Model) -> &'static str {
+        if self.0.contains_key(&item.id) {
+            if self.amount(dek, item) == 0 {
+                "已退款"
+            } else {
+                "部分退款"
+            }
+        } else {
+            ""
+        }
+    }
+}
+
 fn err500(error: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
 }
@@ -119,7 +164,7 @@ fn ensure_refundable(original: &bill::Model) -> HandlerResult<()> {
     Ok(())
 }
 
-async fn refund_totals<C: ConnectionTrait>(
+pub(crate) async fn refund_totals<C: ConnectionTrait>(
     db: &C,
     dek: &crypto::Dek,
     original: &bill::Model,
@@ -199,6 +244,43 @@ async fn refund_category<C: ConnectionTrait>(db: &C, dek: &crypto::Dek) -> Handl
     .id)
 }
 
+/// Record a real refund inside the caller's financial transaction.
+pub(crate) async fn record_refund_on(
+    tx: &sea_orm::DatabaseTransaction,
+    dek: &crypto::Dek,
+    original: &bill::Model,
+    unlocked: bool,
+    amount: i64,
+    happened_at: NaiveDateTime,
+    note: &str,
+) -> HandlerResult<bill::Model> {
+    super::bills::require_bill_access(original, unlocked)?;
+    ensure_refundable(original)?;
+    let (_, _, remaining) = refund_totals(tx, dek, original).await?;
+    if amount <= 0 || amount > remaining {
+        return Err(bad_request("退款金额必须大于 0 且不能超过剩余可退金额"));
+    }
+    super::accounts::ensure_balance_delta_on(tx, dek, original.account_id, amount).await?;
+    let category_id = refund_category(tx, dek).await?;
+    bill::ActiveModel {
+        account_id: Set(original.account_id),
+        kind: Set("income".into()),
+        amount: Set(crypto::encrypt_cents(dek, amount)),
+        category: Set(crypto::encrypt(dek, REFUND_CATEGORY.as_bytes())),
+        category_id: Set(Some(category_id)),
+        is_food: Set(false),
+        is_private: Set(original.is_private),
+        refund_of_bill_id: Set(Some(original.id)),
+        note: Set(crypto::encrypt(dek, note.trim().as_bytes())),
+        happened_at: Set(happened_at),
+        created_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    }
+    .insert(tx)
+    .await
+    .map_err(err500)
+}
+
 pub async fn new_form(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
@@ -241,6 +323,7 @@ pub async fn new_form(
         is_private: original.is_private,
         has_installment: installment_plan::Entity::find()
             .filter(installment_plan::Column::BillId.eq(id))
+            .filter(installment_plan::Column::DeletedAt.is_null())
             .one(&state.db)
             .await
             .map_err(err500)?
@@ -262,14 +345,15 @@ pub async fn create(
     Form(form): Form<RefundFormData>,
 ) -> HandlerResult<Response> {
     let _balance_guard = state.balance_writes.lock().await;
+    let transaction = state.db.begin().await.map_err(err500)?;
     let original = bill::Entity::find_by_id(id)
-        .one(&state.db)
+        .one(&transaction)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
     super::bills::require_bill_access(&original, unlocked)?;
     ensure_refundable(&original)?;
-    let (_, _, remaining) = refund_totals(&state.db, &dek, &original).await?;
+    let (_, _, remaining) = refund_totals(&transaction, &dek, &original).await?;
     if remaining == 0 {
         return Err(bad_request("该账单已全额退款"));
     }
@@ -283,26 +367,16 @@ pub async fn create(
     }
     let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确"))?;
-    super::accounts::ensure_balance_delta(&state, &dek, original.account_id, amount).await?;
-    let transaction = state.db.begin().await.map_err(err500)?;
-    let category_id = refund_category(&transaction, &dek).await?;
-    bill::ActiveModel {
-        account_id: Set(original.account_id),
-        kind: Set("income".into()),
-        amount: Set(crypto::encrypt_cents(&dek, amount)),
-        category: Set(crypto::encrypt(&dek, REFUND_CATEGORY.as_bytes())),
-        category_id: Set(Some(category_id)),
-        is_food: Set(false),
-        is_private: Set(original.is_private),
-        refund_of_bill_id: Set(Some(id)),
-        note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
-        happened_at: Set(happened_at),
-        created_at: Set(chrono::Utc::now()),
-        ..Default::default()
-    }
-    .insert(&transaction)
-    .await
-    .map_err(err500)?;
+    record_refund_on(
+        &transaction,
+        &dek,
+        &original,
+        unlocked,
+        amount,
+        happened_at,
+        &form.note,
+    )
+    .await?;
     transaction.commit().await.map_err(err500)?;
     let redirect = ledger_redirect(form.redirect_to.as_deref(), original.is_private);
     if headers
@@ -312,7 +386,7 @@ pub async fn create(
     {
         Ok(Json(RefundResponse {
             ok: true,
-            message: "退款已记为收入，原支出保留不变".into(),
+            message: "退款已记录并冲减原支出，原资金记录保留".into(),
             redirect: redirect.into(),
         })
         .into_response())

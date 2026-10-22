@@ -161,7 +161,9 @@ pub(crate) async fn current_statuses(
     let mut daily_used = 0i64;
     let mut weekly_used = 0i64;
     let mut monthly_used = 0i64;
-    for item in bill::Entity::find().all(&state.db).await.map_err(err500)? {
+    let bills = bill::Entity::find().all(&state.db).await.map_err(err500)?;
+    let refunds = super::refunds::RefundTotals::new(dek, &bills);
+    for item in bills {
         if item.kind != "expense" {
             continue;
         }
@@ -169,7 +171,7 @@ pub(crate) async fn current_statuses(
         if date > today || date < month_start.min(week_start).min(today) {
             continue;
         }
-        let native_amount = crypto::decrypt_cents(dek, &item.amount);
+        let native_amount = refunds.amount(dek, &item);
         let bill_currency = account_currencies
             .get(&item.account_id)
             .map(String::as_str)

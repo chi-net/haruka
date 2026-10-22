@@ -43,7 +43,7 @@
       <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
         <h2 class="font-medium">2. 月收入、投资预算与生活费参考</h2>
         <div class="finance-grid">
-          <div><label for="finance-income-months" class="finance-label">完整月份回看数</label><input id="finance-income-months" type="number" min="1" max="12" step="1" required class="finance-input"><p class="finance-help">保存后重新计算。只统计普通收入；当前未完整月份不参与，窗口内零收入 / 缺失月份按零纳入。</p></div>
+          <div><label for="finance-income-months" class="finance-label">完整月份回看数</label><input id="finance-income-months" type="number" min="1" max="12" step="1" required class="finance-input"><p class="finance-help">保存后重新计算。只统计普通收入，不含退款及内部转账；当前未完整月份不参与，窗口内零收入 / 缺失月份按零纳入。</p></div>
           <div><label for="finance-income-average" class="finance-label">服务器推算月均收入</label><input id="finance-income-average" readonly class="finance-input"><p id="finance-income-explanation" class="finance-help"></p></div>
           <div><label for="finance-manual-income" class="finance-label">手动月收入 / 生活费基数</label><input id="finance-manual-income" type="text" inputmode="decimal" autocomplete="off" placeholder="留空使用月均收入，例如 10000.00" class="finance-input"><p class="finance-help">金额最多两位小数。没有收入记录也可手动填写；填写后优先使用此值。收入不等于可支配结余，请按实际生活开支调整基数及投资比例。</p></div>
           <div><label for="finance-investment-percent" class="finance-label">投资比例（占月收入 / 手动基数的 %）</label><input id="finance-investment-percent" type="text" inputmode="decimal" required class="finance-input" data-percent><p class="finance-help">0.00–100.00%。剩余金额仅作生活费参考，不会自动分配或转账。</p></div>

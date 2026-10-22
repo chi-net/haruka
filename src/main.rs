@@ -7,6 +7,7 @@ mod db;
 mod entity;
 mod financial_planning;
 mod handlers;
+mod installment_state;
 mod investment_funds;
 mod market_data;
 mod password_attempts;
@@ -554,6 +555,21 @@ async fn main() {
             get(handlers::installments::advanced_search),
         )
         .route("/installments/{id}", get(handlers::installments::detail))
+        .route(
+            "/installments/{id}/delete",
+            get(handlers::installments::delete_form).post(handlers::installments::delete),
+        )
+        .route(
+            "/installments/{id}/review",
+            post(handlers::installments::review),
+        )
+        .route(
+            "/installments/{id}/cancel-conversion",
+            post(handlers::repayments::cancel_conversion),
+        )
+        .route("/repayments", post(handlers::repayments::create))
+        .route("/repayments/new", get(handlers::repayments::new_form))
+        .route("/repayments/options", get(handlers::repayments::options))
         .route(
             "/installments/items/{id}/paid",
             post(handlers::installments::set_paid),

@@ -179,6 +179,22 @@ impl TestApp {
         .await
     }
 
+    async fn quote(&self, from: i64, to: i64, amount: &str) -> Response {
+        self.client
+            .get(format!("{}/transfers/quote", self.url))
+            .header(header::COOKIE, &self.cookie)
+            .header(header::ACCEPT, "application/json")
+            .query(&[
+                ("from_account_id", from.to_string()),
+                ("to_account_id", to.to_string()),
+                ("amount", amount.into()),
+                ("happened_at", "2026-10-10T08:00".into()),
+            ])
+            .send()
+            .await
+            .unwrap()
+    }
+
     async fn counts(&self) -> (i64, i64) {
         (
             self.scalar("SELECT COUNT(*) AS value FROM transfers").await,
@@ -313,34 +329,127 @@ async fn fees_are_atomic_protected_and_revoked_with_the_transfer_or_target_accou
 }
 
 #[tokio::test]
-async fn credit_transfers_cannot_fund_fees_from_available_credit() {
+async fn positive_credit_card_transfers_principal_and_fees_without_using_credit() {
     let app = TestApp::start().await;
     let source = app.account("credit_card", "CNY", "0.1").await;
     let target = app.account("other", "CNY", "0").await;
     app.force_balance(source, "1000").await;
-    assert_eq!(
-        app.transfer(source, target, "1000", "", "", "")
-            .await
-            .status(),
-        StatusCode::BAD_REQUEST
-    );
+
+    let quote = app.quote(source, target, "12.34").await;
+    assert_eq!(quote.status(), StatusCode::OK);
+    let quote = quote.json::<Value>().await.unwrap();
+    assert_eq!(quote["to_amount"], "12.34");
+    assert_eq!(app.counts().await, (0, 0));
+
+    // Credit is available, but cannot fund even the fee on an all-balance transfer.
+    let insufficient = app.transfer(source, target, "1000", "", "", "").await;
+    assert_eq!(insufficient.status(), StatusCode::BAD_REQUEST);
     assert_eq!(app.counts().await, (0, 0));
     assert_eq!(app.balance(source).await, "CNY 1000.00");
+    assert_eq!(app.balance(target).await, "CNY 0.00");
+
     assert_eq!(
-        app.transfer(source, target, "999", "", "", "")
+        app.transfer(source, target, "12.34", "", "0.25", "")
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(app.balance(source).await, "CNY 987.41");
+    assert_eq!(app.balance(target).await, "CNY 12.34");
+    assert_eq!(app.counts().await, (1, 1));
+    assert_eq!(
+        app.transfer(source, target, "987.41", "", "0", "")
             .await
             .status(),
         StatusCode::OK
     );
     assert_eq!(app.balance(source).await, "CNY 0.00");
-    assert_eq!(app.balance(target).await, "CNY 999.00");
-    let id = app.scalar("SELECT id AS value FROM transfers").await;
+    assert_eq!(app.balance(target).await, "CNY 999.75");
+    assert_eq!(app.counts().await, (2, 1));
     assert_eq!(
-        app.post(&format!("/transfers/{id}/delete"), &[])
+        app.scalar("SELECT COUNT(*) AS value FROM bills WHERE kind = 'income'")
+            .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn ordinary_transfers_and_quotes_reject_ineligible_credit_endpoints() {
+    let app = TestApp::start().await;
+    let ordinary = app.account("other", "CNY", "0").await;
+    let card = app.account("credit_card", "CNY", "0").await;
+    let service = app.account("credit_service", "CNY", "0").await;
+    app.force_balance(ordinary, "1000").await;
+
+    for (target, balance, expected) in [
+        (card, "0", "CNY 0.00"),
+        (card, "100", "CNY 100.00"),
+        (card, "-0.01", "CNY -0.01"),
+        (service, "0", "CNY 0.00"),
+        (service, "-1", "CNY -1.00"),
+    ] {
+        app.force_balance(target, balance).await;
+        assert_eq!(
+            app.quote(ordinary, target, "1").await.status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            app.transfer(ordinary, target, "1", "", "0.25", "")
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(app.counts().await, (0, 0));
+        assert_eq!(app.balance(ordinary).await, "CNY 1000.00");
+        assert_eq!(app.balance(target).await, expected);
+    }
+
+    for (source, balance, expected) in [
+        (card, "0", "CNY 0.00"),
+        (card, "-0.01", "CNY -0.01"),
+        (service, "0", "CNY 0.00"),
+        (service, "-1", "CNY -1.00"),
+    ] {
+        app.force_balance(source, balance).await;
+        assert_eq!(
+            app.quote(source, ordinary, "1").await.status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            app.transfer(source, ordinary, "1", "", "", "")
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(app.balance(source).await, expected);
+        assert_eq!(app.balance(ordinary).await, "CNY 1000.00");
+        assert_eq!(app.counts().await, (0, 0));
+    }
+}
+
+#[tokio::test]
+async fn save_rechecks_credit_card_balance_after_a_successful_quote() {
+    let app = TestApp::start().await;
+    let source = app.account("credit_card", "CNY", "0.1").await;
+    let target = app.account("other", "CNY", "0").await;
+    app.force_balance(source, "10").await;
+    assert_eq!(
+        app.quote(source, target, "1").await.status(),
+        StatusCode::OK
+    );
+
+    app.force_balance(source, "0").await;
+    assert_eq!(
+        app.quote(source, target, "1").await.status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.transfer(source, target, "1", "", "0.25", "")
             .await
             .status(),
-        StatusCode::SEE_OTHER
+        StatusCode::BAD_REQUEST
     );
-    assert_eq!(app.balance(source).await, "CNY 1000.00");
+    assert_eq!(app.counts().await, (0, 0));
+    assert_eq!(app.balance(source).await, "CNY 0.00");
     assert_eq!(app.balance(target).await, "CNY 0.00");
 }

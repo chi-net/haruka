@@ -41,6 +41,13 @@ pub(crate) async fn validate_money_account(
     state: &AppState,
     account: &account::Model,
 ) -> HandlerResult<()> {
+    validate_money_account_on(&state.db, account).await
+}
+
+pub(crate) async fn validate_money_account_on<C: ConnectionTrait>(
+    db: &C,
+    account: &account::Model,
+) -> HandlerResult<()> {
     if !is_money_account(account) {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -52,7 +59,7 @@ pub(crate) async fn validate_money_account(
             .parent_id
             .ok_or_else(|| err500("基金缺少投资分组"))?;
         let parent = account::Entity::find_by_id(parent_id)
-            .one(&state.db)
+            .one(db)
             .await
             .map_err(err500)?
             .ok_or_else(|| err500("基金投资分组不存在"))?;

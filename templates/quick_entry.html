@@ -2,10 +2,11 @@
   <h2 class="mb-4 text-lg font-semibold">{{ quick_entry_heading }}</h2>
   <noscript>{% include "quick_entry_fallback.html" %}</noscript>
   <div id="quick-entry-enhanced" hidden>
-    <div class="mb-5 grid grid-cols-3 gap-2" role="group" aria-label="记账类型">
-      <button type="button" data-quick-mode="expense" aria-pressed="true" class="rounded-lg border border-blue-600 bg-blue-50 px-2 py-2 text-sm font-medium text-blue-700">支出</button>
+    <div class="mb-5 grid grid-cols-4 gap-2" role="group" aria-label="记账类型">
       <button type="button" data-quick-mode="income" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">收入</button>
+      <button type="button" data-quick-mode="expense" aria-pressed="true" class="rounded-lg border border-blue-600 bg-blue-50 px-2 py-2 text-sm font-medium text-blue-700">支出</button>
       <button type="button" data-quick-mode="transfer" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">转账</button>
+      <button type="button" data-quick-mode="repayment" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">还款</button>
     </div>
     <form id="quick-form" method="post" action="/bills" data-quick-form="bill" hx-boost="false" class="space-y-4">
       <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
@@ -15,8 +16,30 @@
         <div><label for="quick-bill-category" class="mb-1 block text-xs text-gray-500">分类</label><select id="quick-bill-category" name="category" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for c in categories %}<option value="{{ c.name }}" data-kind="{{ c.kind }}">{{ c.name }}</option>{% endfor %}</select><p class="mt-1 text-xs text-gray-400">只显示当前收支类型的分类。</p></div>
       </fieldset>
       <fieldset data-quick-fields="transfer" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
-        <div><label for="quick-transfer-from" class="mb-1 block text-xs text-gray-500">转出账户</label><select id="quick-transfer-from" name="from_account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in transfer_sources %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}" data-transfer-fee-rate="{{ a.transfer_fee_rate }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-from" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
-        <div><label for="quick-transfer-to" class="mb-1 block text-xs text-gray-500">转入账户</label><select id="quick-transfer-to" name="to_account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-to" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
+        <div class="min-w-0"><label for="quick-transfer-from" class="mb-1 block text-xs text-gray-500">转出账户</label><select id="quick-transfer-from" name="from_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in accounts %}{% if a.kind != "credit_service" %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}" data-transfer-fee-rate="{{ a.transfer_fee_rate }}"{% if a.kind == "credit_card" %} disabled hidden{% endif %}>{{ a.name }}</option>{% endif %}{% endfor %}</select><div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-3"><p data-account-balance-for="quick-transfer-from" class="min-w-0 break-words text-xs text-gray-400" aria-live="polite">正在读取余额…</p><button id="quick-transfer-all-balance" type="button" disabled aria-describedby="quick-transfer-all-balance-status" class="min-h-11 shrink-0 rounded-lg px-3 py-2 text-sm text-blue-700 disabled:cursor-not-allowed disabled:opacity-50">全部余额</button></div><p id="quick-transfer-all-balance-status" class="break-words text-xs text-gray-500" aria-live="polite">正在读取余额，暂不可用。</p><p class="mt-1 break-words text-xs text-gray-500">全部余额为本金，另有手续费时可能不足；手续费仍在本金之外扣除。</p></div>
+        <div class="min-w-0"><label for="quick-transfer-to" class="mb-1 block text-xs text-gray-500">转入账户</label><select id="quick-transfer-to" name="to_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in ordinary_accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-to" class="mt-1 break-words text-xs text-gray-400" aria-live="polite">正在读取余额…</p><p class="mt-1 break-words text-xs text-gray-500">接收方仅限非信用资金账户；正余额信用卡可作为转出方，信贷服务不可参与普通转账。</p></div>
+      </fieldset>
+      <fieldset data-quick-fields="repayment" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <div><label for="quick-repayment-to" class="mb-1 block text-xs text-gray-500">还款信用账户</label><select id="quick-repayment-to" name="to_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in repayment_accounts %}<option value="{{ a.id }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-repayment-to" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
+        <div><label for="quick-repayment-from" class="mb-1 block text-xs text-gray-500">扣款资金账户（同币种、非信用账户）</label><select id="quick-repayment-from" name="from_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in ordinary_accounts %}<option value="{{ a.id }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-repayment-from" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
+        <p id="quick-repayment-debt" class="break-words text-sm text-gray-700 sm:col-span-2" aria-live="polite"></p>
+        <div class="sm:col-span-2"><label for="quick-repayment-mode" class="mb-1 block text-xs text-gray-500">还款方式</label><select id="quick-repayment-mode" name="mode" class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"><option value="custom">自定义还款（信用卡可留溢缴款）</option><option value="installment_next">分期：偿还本期</option><option value="installment_all">分期：全部结清</option><option value="minimum">按机构实际最低还款额还款，剩余普通欠款转分期</option></select></div>
+        <div id="quick-repayment-plan-field" class="hidden min-w-0 sm:col-span-2"><label for="quick-repayment-plan" class="mb-1 block text-xs text-gray-500">选择分期计划</label><select id="quick-repayment-plan" name="plan_id" disabled class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"></select></div>
+        <p id="quick-repayment-plans-status" class="break-words text-xs text-amber-700 sm:col-span-2"></p>
+        <input id="quick-repayment-item" name="item_id" type="hidden" disabled>
+        <input id="quick-repayment-ordinary" name="ordinary_cents" type="hidden" disabled>
+        <input id="quick-repayment-remaining" name="remaining_cents" type="hidden" disabled>
+        <fieldset id="quick-repayment-minimum-fields" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-amber-200 p-3 sm:col-span-2 sm:grid-cols-2">
+          <p class="break-words text-xs text-amber-800 sm:col-span-2">请手填机构账单上的实际最低还款额，以及机构提供的真实利率、总手续费和期限；这里不会推算或代替机构确定最低还款额。仅将剩余普通欠款转分期，不新增消费、不改原资金记录。</p>
+          <div><label for="quick-repayment-term" class="mb-1 block text-xs text-gray-500">期限</label><select id="quick-repayment-term" name="installment_term" required class="w-full rounded-lg border bg-white px-3 py-2 text-sm"><option value="">请选择机构实际期限</option><option value="3">3 期</option><option value="6">6 期</option><option value="9">9 期</option><option value="12">12 期</option><option value="24">24 期</option><option value="36">3 年（36 期）</option><option value="60">5 年（60 期）</option><option value="120">10 年（120 期）</option><option value="180">15 年（180 期）</option><option value="240">20 年（240 期）</option><option value="360">30 年（360 期）</option></select></div>
+          <div><label for="quick-repayment-method" class="mb-1 block text-xs text-gray-500">还款方式</label><select id="quick-repayment-method" name="installment_method" required class="w-full rounded-lg border bg-white px-3 py-2 text-sm"><option value="equal_payment">等额本息</option><option value="equal_principal">等额本金</option><option value="flat">等本等息</option></select></div>
+          <div><label for="quick-repayment-rate" class="mb-1 block text-xs text-gray-500">机构实际年利率（%）</label><input id="quick-repayment-rate" name="installment_annual_rate" type="number" min="0" max="100" step="0.01" required placeholder="按机构实际填写，可填 0" class="w-full rounded-lg border px-3 py-2 text-sm"></div>
+          <div><label for="quick-repayment-fee" class="mb-1 block text-xs text-gray-500">机构实际总手续费</label><input id="quick-repayment-fee" name="installment_fee" type="number" min="0" step="0.01" required placeholder="按机构实际填写，可填 0" class="w-full rounded-lg border px-3 py-2 text-sm"></div>
+          <div class="sm:col-span-2"><label for="quick-repayment-first-due" class="mb-1 block text-xs text-gray-500">首期还款日</label><input id="quick-repayment-first-due" name="installment_first_due_date" type="date" required value="{{ first_due_date }}" class="min-w-0 w-full rounded-lg border px-3 py-2 text-sm"></div>
+          <p id="quick-repayment-minimum-preview" class="break-words text-sm text-gray-700 sm:col-span-2" aria-live="polite"></p>
+        </fieldset>
+        <p id="quick-repayment-preview" class="break-words text-sm text-gray-700 sm:col-span-2" aria-live="polite"></p>
+        <p class="break-words text-xs text-gray-500 sm:col-span-2">仅记录你已实际完成的还款，不连接银行、不发起真实扣款。分期还款扣款额包含所选期次的本金、利息和手续费。</p>
       </fieldset>
       <p id="quick-entry-unavailable" class="hidden text-sm text-amber-700" role="status"></p>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -29,7 +52,8 @@
             <div><label for="quick-transfer-fee-rate" class="mb-1 block text-xs text-gray-500">转账费率（%）</label><input id="quick-transfer-fee-rate" name="fee_rate" type="number" min="0" max="100" step="0.01" placeholder="来源账户默认费率" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"><p class="mt-1 text-xs text-gray-400">留空使用来源默认，填 0 覆盖默认。</p></div>
             <div><label id="quick-transfer-fee-amount-label" for="quick-transfer-fee-amount" class="mb-1 block text-xs text-gray-500">手续费金额（转出账户原币）</label><input id="quick-transfer-fee-amount" name="fee_amount" type="number" min="0" step="0.01" placeholder="留空按费率计算" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"><p class="mt-1 text-xs text-gray-400">手填金额优先，填 0 免手续费。</p></div>
             <div id="quick-transfer-to-amount-field" class="hidden sm:col-span-2"><label id="quick-transfer-to-amount-label" for="quick-transfer-to-amount" class="mb-1 block text-xs text-gray-500">实际转入金额</label><input id="quick-transfer-to-amount" name="to_amount" type="number" step="0.01" min="0.01" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"></div>
-            <p class="text-xs text-gray-500 sm:col-span-2">需要注意的是：手续费在本金之外扣除并计入支出及预算，信用账户仅能转出正余额。</p>
+            <p id="quick-transfer-quote-status" class="hidden break-words text-xs text-gray-500 sm:col-span-2" aria-live="polite"></p>
+            <p id="quick-transfer-fee-preview" class="break-words text-xs text-gray-500 sm:col-span-2" aria-live="polite">手续费在本金之外扣除并计入支出及预算；信用卡只能转出现有正余额。</p>
           </div>
         </div>
       </fieldset>
@@ -105,9 +129,13 @@
   const unavailable = document.getElementById('quick-entry-unavailable');
   const updateAvailable = () => {
     const family = form.dataset.quickForm;
-    const account = document.getElementById(family === 'transfer' ? 'quick-transfer-from' : 'quick-bill-account');
+    const account = document.getElementById(({ transfer: 'quick-transfer-from', repayment: 'quick-repayment-to' })[family] || 'quick-bill-account');
     let message = account.options.length ? '' : '请先创建可用的资金账户。';
-    if (family === 'transfer' && document.getElementById('quick-transfer-to').options.length < 2) message = '转账至少需要两个账户。';
+    if (family === 'transfer') {
+      if (!account.value || account.selectedOptions[0]?.disabled) message = root.dataset.transferSourceUnavailable || '请选择可用的转出账户；信用卡仅可转出现有正余额。';
+      else if (!Array.from(document.getElementById('quick-transfer-to').options).some(option => !option.disabled && option.value !== account.value)) message = '需要另一个非信用资金账户作为转入账户。';
+    }
+    if (family === 'repayment') message = root.dataset.repaymentUnavailable || '';
     if (family === 'bill' && !Array.from(document.getElementById('quick-bill-category').options).some(option => !option.disabled)) message = '请先在“分类”页面添加对应的收支分类。';
     unavailable.textContent = message;
     unavailable.classList.toggle('hidden', !message);
@@ -115,22 +143,28 @@
     const editing = root.dataset.editingDraft === 'true';
     submit.disabled = busy || !!message || editing;
     batch.disabled = busy || !!message;
-    buttons.forEach(button => button.disabled = busy || (editing && button.dataset.quickMode === 'transfer'));
+    buttons.forEach(button => button.disabled = busy || (editing && !['income', 'expense'].includes(button.dataset.quickMode)));
+    form.inert = busy;
     const currency = account.selectedOptions[0]?.dataset.currency || '';
-    amountLabel.textContent = `${family === 'transfer' ? '转出金额' : '金额'}${currency ? `（${currency}）` : ''}`;
+    const label = family === 'transfer' ? '转出金额' : family === 'repayment' ? (document.getElementById('quick-repayment-mode').value === 'minimum' ? '机构实际最低还款额' : '还款扣款金额') : '金额';
+    amountLabel.textContent = `${label}${currency ? `（${currency}）` : ''}`;
   };
   const selectMode = mode => {
-    if (root.dataset.submitting === 'true' || !['expense', 'income', 'transfer'].includes(mode)) return;
-    if (root.dataset.editingDraft === 'true' && mode === 'transfer') return;
+    if (root.dataset.submitting === 'true' || !['expense', 'income', 'transfer', 'repayment'].includes(mode)) return;
+    if (root.dataset.editingDraft === 'true' && !['expense', 'income'].includes(mode)) return;
     const family = mode === 'expense' || mode === 'income' ? 'bill' : mode;
     root.dataset.mode = mode;
     form.dataset.quickForm = family;
-    form.action = family === 'bill' ? '/bills' : '/transfers';
+    form.action = ({ bill: '/bills', transfer: '/transfers', repayment: '/repayments' })[family];
     root.querySelectorAll('[data-quick-fields]').forEach(fieldset => {
       const active = fieldset.dataset.quickFields === family;
       fieldset.disabled = !active;
       fieldset.classList.toggle('hidden', !active);
     });
+    const amount = document.getElementById('quick-transfer-amount');
+    amount.disabled = false;
+    amount.required = true;
+    amount.setCustomValidity('');
     buttons.forEach(button => {
       const active = button.dataset.quickMode === mode;
       button.setAttribute('aria-pressed', String(active));
@@ -143,7 +177,7 @@
     });
     document.getElementById('quick-bill-tools').classList.toggle('hidden', family !== 'bill');
     batch.classList.toggle('hidden', family !== 'bill');
-    submit.textContent = ({ expense: '保存支出', income: '保存收入', transfer: '确认转账' })[mode];
+    submit.textContent = ({ expense: '保存支出', income: '保存收入', transfer: '确认转账', repayment: '确认记录还款' })[mode];
     if (family === 'bill') {
       kind.value = mode;
       kind.dispatchEvent(new Event('change', { bubbles: true }));
@@ -352,6 +386,184 @@
 })();
 (() => {
   const root = document.getElementById('quick-entry');
+  const form = document.getElementById('quick-form');
+  const to = document.getElementById('quick-repayment-to');
+  const from = document.getElementById('quick-repayment-from');
+  const mode = document.getElementById('quick-repayment-mode');
+  const plan = document.getElementById('quick-repayment-plan');
+  const item = document.getElementById('quick-repayment-item');
+  const ordinary = document.getElementById('quick-repayment-ordinary');
+  const remaining = document.getElementById('quick-repayment-remaining');
+  const minimumFields = document.getElementById('quick-repayment-minimum-fields');
+  const amount = document.getElementById('quick-transfer-amount');
+  const debt = document.getElementById('quick-repayment-debt');
+  const preview = document.getElementById('quick-repayment-preview');
+  const minimumPreview = document.getElementById('quick-repayment-minimum-preview');
+  const plansStatus = document.getElementById('quick-repayment-plans-status');
+  const status = form.querySelector('[data-quick-status]');
+  let options = null;
+  let requestNumber = 0;
+  let controller;
+  let loading = false;
+  const active = () => form.dataset.quickForm === 'repayment';
+  const isPlan = () => ['installment_next', 'installment_all'].includes(mode.value);
+  const maxCents = 9223372036854775807n;
+  const parseAmount = value => {
+    if (!/^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(value.trim())) return null;
+    const [whole, fraction = ''] = value.trim().split('.');
+    const cents = BigInt(whole || '0') * 100n + BigInt(fraction.padEnd(2, '0'));
+    return cents <= maxCents ? cents : null;
+  };
+  const formatCents = cents => `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`;
+  const selectedPlan = () => options?.plans.find(value => String(value.id) === plan.value);
+  const filterSources = () => {
+    const old = from.value;
+    const currency = to.selectedOptions[0]?.dataset.currency;
+    let first;
+    for (const option of from.options) {
+      const eligible = !!currency && option.dataset.currency === currency;
+      option.disabled = !eligible;
+      option.hidden = !eligible;
+      if (eligible && !first) first = option;
+    }
+    if (!from.selectedOptions[0] || from.selectedOptions[0].disabled) from.value = first?.value || '';
+    if (from.value !== old) from.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const update = () => {
+    if (!active()) return;
+    const planned = isPlan();
+    const minimum = mode.value === 'minimum';
+    const allowOverpayment = !planned && !minimum && options?.allow_overpayment === true;
+    const selected = selectedPlan();
+    const currency = to.selectedOptions[0]?.dataset.currency || '';
+    plan.disabled = !planned;
+    plan.required = planned;
+    document.getElementById('quick-repayment-plan-field').classList.toggle('hidden', !planned);
+    minimumFields.disabled = !minimum;
+    minimumFields.classList.toggle('hidden', !minimum);
+    item.disabled = mode.value !== 'installment_next';
+    ordinary.disabled = !minimum;
+    remaining.disabled = mode.value !== 'installment_all';
+    item.value = selected?.next_item_id == null ? '' : String(selected.next_item_id);
+    ordinary.value = options?.ordinary_cents || '';
+    remaining.value = selected?.remaining_cents || '';
+    amount.disabled = planned;
+    amount.required = !planned;
+    amount.setCustomValidity('');
+    preview.textContent = '';
+    minimumPreview.textContent = '';
+    if (planned) {
+      amount.value = selected ? (mode.value === 'installment_next' ? selected.next_amount : selected.remaining_amount) : '';
+      if (selected) preview.textContent = `${mode.value === 'installment_next' ? '本期' : '全部结清'}合计扣款：${amount.value} ${currency}（含本金、利息、手续费）。`;
+    } else if (options) {
+      const cents = parseAmount(amount.value);
+      const debtCents = BigInt(options.ordinary_cents);
+      if (cents !== null && (cents <= 0n || (!allowOverpayment && (cents > debtCents || (minimum && cents === debtCents))))) {
+        amount.setCustomValidity(minimum ? '最低还款额须大于 0 且小于普通欠款，确保有剩余本金可转分期。' : '还款金额须大于 0 且不超过普通欠款。');
+      }
+      if (minimum) {
+        minimumPreview.textContent = cents !== null && cents > 0n && cents < debtCents
+          ? `本次扣款：${formatCents(cents)} ${currency}；剩余普通欠款转分期本金：${formatCents(debtCents - cents)} ${currency}（不含新分期利息和手续费）。`
+          : '输入机构实际最低还款额后，预览剩余普通欠款转分期本金。';
+      } else if (cents !== null) {
+        preview.textContent = allowOverpayment
+          ? `本次信用卡还款：${formatCents(cents)} ${currency}。允许保留溢缴款；如需更新分期已还状态，请选择分期还款，实际溢缴款以保存后余额为准。`
+          : `本次记录普通欠款还款：${formatCents(cents)} ${currency}。`;
+      }
+    }
+    let message = '';
+    if (!to.value) message = '请先创建信用账户。';
+    else if (!from.value) message = '没有同币种的非信用扣款账户，请先创建资金账户。';
+    else if (loading) message = '正在刷新还款选项…';
+    else if (!options) message = '还款选项不可用，请重新选择信用账户或还款方式以重试。';
+    else if (planned && !selected) message = '没有可偿还的有效分期计划；退款待核对或已全额退款计划不可还款。';
+    else if (!planned && !allowOverpayment && BigInt(options.ordinary_cents) <= 0n) message = '该信用账户当前没有可偿还的普通欠款。';
+    root.dataset.repaymentUnavailable = message;
+    root.dispatchEvent(new Event('quick-entry-check'));
+  };
+  const refresh = async () => {
+    controller?.abort();
+    const number = ++requestNumber;
+    if (!active()) return false;
+    const accountId = to.value;
+    const requestedMode = mode.value;
+    const priorPlan = plan.value;
+    options = null;
+    loading = !!accountId;
+    debt.textContent = accountId ? '正在读取普通欠款和分期计划…' : '';
+    plan.replaceChildren();
+    plansStatus.textContent = '';
+    update();
+    if (!accountId) return false;
+    controller = new AbortController();
+    try {
+      const response = await fetch(`/repayments/options?account_id=${encodeURIComponent(accountId)}`, {
+        headers: { Accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store', signal: controller.signal
+      });
+      if (response.redirected && /\/(?:unlock|setup)(?:\?|$)/.test(new URL(response.url).pathname)) {
+        window.location.assign(response.url);
+        throw new Error('会话已失效，正在前往解锁页面。');
+      }
+      if (!response.ok) throw new Error(window.harukaReadErrorResponse ? await window.harukaReadErrorResponse(response) : `请求失败（HTTP ${response.status}）`);
+      const payload = await response.json();
+      if (number !== requestNumber || !active() || to.value !== accountId || mode.value !== requestedMode) return false;
+      if (!payload.ok || String(payload.account_id) !== accountId || payload.currency !== to.selectedOptions[0]?.dataset.currency) throw new Error(payload.error || payload.message || '还款选项与所选账户不一致。');
+      options = payload;
+      debt.textContent = `可偿还普通欠款：${payload.ordinary_amount} ${payload.currency}（不含分期本金）。`;
+      for (const value of payload.plans) {
+        if (value.state !== 'active') continue;
+        if (value.next_item_id == null) continue;
+        const option = document.createElement('option');
+        option.value = String(value.id);
+        option.textContent = `${value.title} · 本期 ${value.next_amount} · 剩余合计 ${value.remaining_amount} ${payload.currency}`;
+        plan.append(option);
+      }
+      if (Array.from(plan.options).some(option => option.value === priorPlan)) plan.value = priorPlan;
+      plansStatus.textContent = payload.plans.filter(value => value.state !== 'active').map(value => `${value.title}：${value.state === 'refunded' ? '已全额退款，未还期次终止' : '退款已变更，暂停还款，请到分期页面手动核对剩余计划'}`).join('；');
+      return true;
+    } catch (error) {
+      if (number !== requestNumber || error.name === 'AbortError') return false;
+      options = null;
+      debt.textContent = `还款选项读取失败：${error.message}`;
+      status.className = 'text-sm text-red-600';
+      status.textContent = `${status.textContent.startsWith('正在保存') ? '' : status.textContent + ' '}${debt.textContent}`;
+      return false;
+    } finally {
+      if (number === requestNumber) {
+        loading = false;
+        update();
+      }
+    }
+  };
+  const baseline = () => JSON.stringify([to.value, from.value, mode.value, plan.value, item.value, remaining.value, options?.ordinary_cents, amount.value]);
+  root.harukaRefreshRepayments = refresh;
+  root.harukaPrepareRepayment = async () => {
+    const before = baseline();
+    if (!await refresh()) throw new Error('未保存：无法刷新还款选项，请重试。');
+    if (before !== baseline()) throw new Error('未保存：欠款或分期计划已变化，请核对最新金额和期次后再次确认。');
+    if (root.dataset.repaymentUnavailable || !form.reportValidity()) throw new Error(root.dataset.repaymentUnavailable || '请核对还款表单。');
+  };
+  root.harukaRepaymentConfirmation = () => {
+    const currency = to.selectedOptions[0]?.dataset.currency || '';
+    const labels = { custom: '普通欠款还款', installment_next: '分期本期还款', installment_all: '分期全部结清', minimum: '最低还款并将剩余普通欠款转分期' };
+    return `确认记录${labels[mode.value]}？\n资金账户：${from.selectedOptions[0]?.textContent}\n信用账户：${to.selectedOptions[0]?.textContent}\n本次扣款：${amount.value} ${currency}${mode.value === 'minimum' ? '\n' + minimumPreview.textContent : ''}\n仅记录已实际完成的还款，不连接银行、不发起真实扣款。`;
+  };
+  to.addEventListener('change', () => { filterSources(); refresh(); });
+  mode.addEventListener('change', () => { amount.value = ''; refresh(); });
+  from.addEventListener('change', update);
+  plan.addEventListener('change', update);
+  amount.addEventListener('input', update);
+  root.addEventListener('quick-mode-updated', () => {
+    if (active()) { filterSources(); refresh(); }
+    else {
+      controller?.abort();
+      ++requestNumber;
+      amount.setCustomValidity('');
+    }
+  });
+})();
+(() => {
+  const root = document.getElementById('quick-entry');
   if (!root || root.dataset.ajaxReady === 'true') return;
   root.dataset.ajaxReady = 'true';
 
@@ -369,36 +581,128 @@
   };
 
   const balanceTargets = Array.from(root.querySelectorAll('[data-account-balance-for]'));
-  const refreshBalance = async target => {
-    const select = document.getElementById(target.dataset.accountBalanceFor);
-    if (!select || !select.value) return;
-    const requestedId = select.value;
-    target.dataset.loadingAccountId = requestedId;
-    target.className = 'text-xs text-gray-400 mt-1';
-    target.textContent = '正在读取余额…';
-    try {
-      const response = await fetch(`/accounts/${encodeURIComponent(requestedId)}/balance-summary`, {
-        headers: { Accept: 'application/json' },
-        cache: 'no-store',
-        credentials: 'same-origin'
-      });
-      const payload = await readPayload(response);
-      if (select.value !== requestedId || target.dataset.loadingAccountId !== requestedId) return;
-      const isTransferSource = select.id === 'quick-transfer-from';
-      const isCredit = payload.kind === 'credit_card' || payload.kind === 'credit_service';
-      target.className = `text-xs mt-1 ${isTransferSource && isCredit && !payload.can_transfer_out ? 'text-amber-600' : 'text-gray-500'}`;
-      target.textContent = `余额：${payload.balance}${isTransferSource && isCredit && !payload.can_transfer_out ? ' · 当前不可转出' : ''}`;
-    } catch (error) {
-      if (select.value !== requestedId) return;
-      target.className = 'text-xs text-red-600 mt-1';
-      target.textContent = `余额读取失败：${error.message}`;
-    }
+  const quickForm = document.getElementById('quick-form');
+  const transferFrom = document.getElementById('quick-transfer-from');
+  const transferTo = document.getElementById('quick-transfer-to');
+  const transferAmount = document.getElementById('quick-transfer-amount');
+  const allBalance = document.getElementById('quick-transfer-all-balance');
+  const allBalanceStatus = document.getElementById('quick-transfer-all-balance-status');
+  const creditSources = Array.from(transferFrom.options).filter(option => option.dataset.kind === 'credit_card');
+  // Decrypted balances stay in this document's memory only. A replacement state
+  // invalidates every older response, including repeated requests for the same ID.
+  const balances = new Map();
+  let fillRequest = 0;
+  const updateAllBalance = () => {
+    const state = balances.get(transferFrom.value);
+    const active = quickForm.dataset.quickForm === 'transfer';
+    const positive = !state?.error && state?.payload?.can_transfer_out === true && BigInt(state.payload.balance_cents) > 0n;
+    allBalance.disabled = !active || root.dataset.submitting === 'true' || !positive || state.loading;
+    allBalanceStatus.textContent = !active ? '仅转账时可填入全部余额。'
+      : !transferFrom.value ? root.dataset.transferSourceUnavailable || '没有可用来源账户。'
+      : !state || state.loading ? '正在读取最新余额，暂不可用。'
+      : state.error ? `全部余额不可用：${state.error}`
+      : !positive ? '余额为零或负数，无法填入全部余额。'
+      : '点击后重新读取来源账户最新原币余额并填入本金。';
   };
-  const refreshAllBalances = () => balanceTargets.forEach(refreshBalance);
+  const renderBalances = () => {
+    for (const option of creditSources) {
+      const state = balances.get(option.value);
+      const eligible = !state?.error && state?.payload?.can_transfer_out === true;
+      option.disabled = !eligible;
+      option.hidden = !eligible;
+    }
+    if (transferFrom.selectedOptions[0]?.disabled) {
+      const state = balances.get(transferFrom.value);
+      root.dataset.transferSourceUnavailable = state?.error
+        ? `来源余额读取失败：${state.error}。请重新选择账户以重试。`
+        : '已选信用卡不再具有可转出的正余额，请重新选择来源账户。';
+      transferFrom.value = '';
+      transferFrom.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    for (const target of balanceTargets) {
+      const select = document.getElementById(target.dataset.accountBalanceFor);
+      const state = balances.get(select.value);
+      target.className = `mt-1 min-w-0 break-words text-xs ${state?.error ? 'text-red-600' : 'text-gray-500'}`;
+      target.textContent = !select.value ? '没有可用账户。'
+        : !state || state.loading ? '正在读取余额…'
+        : state.error ? `余额读取失败：${state.error}`
+        : `余额：${state.payload.balance}`;
+    }
+    updateAllBalance();
+    root.dispatchEvent(new Event('quick-entry-check'));
+  };
+  const loadBalance = (requestedId, force = false) => {
+    if (!requestedId) return Promise.resolve(null);
+    const previous = balances.get(requestedId);
+    if (!force && previous?.loading) return previous.promise;
+    const state = { loading: true, payload: previous?.payload || null, error: '' };
+    balances.set(requestedId, state);
+    state.promise = (async () => {
+      try {
+        const response = await fetch(`/accounts/${encodeURIComponent(requestedId)}/balance-summary`, {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+          credentials: 'same-origin'
+        });
+        const payload = await readPayload(response);
+        if (String(payload.account_id) !== requestedId || typeof payload.balance_cents !== 'string'
+            || !/^-?\d+$/.test(payload.balance_cents)) throw new Error('余额摘要格式不正确。');
+        if (balances.get(requestedId) !== state) return null;
+        state.payload = payload;
+        return payload;
+      } catch (error) {
+        if (balances.get(requestedId) === state) state.error = error.message;
+        return null;
+      } finally {
+        if (balances.get(requestedId) === state) {
+          state.loading = false;
+          renderBalances();
+        }
+      }
+    })();
+    renderBalances();
+    return state.promise;
+  };
+  const refreshAllBalances = () => {
+    ++fillRequest;
+    const ids = new Set(creditSources.map(option => option.value));
+    balanceTargets.forEach(target => {
+      const select = document.getElementById(target.dataset.accountBalanceFor);
+      if (select.value) ids.add(select.value);
+    });
+    ids.forEach(id => loadBalance(id, true));
+  };
   for (const target of balanceTargets) {
     const select = document.getElementById(target.dataset.accountBalanceFor);
-    if (select) select.addEventListener('change', () => refreshBalance(target));
+    if (select) select.addEventListener('change', () => loadBalance(select.value));
   }
+  transferFrom.addEventListener('change', () => {
+    ++fillRequest;
+    if (transferFrom.value) delete root.dataset.transferSourceUnavailable;
+    updateAllBalance();
+  });
+  ['input', 'change'].forEach(name => transferAmount.addEventListener(name, () => { ++fillRequest; }));
+  root.addEventListener('quick-entry-check', updateAllBalance);
+  root.addEventListener('quick-mode-updated', () => {
+    ++fillRequest;
+    updateAllBalance();
+    if (quickForm.dataset.quickForm === 'transfer') refreshAllBalances();
+  });
+  allBalance.addEventListener('click', async () => {
+    if (allBalance.disabled || quickForm.dataset.quickForm !== 'transfer') return;
+    const current = ++fillRequest;
+    const requestedId = transferFrom.value;
+    const payload = await loadBalance(requestedId, true);
+    if (current !== fillRequest || quickForm.dataset.quickForm !== 'transfer'
+        || transferFrom.value !== requestedId || root.dataset.submitting === 'true' || !root.isConnected) return;
+    if (!payload || !payload.can_transfer_out) return;
+    const cents = BigInt(payload.balance_cents);
+    if (cents <= 0n) return;
+    transferAmount.value = `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`;
+    transferAmount.dispatchEvent(new Event('input', { bubbles: true }));
+    transferAmount.dispatchEvent(new Event('change', { bubbles: true }));
+    allBalanceStatus.textContent = '已填入最新全部余额作为本金；另有手续费时可能余额不足。';
+  });
   refreshAllBalances();
 
   const resetForNext = form => {
@@ -431,6 +735,13 @@
       status.className = 'text-sm text-blue-600';
       status.textContent = '正在保存…';
       try {
+        if (form.dataset.quickForm === 'repayment') {
+          await root.harukaPrepareRepayment();
+          if (!window.confirm(root.harukaRepaymentConfirmation())) {
+            status.textContent = '已取消，未记录还款。';
+            return;
+          }
+        }
         const response = await fetch(form.action, {
           method: 'POST',
           headers: { Accept: 'application/json' },
@@ -442,6 +753,7 @@
         status.textContent = `${payload.message || '保存成功'}，可以继续记录。`;
         resetForNext(form);
         refreshAllBalances();
+        if (form.dataset.quickForm === 'repayment') await root.harukaRefreshRepayments();
       } catch (error) {
         status.className = 'text-sm text-red-600';
         status.textContent = error.message;

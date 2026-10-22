@@ -15,6 +15,7 @@ pub mod installments;
 pub mod investments;
 pub mod passkeys;
 pub mod refunds;
+pub mod repayments;
 pub mod settings;
 pub mod shares;
 pub mod sms_templates;

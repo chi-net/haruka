@@ -18,8 +18,8 @@ use std::{
 use crate::{
     crypto, currency,
     entity::{
-        account, account_detail, bill, category, installment_item, investment_execution,
-        investment_sms_event, transfer,
+        account, account_detail, bill, category, installment_item, installment_plan,
+        investment_execution, investment_sms_event, transfer,
     },
     AppState, SessionDek,
 };
@@ -33,6 +33,28 @@ fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
 
 fn bad_request(msg: &str) -> (StatusCode, String) {
     (StatusCode::BAD_REQUEST, msg.to_string())
+}
+
+async fn validate_transfer_accounts(
+    state: &AppState,
+    dek: &crypto::Dek,
+    from: &account::Model,
+    to: &account::Model,
+) -> HandlerResult<Option<i64>> {
+    if matches!(to.kind.as_str(), "credit_card" | "credit_service") {
+        return Err(bad_request("普通转账不支持转入信用账户，请使用还款"));
+    }
+    if from.kind == "credit_service" {
+        return Err(bad_request("普通转账不支持信贷服务转出"));
+    }
+    if from.kind == "credit_card" {
+        let balance = super::accounts::current_balance(state, dek, from.id).await?;
+        if balance <= 0 {
+            return Err(bad_request("普通转账仅支持当前余额大于 0 的信用卡转出"));
+        }
+        return Ok(Some(balance));
+    }
+    Ok(None)
 }
 
 #[derive(Deserialize)]
@@ -130,11 +152,13 @@ fn accepts_json(headers: &HeaderMap) -> bool {
 
 pub async fn quote(
     State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Query(query): Query<QuoteQuery>,
 ) -> HandlerResult<Json<QuoteResponse>> {
     if query.from_account_id == query.to_account_id {
         return Err(bad_request("转出和转入账户不能相同"));
     }
+    let balance_guard = state.balance_writes.lock().await;
     let from_account = account::Entity::find_by_id(query.from_account_id)
         .one(&state.db)
         .await
@@ -145,8 +169,10 @@ pub async fn quote(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("转入账户不存在"))?;
+    validate_transfer_accounts(&state, &dek, &from_account, &to_account).await?;
     crate::investment_funds::validate_money_account(&state, &from_account).await?;
     crate::investment_funds::validate_money_account(&state, &to_account).await?;
+    drop(balance_guard);
     let amount = parse_amount(&query.amount)?;
     NaiveDateTime::parse_from_str(query.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确"))?;
@@ -186,6 +212,8 @@ pub async fn create(
         .await
         .map_err(err500)?
         .ok_or_else(|| bad_request("转入账户不存在"))?;
+    let source_balance =
+        validate_transfer_accounts(&state, &dek, &from_account, &to_account).await?;
     crate::investment_funds::validate_money_account(&state, &from_account).await?;
     crate::investment_funds::validate_money_account(&state, &to_account).await?;
     let amount = parse_amount(&form.amount)?;
@@ -215,14 +243,19 @@ pub async fn create(
     } else {
         parse_amount(&form.to_amount)?
     };
-    if matches!(from_account.kind.as_str(), "credit_card" | "credit_service") {
-        let balance = super::accounts::current_balance(&state, &dek, from_account.id).await?;
-        if balance <= 0 {
-            return Err(bad_request("信用账户只有在余额为正时才允许转出"));
-        }
+    if let Some(balance) = source_balance {
         if total_debit > balance {
-            return Err(bad_request("信用账户转出后余额不能低于 0"));
+            return Err(bad_request(
+                "信用卡现有余额不足以支付转账本金和手续费，禁止使用授信额度转账",
+            ));
         }
+        super::accounts::ensure_allowed_balance(
+            &state.db,
+            &dek,
+            from_account.id,
+            balance - total_debit,
+        )
+        .await?;
     } else {
         super::accounts::ensure_balance_delta(
             &state,
@@ -342,6 +375,17 @@ pub async fn delete(
     {
         return Err(bad_request(
             "分期还款本金流水不能单独删除，请在分期详情中撤销对应还款",
+        ));
+    }
+    if installment_plan::Entity::find()
+        .filter(installment_plan::Column::RepaymentTransferId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .is_some()
+    {
+        return Err(bad_request(
+            "最低还款已关联账单分期，请先撤销未使用的账单分期",
         ));
     }
     let transfer = transfer::Entity::find_by_id(id)

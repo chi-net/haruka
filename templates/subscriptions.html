@@ -42,6 +42,21 @@
   </div>
 </div>
 
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="text-sm font-medium">全年费用估算 · 按原币汇总</h2>
+  <p class="text-xs text-gray-500 mt-1">统计当前筛选的全部 {{ total_count }} 个订阅，分页前汇总；手动与自动扣款均计入，已到期不等于取消，仍按当前周期估算。</p>
+  {% if annual_estimates.is_empty() %}
+  <p class="text-sm text-gray-500 mt-3">暂无可汇总的订阅。</p>
+  {% else %}
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+    {% for amount in annual_estimates %}
+    <div class="min-w-0 font-mono text-lg break-all">{{ amount }}<span class="text-xs text-gray-500 font-sans"> / 年</span></div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <p class="text-xs text-gray-500 mt-3">假设按当前金额和周期持续续订一年，并非实际已支付金额或当年账单。日周期按 365 天、周周期按 52 又 1/7 周（365 ÷ 7，四舍五入到整数分）、月周期按 12 月、季周期按 4 季、年周期按 1 年估算；不按到期日倒推扣款次数，不同原币分别展示、不合计。</p>
+</section>
+
 {% if accounts.is_empty() && !subscriptions.is_empty() %}
 <p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3 mb-4">请先创建账户，之后才能从订阅生成支出。</p>
 {% endif %}
@@ -51,17 +66,18 @@
 {% else %}
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
   {% for s in subscriptions %}
-  <section class="bg-white rounded-lg border {% if s.expired %}border-red-200{% else if s.due_soon %}border-amber-200{% else %}border-gray-200{% endif %} p-4">
+  <section class="min-w-0 bg-white rounded-lg border {% if s.expired %}border-red-200{% else if s.due_soon %}border-amber-200{% else %}border-gray-200{% endif %} p-4">
     <div class="flex items-start justify-between gap-3">
-      <div>
+      <div class="min-w-0 break-words">
         <h2 class="font-medium">{{ s.name }}</h2>
         <p class="text-xs text-gray-500 mt-1">{{ s.category }} · {{ s.period_label }}</p>
       </div>
-      <span class="text-xs rounded-full px-2 py-0.5 {% if s.expired %}bg-red-100 text-red-700{% else if s.due_soon %}bg-amber-100 text-amber-700{% else %}bg-green-100 text-green-700{% endif %}">{{ s.status }}</span>
+      <span class="shrink-0 text-xs rounded-full px-2 py-0.5 {% if s.expired %}bg-red-100 text-red-700{% else if s.due_soon %}bg-amber-100 text-amber-700{% else %}bg-green-100 text-green-700{% endif %}">{{ s.status }}</span>
     </div>
-    <div class="mt-4 flex items-end justify-between gap-3">
-      <div>
-        <div class="text-2xl font-mono">{{ s.amount }}</div>
+    <div class="mt-4 flex flex-wrap items-end justify-between gap-3">
+      <div class="min-w-0 max-w-full">
+        <div class="text-2xl font-mono break-all">{{ s.amount }}</div>
+        <div class="text-sm text-gray-600 mt-1 break-all">全年费用估算：<span class="font-mono">{{ s.annual_amount }}</span></div>
         <div class="text-xs text-gray-500 mt-1">下次到期：<time data-utc-time="{{ s.expires_at }}">{{ s.expires_at }}</time></div>
       </div>
       <div class="text-sm whitespace-nowrap">

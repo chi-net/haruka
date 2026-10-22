@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}信用账户还款 - Haruka{% endblock %}
+{% block content %}
+<div class="max-w-2xl space-y-5" hx-boost="false">
+  <h1 class="text-xl font-bold">信用账户还款</h1>
+  <p class="text-sm text-gray-500">还款只记录真实资金转移，不新增消费。以下时间均为 UTC；分期利息和手续费按计划逐期支付。</p>
+  <form method="get" action="/repayments/new" class="space-y-2">
+    <label>信用账户 <select name="account_id" required class="border rounded px-3 py-2">
+      {% for account in accounts %}<option value="{{ account.id }}" {% if account.id == selected_id %}selected{% endif %}>{{ account.name }}</option>{% endfor %}
+    </select></label>
+    <button class="border rounded px-3 py-2" type="submit">查看欠款与计划</button>
+  </form>
+  {% if selected_id != 0 %}
+  <p>普通欠款：<strong>{{ currency }} {{ ordinary_amount }}</strong>（不含分期本金）</p>
+  {% if sources.is_empty() %}
+  <p role="alert">暂无同币种非信用还款账户，请先<a href="/accounts/new" class="text-blue-600">创建账户</a>。</p>
+  {% else %}
+  <section class="border rounded bg-white p-4 space-y-3">
+    <h2 class="font-semibold">{% if allow_overpayment %}信用卡自定义还款（可留溢缴款）{% else %}普通欠款：自定义还款{% endif %}</h2>
+    {% if allow_overpayment %}<p class="text-sm text-gray-500">允许零欠款及已有正余额时继续还款并保留溢缴款，不自动标记分期已还；分期请使用下方对应计划还款。</p>{% endif %}
+    <form method="post" action="/repayments" class="space-y-3">
+      <input type="hidden" name="mode" value="custom"><input type="hidden" name="to_account_id" value="{{ selected_id }}">
+      <input type="hidden" name="redirect_to" value="/bills/new">
+      <label class="block">还款来源 <select name="from_account_id" required class="border rounded px-3 py-2">{% for source in sources %}<option value="{{ source.id }}">{{ source.name }}</option>{% endfor %}</select></label>
+      <label class="block">还款金额 <input type="number" name="amount" min="0.01" {% if !allow_overpayment %}max="{{ ordinary_amount }}"{% endif %} step="0.01" required class="border rounded px-3 py-2"></label>
+      <label class="block">还款时间（UTC）<input type="datetime-local" name="happened_at" value="{{ happened_at }}" required class="border rounded px-3 py-2"></label>
+      <label class="block">备注 <input name="note" class="border rounded px-3 py-2"></label>
+      <button type="submit" class="bg-blue-600 text-white rounded px-4 py-2">记录还款</button>
+    </form>
+  </section>
+  <section class="border rounded bg-white p-4 space-y-3">
+    <h2 class="font-semibold">最低还款后，将剩余普通欠款转分期</h2>
+    <p class="text-sm text-gray-500">请手填机构确认的最低还款额。剩余本金按当前普通欠款计算；不修改原消费，也不新增支出。欠款发生变化时需刷新重试。</p>
+    <form method="post" action="/repayments" class="space-y-3">
+      <input type="hidden" name="mode" value="minimum"><input type="hidden" name="to_account_id" value="{{ selected_id }}">
+      <input type="hidden" name="ordinary_cents" value="{{ ordinary_cents }}"><input type="hidden" name="redirect_to" value="/installments">
+      <label class="block">还款来源 <select name="from_account_id" required class="border rounded px-3 py-2">{% for source in sources %}<option value="{{ source.id }}">{{ source.name }}</option>{% endfor %}</select></label>
+      <label class="block">机构最低还款额 <input type="number" name="amount" min="0.01" max="{{ ordinary_amount }}" step="0.01" required class="border rounded px-3 py-2"></label>
+      <label class="block">还款时间（UTC）<input type="datetime-local" name="happened_at" value="{{ happened_at }}" required class="border rounded px-3 py-2"></label>
+      <label class="block">期限 <select name="installment_term" required class="border rounded px-3 py-2"><option value="">请选择机构实际期限</option><option value="3">3 期</option><option value="6">6 期</option><option value="9">9 期</option><option value="12">12 期</option><option value="24">24 期</option><option value="36">3 年（36 期）</option><option value="60">5 年（60 期）</option><option value="120">10 年（120 期）</option><option value="180">15 年（180 期）</option><option value="240">20 年（240 期）</option><option value="360">30 年（360 期）</option></select></label>
+      <label class="block">计息方式 <select name="installment_method" required class="border rounded px-3 py-2"><option value="equal_payment">等额本息</option><option value="equal_principal">等额本金</option><option value="flat">平息</option></select></label>
+      <label class="block">机构实际年利率（%）<input type="number" name="installment_annual_rate" min="0" max="100" step="0.01" placeholder="按机构实际填写，可填 0" required class="border rounded px-3 py-2"></label>
+      <label class="block">机构实际总手续费 <input type="number" name="installment_fee" min="0" step="0.01" placeholder="按机构实际填写，可填 0" required class="border rounded px-3 py-2"></label>
+      <label class="block">首期还款日 <input type="date" name="installment_first_due_date" value="{{ first_due_date }}" required class="border rounded px-3 py-2"></label>
+      <label class="block">备注 <input name="note" class="border rounded px-3 py-2"></label>
+      <button type="submit" class="bg-blue-600 text-white rounded px-4 py-2">记录最低还款并创建剩余分期</button>
+    </form>
+  </section>
+  {% endif %}
+  <section class="space-y-3">
+    <h2 class="font-semibold">分期还款</h2>
+    {% for plan in plans %}
+    <article class="border rounded bg-white p-4 space-y-3">
+      <h3><a href="/installments/{{ plan.id }}" class="text-blue-600">{{ plan.title }}</a></h3>
+      {% if plan.state == "refunded" %}<p>已全额退款，未还分期已终止。</p>
+      {% else if plan.state == "needs_review" %}<p>退款已变更，暂停还款。请在分期详情核对剩余计划。</p>
+      {% else %}
+        {% if let Some(item_id) = plan.next_item_id %}
+        <p>本期 {{ currency }} {{ plan.next_amount }}；全部未还 {{ currency }} {{ plan.remaining_amount }}（含计划利息和手续费，不自动减免）。</p>
+        {% if !sources.is_empty() %}
+        <form method="post" action="/repayments" class="space-y-3">
+          <input type="hidden" name="to_account_id" value="{{ selected_id }}"><input type="hidden" name="plan_id" value="{{ plan.id }}">
+          <input type="hidden" name="item_id" value="{{ item_id }}"><input type="hidden" name="remaining_cents" value="{{ plan.remaining_cents }}"><input type="hidden" name="redirect_to" value="/installments">
+          <label class="block">还款来源 <select name="from_account_id" required class="border rounded px-3 py-2">{% for source in sources %}<option value="{{ source.id }}">{{ source.name }}</option>{% endfor %}</select></label>
+          <label class="block">还款时间（UTC）<input type="datetime-local" name="happened_at" value="{{ happened_at }}" required class="border rounded px-3 py-2"></label>
+          <button type="submit" name="mode" value="installment_next" class="bg-blue-600 text-white rounded px-4 py-2">支付本期</button>
+          <button type="submit" name="mode" value="installment_all" class="border rounded px-4 py-2">全部结清</button>
+        </form>
+        {% endif %}
+        {% else %}<p>全部期次已还清。</p>{% endif %}
+      {% endif %}
+      {% if plan.can_cancel %}<form method="post" action="/installments/{{ plan.id }}/cancel-conversion"><p class="text-sm text-gray-500">尚未支付任何分期，可撤销转换；真实最低还款仍然保留。</p><button type="submit" class="border rounded px-3 py-2">撤销未使用的账单分期转换</button></form>{% endif %}
+    </article>
+    {% endfor %}
+    {% if plans.is_empty() %}<p class="text-gray-500">暂无分期计划。</p>{% endif %}
+  </section>
+  {% else %}<p>暂无信用账户，请先创建信用卡或信贷服务账户。</p>{% endif %}
+</div>
+{% endblock %}

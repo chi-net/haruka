@@ -370,12 +370,17 @@ pub async fn show(
     let mut expense_amounts = Vec::new();
     let mut expense_orders = Vec::new();
     let mut food_expense = 0i64;
-    for bill in bill::Entity::find().all(&state.db).await.map_err(err500)? {
+    let bills = bill::Entity::find().all(&state.db).await.map_err(err500)?;
+    let refunds = super::refunds::RefundTotals::new(&dek, &bills);
+    for bill in bills {
         let date = time_zone.date(bill.happened_at);
         if date < start_date || date > end_date {
             continue;
         }
-        let native_amount = crypto::decrypt_cents(&dek, &bill.amount);
+        let native_amount = refunds.amount(&dek, &bill);
+        if native_amount == 0 {
+            continue;
+        }
         let bill_currency = account_currencies
             .get(&bill.account_id)
             .map(String::as_str)

@@ -18,7 +18,7 @@ pub struct Model {
     /// 应用内隐私账单标记；金额仍参与真实余额，分类与备注仅隐私模式可读。
     #[sea_orm(default_value = false)]
     pub is_private: bool,
-    /// 退款收入关联的原支出账单；余额与统计仍按普通 income 计算。
+    /// 退款流水关联的原支出；余额保留流水，统计抵扣原支出而不计收入。
     pub refund_of_bill_id: Option<i64>,
     pub note: String,
     pub happened_at: DateTime,

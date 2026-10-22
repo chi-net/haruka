@@ -112,7 +112,9 @@ struct BillsTemplate {
 #[template(path = "quick_entry_page.html")]
 struct QuickEntryPageTemplate {
     accounts: Vec<AccountOption>,
-    transfer_sources: Vec<AccountOption>,
+    ordinary_accounts: Vec<AccountOption>,
+    transfer_source_accounts: Vec<AccountOption>,
+    repayment_accounts: Vec<AccountOption>,
     categories: Vec<CategoryOption>,
     happened_at: String,
     quick_entry_heading: String,
@@ -135,6 +137,8 @@ struct BillFormTemplate {
     note: String,
     happened_at: String,
     is_private: bool,
+    metadata_only: bool,
+    cancel_url: String,
 }
 
 #[derive(Deserialize)]
@@ -161,6 +165,18 @@ pub struct BillFormData {
     installment_first_due_date: String,
     #[serde(default)]
     redirect_to: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BillUpdateFormData {
+    category: String,
+    note: String,
+    account_id: Option<String>,
+    kind: Option<String>,
+    amount: Option<String>,
+    happened_at: Option<String>,
+    is_private: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -596,7 +612,7 @@ async fn ledger_rows(
         .await
         .map_err(err500)?
         .into_iter()
-        .map(|plan| (plan.bill_id, plan.id))
+        .filter_map(|plan| plan.bill_id.map(|bill_id| (bill_id, plan.id)))
         .collect();
     let transfers = transfer::Entity::find()
         .all(&state.db)
@@ -635,6 +651,7 @@ async fn ledger_rows(
         .iter()
         .filter_map(|bill| bill.refund_of_bill_id)
         .collect();
+    let refunds = super::refunds::RefundTotals::new(dek, &bills);
 
     let mut rows = Vec::new();
     for bill in bills {
@@ -652,7 +669,9 @@ async fn ledger_rows(
             .get(&bill.account_id)
             .map(String::as_str)
             .unwrap_or(&default_currency);
-        let converted = rates.convert(amount, bill_currency).map_err(err500)?;
+        let converted = rates
+            .convert(refunds.amount(dek, &bill), bill_currency)
+            .map_err(err500)?;
         if summarize {
             if let Some(summary) = monthly_summary.as_deref_mut() {
                 let total = if incoming {
@@ -680,7 +699,17 @@ async fn ledger_rows(
         rows.push(LedgerRow {
             happened_at: bill.happened_at.format(TIME_FMT).to_string(),
             record_type: if bill.refund_of_bill_id.is_some() {
-                "收入 · 退款".into()
+                "退款".into()
+            } else if !refunds.status(dek, &bill).is_empty() {
+                format!(
+                    "支出{} · {}",
+                    if installment_plan_ids.contains_key(&bill.id) {
+                        " · 分期"
+                    } else {
+                        ""
+                    },
+                    refunds.status(dek, &bill)
+                )
             } else if incoming {
                 "收入".into()
             } else if investment_fee_bill_ids.contains(&bill.id) {
@@ -711,10 +740,10 @@ async fn ledger_rows(
                 "text-red-600"
             }
             .into(),
-            edit_url: if installment_plan_ids.contains_key(&bill.id)
-                || automatic_fee
+            edit_url: if automatic_fee
                 || bill.refund_of_bill_id.is_some()
-                || refunded_bill_ids.contains(&bill.id)
+                || (refunded_bill_ids.contains(&bill.id)
+                    && !installment_plan_ids.contains_key(&bill.id))
             {
                 String::new()
             } else {
@@ -1238,10 +1267,37 @@ pub async fn new_form(
     Extension(time_zone): Extension<super::ClientTimeZone>,
 ) -> HandlerResult<Html<String>> {
     let accounts = account_options(&state, &dek).await?;
-    let transfer_sources = accounts.clone();
+    let mut transfer_source_accounts = Vec::new();
+    {
+        let _balance_guard = state.balance_writes.lock().await;
+        for account in &accounts {
+            let eligible = match account.kind.as_str() {
+                "credit_card" => {
+                    super::accounts::current_balance(&state, &dek, account.id).await? > 0
+                }
+                "credit_service" => false,
+                _ => true,
+            };
+            if eligible {
+                transfer_source_accounts.push(account.clone());
+            }
+        }
+    }
+    let ordinary_accounts = accounts
+        .iter()
+        .filter(|a| a.kind != "credit_card" && a.kind != "credit_service")
+        .cloned()
+        .collect();
+    let repayment_accounts = accounts
+        .iter()
+        .filter(|a| a.kind == "credit_card" || a.kind == "credit_service")
+        .cloned()
+        .collect();
     let html = QuickEntryPageTemplate {
         accounts,
-        transfer_sources,
+        ordinary_accounts,
+        transfer_source_accounts,
+        repayment_accounts,
         categories: category_options(&state, &dek).await?,
         happened_at: chrono::Utc::now().naive_utc().format(TIME_FMT).to_string(),
         quick_entry_heading: "记一笔".into(),
@@ -1487,28 +1543,45 @@ pub async fn edit_form(
             "分期还款费用流水不能单独编辑，请在分期详情中撤销后重新还款",
         ));
     }
-    if installment_plan::Entity::find()
-        .filter(installment_plan::Column::BillId.eq(id))
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .is_some()
-    {
-        return Err(bad_request(
-            "分期账单不能直接编辑；如需重建计划，请删除账单后重新记录",
-        ));
-    }
     let b = bill::Entity::find_by_id(id)
         .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
     require_bill_access(&b, unlocked)?;
-    super::refunds::ensure_editable(&state, &b).await?;
-    let accounts = account_options(&state, &dek).await?;
-    let categories = category_options(&state, &dek).await?;
+    let plan = installment_plan::Entity::find()
+        .filter(installment_plan::Column::BillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?;
+    let metadata_only = plan.is_some();
+    if !metadata_only || b.refund_of_bill_id.is_some() {
+        super::refunds::ensure_editable(&state, &b).await?;
+    }
+    let accounts = if metadata_only {
+        Vec::new()
+    } else {
+        account_options(&state, &dek).await?
+    };
+    let mut categories = category_options(&state, &dek).await?;
+    if metadata_only {
+        categories.retain(|category| category.kind == "expense");
+    }
+    let cancel_url = plan
+        .map(|plan| format!("/installments/{}", plan.id))
+        .unwrap_or_else(|| {
+            if b.is_private {
+                "/privacy/bills".into()
+            } else {
+                "/bills".into()
+            }
+        });
     let html = BillFormTemplate {
-        heading: "编辑账单".into(),
+        heading: if metadata_only {
+            "编辑分期账单分类与备注".into()
+        } else {
+            "编辑账单".into()
+        },
         action: format!("/bills/{id}/edit"),
         accounts,
         categories,
@@ -1519,6 +1592,8 @@ pub async fn edit_form(
         note: crypto::decrypt_string(&dek, &b.note),
         happened_at: b.happened_at.format(TIME_FMT).to_string(),
         is_private: b.is_private,
+        metadata_only,
+        cancel_url,
     }
     .render()
     .map_err(err500)?;
@@ -1530,7 +1605,7 @@ pub async fn update(
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Extension(crate::privacy::PrivacyAccess(unlocked)): Extension<crate::privacy::PrivacyAccess>,
     Path(id): Path<i64>,
-    Form(form): Form<BillFormData>,
+    Form(form): Form<BillUpdateFormData>,
 ) -> HandlerResult<Redirect> {
     let _balance_guard = state.balance_writes.lock().await;
     ensure_not_transfer_fee(&state, id).await?;
@@ -1556,26 +1631,64 @@ pub async fn update(
             "分期还款费用流水不能单独编辑，请在分期详情中撤销后重新还款",
         ));
     }
-    if installment_plan::Entity::find()
-        .filter(installment_plan::Column::BillId.eq(id))
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .is_some()
-    {
-        return Err(bad_request(
-            "分期账单不能直接编辑；如需重建计划，请删除账单后重新记录",
-        ));
-    }
-    let parsed = parse_form(form)?;
-    let category = selected_category(&state, &dek, &parsed.kind, &parsed.category).await?;
     let b = bill::Entity::find_by_id(id)
         .one(&state.db)
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
     require_bill_access(&b, unlocked)?;
+    if let Some(plan) = installment_plan::Entity::find()
+        .filter(installment_plan::Column::BillId.eq(id))
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+    {
+        if b.refund_of_bill_id.is_some() {
+            super::refunds::ensure_editable(&state, &b).await?;
+        }
+        if form.account_id.is_some()
+            || form.kind.is_some()
+            || form.amount.is_some()
+            || form.happened_at.is_some()
+            || form.is_private.is_some()
+        {
+            return Err(bad_request("分期账单仅允许修改分类与备注"));
+        }
+        let category_name = form.category.trim();
+        let category = selected_category(&state, &dek, "expense", category_name).await?;
+        let is_private = b.is_private;
+        let mut active = b.into_active_model();
+        active.category = Set(crypto::encrypt(&dek, category_name.as_bytes()));
+        active.category_id = Set(Some(category.id));
+        active.is_food = Set(category.is_food);
+        active.note = Set(crypto::encrypt(&dek, form.note.trim().as_bytes()));
+        active.update(&state.db).await.map_err(err500)?;
+        return Ok(Redirect::to(&if is_private {
+            "/privacy/bills".into()
+        } else {
+            format!("/installments/{}", plan.id)
+        }));
+    }
     super::refunds::ensure_editable(&state, &b).await?;
+    let parsed = parse_form(BillFormData {
+        account_id: form.account_id.ok_or_else(|| bad_request("账户不能为空"))?,
+        kind: form.kind.ok_or_else(|| bad_request("类型不能为空"))?,
+        amount: form.amount.ok_or_else(|| bad_request("金额不能为空"))?,
+        category: form.category,
+        note: form.note,
+        happened_at: form
+            .happened_at
+            .ok_or_else(|| bad_request("时间不能为空"))?,
+        is_private: form.is_private.unwrap_or(false),
+        use_installment: false,
+        installment_term: String::new(),
+        installment_method: String::new(),
+        installment_annual_rate: String::new(),
+        installment_fee: String::new(),
+        installment_first_due_date: String::new(),
+        redirect_to: None,
+    })?;
+    let category = selected_category(&state, &dek, &parsed.kind, &parsed.category).await?;
     let old_amount = crypto::decrypt_cents(&dek, &b.amount);
     let old_signed = signed_amount(&b.kind, old_amount)?;
     let new_signed = signed_amount(&parsed.kind, parsed.amount)?;

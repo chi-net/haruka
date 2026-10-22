@@ -3,8 +3,31 @@
 {% block content %}
 <div class="flex items-start justify-between gap-3 mb-4">
   <div><h1 class="text-xl font-bold">{{ title }}</h1><p class="text-sm text-gray-500 mt-1">{{ account_name }}</p></div>
-  <a href="/installments" class="text-sm text-blue-600 hover:underline">返回分期</a>
+  <div class="flex gap-3 text-sm">{% if let Some(id) = bill_id %}<a href="/bills/{{ id }}/edit" class="text-blue-600 hover:underline">编辑分类与备注</a>{% if !deleted %}<a href="/installments/{{ plan_id }}/delete" class="text-red-700 hover:underline">删除分期安排</a>{% endif %}{% endif %}<a href="/installments" class="text-blue-600 hover:underline">返回分期</a></div>
 </div>
+{% if !deleted && bill_id.is_none() && review_schedule.len() == total_records %}<form method="post" action="/installments/{{ plan_id }}/cancel-conversion" class="mb-4"><button class="text-red-700 underline">撤销余款分期转换（保留真实最低还款转账）</button></form>{% endif %}
+{% if deleted %}<p class="bg-gray-50 border p-4 mb-4">分期已删除，所有未还安排已终止，仅保留历史。原消费净额和真实已还本金按普通流水计算欠款；不撤销已还款，不追加退款，也不代表银行免除债务。撤销退款不会重新打开分期。</p>{% endif %}
+{% if refunded %}<p class="bg-blue-50 border p-4 mb-4">已全额退款：未还分期已终止，已还历史保留。停止未来计划费用不代表银行已退还此前利息或手续费。</p>{% endif %}
+{% if needs_review %}
+<section class="bg-amber-50 border border-amber-300 p-4 mb-4">
+<h2 class="font-bold">退款后待核对：已暂停还款</h2>
+<p class="text-sm my-2">请按银行实际剩余计划逐期修改下列本金、利息、手续费和日期（金钱单位为元，最多两位小数）。必须包含全部未还期次，不能修改已还记录。未核对前不展示旧计划应还提醒。</p>
+<form method="post" action="/installments/{{ plan_id }}/review">
+<input type="hidden" name="refunded_cents" value="{{ refunded_cents }}">
+<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th>期次</th><th>本金</th><th>利息</th><th>手续费</th><th>还款日</th></tr></thead><tbody>
+{% for item in review_schedule %}<tr>
+<td>第 {{ item.sequence }} 期</td>
+<td><input aria-label="第 {{ item.sequence }} 期本金" name="principal_{{ item.id }}" value="{{ item.principal }}" type="number" min="0" step="0.01" required class="border p-2 w-28"></td>
+<td><input aria-label="第 {{ item.sequence }} 期利息" name="interest_{{ item.id }}" value="{{ item.interest }}" type="number" min="0" step="0.01" required class="border p-2 w-28"></td>
+<td><input aria-label="第 {{ item.sequence }} 期手续费" name="fee_{{ item.id }}" value="{{ item.fee }}" type="number" min="0" step="0.01" required class="border p-2 w-28"></td>
+<td><input aria-label="第 {{ item.sequence }} 期还款日" name="due_date_{{ item.id }}" value="{{ item.due_date }}" type="date" required class="border p-2"></td>
+</tr>{% endfor %}</tbody></table></div>
+<label class="block mt-3 text-sm">补充实际未还期次（可选）
+<textarea name="additional_schedule" rows="3" class="block w-full border rounded p-2 mt-1 font-mono text-base" placeholder="2026-12-01,100.00,0,0"></textarea></label>
+<p class="text-xs mt-1">仅补充银行实际新增的期次；每行填写“还款日,本金,利息,手续费”，使用英文逗号。已还清后撤销退款产生的待还本金也在此补充；不会修改已还流水。未还本金合计仍须与退款后的实际剩余本金一致。</p>
+<button class="bg-blue-600 text-white rounded px-4 py-2 mt-2">确认已与银行逐期核对</button>
+</form></section>
+{% endif %}
 
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
   <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">分期本金</div><div class="font-mono mt-1">{{ principal }}</div></div>
@@ -17,7 +40,33 @@
   <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">计价货币</div><div class="font-mono mt-1">{{ currency }}</div></div>
 </div>
 
-{% if repayment_accounts.is_empty() %}<p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3 mb-4">当前没有与 {{ currency }} 同币种的普通账户，暂时无法还款。请先创建或准备一个非信用账户。</p>{% endif %}
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5" aria-labelledby="annual-heading">
+  <h2 id="annual-heading" class="font-medium">{{ current_annual.year }} 年还款安排</h2>
+  <dl class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3 text-sm">
+    <div class="min-w-0"><dt class="text-xs text-gray-500">全年应还</dt><dd class="font-mono break-words mt-1">{{ current_annual.total }}</dd></div>
+    <div class="min-w-0"><dt class="text-xs text-gray-500">全年已还</dt><dd class="font-mono break-words mt-1">{{ current_annual.paid }}</dd></div>
+    <div class="min-w-0"><dt class="text-xs text-gray-500">全年未还</dt><dd class="font-mono break-words mt-1">{{ current_annual.unpaid }}</dd></div>
+  </dl>
+  <p class="text-xs text-gray-500 mt-3">按全量期次的还款日所属自然年汇总，不受期次分页影响；包含本金、利息和手续费，逾期未还仍保留。已还只降低未还，跨年提前还款不改变年度应还与归属年份。</p>
+  <p class="text-xs text-gray-500 mt-1">仅展示原币 {{ currency }} 的年度还款安排，并非新增统计支出，不改变余额、资金流水或分期计划。</p>
+  {% if deleted %}<p class="text-sm text-gray-600 mt-2">已删除计划仅汇总真实已还历史，未还期次不再计入年度还款安排。</p>{% endif %}
+  {% if needs_review %}<p class="text-sm text-amber-700 mt-2">剩余安排尚未核对，以下年度金额只保留已还历史；暂不估算未还金额，不代表没有欠款。</p>{% endif %}
+  <details class="mt-4">
+    <summary class="cursor-pointer text-sm text-blue-600 py-2">查看全部年份还款明细</summary>
+    <div class="overflow-x-auto mt-2">
+      <table class="w-full text-xs sm:text-sm">
+        <thead class="bg-gray-50 text-gray-500"><tr><th class="text-left px-2 py-2 font-medium whitespace-nowrap">年份</th><th class="text-right px-2 py-2 font-medium whitespace-nowrap">全年应还</th><th class="text-right px-2 py-2 font-medium whitespace-nowrap">全年已还</th><th class="text-right px-2 py-2 font-medium whitespace-nowrap">全年未还</th></tr></thead>
+        <tbody class="divide-y divide-gray-100">
+          {% for annual in annual_schedule %}
+          <tr><th class="text-left px-2 py-2 font-medium">{{ annual.year }}</th><td class="text-right px-2 py-2 font-mono whitespace-nowrap">{{ annual.total }}</td><td class="text-right px-2 py-2 font-mono whitespace-nowrap">{{ annual.paid }}</td><td class="text-right px-2 py-2 font-mono whitespace-nowrap">{{ annual.unpaid }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</section>
+
+{% if !deleted && repayment_accounts.is_empty() %}<p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3 mb-4">当前没有与 {{ currency }} 同币种的普通账户，暂时无法还款。请先创建或准备一个非信用账户。</p>{% endif %}
 
 <form method="get" action="/installments/{{ plan_id }}" class="flex items-center justify-end gap-2 mb-3"><span class="text-xs text-gray-500">共 {{ total_records }} 期</span><select name="per_page" aria-label="每页条数" onchange="this.form.requestSubmit()" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="50" {% if per_page == 50 %}selected{% endif %}>50 条/页</option><option value="100" {% if per_page == 100 %}selected{% endif %}>100 条/页</option><option value="200" {% if per_page == 200 %}selected{% endif %}>200 条/页</option></select></form>
 
@@ -37,6 +86,9 @@
           {% if item.paid %}
           <div class="text-xs text-gray-500 mb-1">{% if !item.repayment_account_name.is_empty() %}{{ item.repayment_account_name }}{% else %}历史手动标记{% endif %}</div>
           <form method="post" action="/installments/items/{{ item.id }}/paid" class="inline"><input type="hidden" name="paid" value="false"><button class="text-green-700 hover:underline" hx-confirm="撤销这期还款并删除自动生成的本金转账及费用支出？">已还 · 撤销</button></form>
+          {% else if deleted %}<span>已删除终止</span>
+          {% else if refunded %}<span>已退款终止</span>
+          {% else if needs_review %}<span class="text-amber-700">待核对（旧计划，仅供参考）</span>
           {% else if !repayment_accounts.is_empty() %}
           <form method="post" action="/installments/items/{{ item.id }}/paid" class="flex items-center justify-end gap-2"><input type="hidden" name="paid" value="true"><select name="repayment_account_id" required aria-label="还款渠道" class="max-w-48 border border-gray-300 rounded px-2 py-1 text-xs bg-white">{% for a in repayment_accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}</select><button class="{% if item.overdue %}text-red-700{% else %}text-blue-600{% endif %} hover:underline" hx-confirm="从所选账户扣除本期月供，并自动生成本金转账和费用支出？">{% if item.overdue %}已逾期 · 立即还款{% else %}立即还款{% endif %}</button></form>
           {% else %}<span class="text-xs text-gray-400">无可用还款渠道</span>

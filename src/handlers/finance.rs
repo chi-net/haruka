@@ -241,6 +241,7 @@ async fn infer_income(
     let windows = planning::complete_months(zone.today(), config.income_months).map_err(err500)?;
     let records: Vec<_> = bill::Entity::find()
         .filter(bill::Column::Kind.eq("income"))
+        .filter(bill::Column::RefundOfBillId.is_null())
         .all(&state.db)
         .await
         .map_err(err500)?
@@ -297,7 +298,7 @@ async fn infer_income(
     };
     let explanation = match rate_failure.as_ref() {
         Some(message) => format!("收入无法按方案币种折算：{message}。不会按 1:1 换算，请手动填写月生活费。"),
-        None => format!("按 {} 时区的最近 {} 个完整自然月计算，包含零收入月，排除本月；只统计普通收入，不计转账与借还。异币种按当前最近可用参考汇率折算。收入含一次性进账，不等于可投资结余，请核对或手动覆盖。", zone.0, config.income_months),
+        None => format!("按 {} 时区的最近 {} 个完整自然月计算，包含零收入月，排除本月；只统计普通收入，不计退款、转账与借还。异币种按当前最近可用参考汇率折算。收入含一次性进账，不等于可投资结余，请核对或手动覆盖。", zone.0, config.income_months),
     };
     let months = windows
         .iter()

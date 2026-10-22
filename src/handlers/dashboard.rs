@@ -207,6 +207,7 @@ pub async fn show(
         .map(|detail| (detail.account_id, detail))
         .collect();
     let bills = bill::Entity::find().all(&state.db).await.map_err(err500)?;
+    let refunds = super::refunds::RefundTotals::new(&dek, &bills);
     let transfers = transfer::Entity::find()
         .all(&state.db)
         .await
@@ -224,6 +225,7 @@ pub async fn show(
         .await
         .map_err(err500)?
         .into_iter()
+        .filter(|plan| plan.deleted_at.is_none())
         .map(|plan| (plan.id, plan))
         .collect();
     let installment_items = installment_item::Entity::find()
@@ -450,6 +452,21 @@ pub async fn show(
     let subscription_reminders = all_subscription_reminders.into_iter().take(10).collect();
 
     let mut all_installment_reminders = Vec::new();
+    let refund_context =
+        crate::installment_state::RefundContext::new(&dek, &bills).map_err(err500)?;
+    for plan in reminder_plans.values() {
+        let refund = refund_context.state(&dek, plan).map_err(err500)?;
+        if refund.needs_review {
+            all_installment_reminders.push(ReminderRow {
+                title: "退款后分期待核对".into(),
+                detail: "已暂停还款，请按银行剩余计划逐期确认".into(),
+                due_at: "需要优先处理".into(),
+                amount: String::new(),
+                url: format!("/installments/{}", plan.id),
+                overdue: true,
+            });
+        }
+    }
     for item in installment_items
         .iter()
         .filter(|item| item.paid_at.is_none() && item.due_date <= today + Duration::days(7))
@@ -457,21 +474,25 @@ pub async fn show(
         let Some(plan) = reminder_plans.get(&item.plan_id) else {
             continue;
         };
-        let Some(plan_bill) = reminder_bills.get(&plan.bill_id) else {
+        let refund = refund_context.state(&dek, plan).map_err(err500)?;
+        if refund.full_refund || refund.needs_review {
             continue;
-        };
+        }
+        let plan_bill = plan.bill_id.and_then(|id| reminder_bills.get(&id));
         let Some(plan_currency) = account_currencies.get(&plan.account_id) else {
             continue;
         };
-        let title = if plan_bill.is_private {
-            "隐私账单".into()
-        } else {
-            let category = crypto::decrypt_string(&dek, &plan_bill.category);
-            let note = crypto::decrypt_string(&dek, &plan_bill.note);
-            if note.is_empty() {
-                category
-            } else {
-                format!("{category} · {note}")
+        let title = match plan_bill {
+            None => "最低还款余款分期".into(),
+            Some(bill) if bill.is_private => "隐私账单".into(),
+            Some(bill) => {
+                let category = crypto::decrypt_string(&dek, &bill.category);
+                let note = crypto::decrypt_string(&dek, &bill.note);
+                if note.is_empty() {
+                    category
+                } else {
+                    format!("{category} · {note}")
+                }
             }
         };
         all_installment_reminders.push(ReminderRow {
@@ -539,7 +560,10 @@ pub async fn show(
     let mut total_income = 0i64;
     let mut total_expense = 0i64;
     for bill in &bills {
-        let native_amount = crypto::decrypt_cents(&dek, &bill.amount);
+        let native_amount = refunds.amount(&dek, bill);
+        if native_amount == 0 {
+            continue;
+        }
         let bill_currency = account_currencies
             .get(&bill.account_id)
             .map(String::as_str)
