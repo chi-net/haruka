@@ -758,6 +758,8 @@
         status.className = 'text-sm text-red-600';
         status.textContent = error.message;
         if (window.harukaShowError) window.harukaShowError(error.message);
+        // 保存失败常因余额/计划已变化（如短信自动记账），立即重读余额避免继续展示过期金额。
+        refreshAllBalances();
       } finally {
         root.dataset.submitting = 'false';
         root.dispatchEvent(new Event('quick-entry-check'));
@@ -963,6 +965,7 @@
       batchStatus.className = 'text-sm text-red-600 mt-3';
       batchStatus.textContent = error.message;
       if (window.harukaShowError) window.harukaShowError(error.message);
+      refreshAllBalances();
     } finally {
       root.dataset.submitting = 'false';
       root.dispatchEvent(new Event('quick-entry-check'));
