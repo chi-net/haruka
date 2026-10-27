@@ -25,8 +25,8 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-4" aria-labelledby="annual-heading">
   <h2 id="annual-heading" class="font-medium">{{ current_year }} 年还款安排</h2>
-  <p class="text-xs text-gray-500 mt-1">按当前筛选全部 {{ filtered_count }} 个计划汇总，不受分页影响；按还款日所属自然年统计全年月供，包含本金、利息和手续费，逾期未还仍保留，提前还款不改变归属年份。各原币分别展示，不跨币相加。</p>
-  <p class="text-xs text-gray-500 mt-1">仅展示年度还款安排，并非新增统计支出，不改变余额、资金流水或分期计划。</p>
+  <p class="text-xs text-gray-500 mt-1">按当前筛选全部 {{ filtered_count }} 个计划、不受分页影响，按还款日所属自然年统计全年月供（含本金、利息、手续费）；逾期保留原年，提前还款不改归属年份，各原币分别展示不相加。</p>
+  <p class="text-xs text-gray-500 mt-1">仅为年度还款安排展示，不计入统计支出，不改变余额、流水或分期计划。</p>
   <p class="text-xs text-gray-500 mt-1">已删除或全额退款终止的未还期次不计入；待核对计划仅计入已还历史，暂不估算未还金额，不代表没有欠款。</p>
   {% if annual_summary.is_empty() %}
   <p class="text-sm text-gray-500 mt-3">当前筛选没有分期计划。</p>

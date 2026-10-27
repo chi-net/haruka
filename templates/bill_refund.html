@@ -14,10 +14,10 @@
       <div class="flex justify-between gap-4"><dt class="text-gray-500">剩余可退</dt><dd class="font-mono font-semibold">{{ remaining_amount }}</dd></div>
     </dl>
     {% if !original_note.is_empty() %}<p class="text-gray-500 break-words">原备注：{{ original_note }}</p>{% endif %}
-    <p class="text-gray-500">退款记入原账户、使用原币种，保留关联的退款流水用于余额与对账，但不计入统计收入。统计按原消费日期扣除累计退款，部分退款仅计剩余支出，全额退款不再计入支出金额、笔数或排行。</p>
-    <p class="text-gray-500">退款流水可删除撤销。已有退款的原账单不能修改资金信息或删除；分期原账单仍可修改分类与备注。撤销关联的转账或分期还款前，也须先删除该费用的退款记录。</p>
+    <p class="text-gray-500">退款记入原账户原币种，关联流水保留用于余额与对账，但不计入统计收入；统计按原消费日期扣除累计退款：部分退款仅计剩余支出，全额退款不计金额、笔数或排行。</p>
+    <p class="text-gray-500">退款流水可删除撤销。已有退款的原账单不能修改资金信息或删除（分期原账单仍可改分类与备注）；撤销关联转账或分期还款前，须先删除其退款记录。</p>
     {% if is_private %}<p class="text-gray-500">本次退款继承原账单的隐私设置。</p>{% endif %}
-    {% if has_installment %}<p class="text-amber-700">全额退款终止未还分期并保留真实已还历史；部分退款暂停还款，须按银行剩余计划手动核对后恢复。停止未来计划费用不代表银行已退还此前利息或手续费。</p>{% endif %}
+    {% if has_installment %}<p class="text-amber-700">全额退款终止未还分期并保留已还历史；部分退款暂停还款，须按银行剩余计划核对后恢复；停止未来费用不代表银行已退还此前利息或手续费。</p>{% endif %}
   </section>
   {% if can_refund %}
   <form method="post" action="/bills/{{ id }}/refund" class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">

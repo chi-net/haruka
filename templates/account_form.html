@@ -66,17 +66,17 @@
         <input type="radio" name="billing_day_effective" value="immediate">
         立即生效
       </label>
-      <p class="text-xs text-gray-500">按当前时区计算生效日期。输入框优先显示待生效账单日；不修改它会保留计划。改回当前账单日会取消计划；选择立即生效会立即启用输入值。还款日留空时，在账单日生效后才随之改变；固定还款日不受影响。首次设为信用账户时，账单日立即生效。</p>
+      <p class="text-xs text-gray-500">按当前时区计算生效日期。输入框显示待生效账单日：不修改保留计划，改回当前值取消计划，选择立即生效即刻启用。还款日留空时随账单日生效而改变，固定还款日不受影响；首次转为信用账户立即生效。</p>
     </fieldset>
     {% else %}
     <p class="sm:col-span-3 text-xs text-gray-500">新建信用账户的账单日立即生效。还款日留空时跟随账单日。</p>
     {% endif %}
   </div>
-  <p id="credit-balance-help" class="text-xs text-gray-500">需要注意的是：信用卡允许正余额（溢缴款）；信贷服务余额最高为 0（已还清）。信用账户只有现有余额为正时才能转出，且不得使用授信额度转账（即使你可以这么做，但是不推荐这么做）。</p>
+  <p id="credit-balance-help" class="text-xs text-gray-500">需要注意的是：信用卡允许正余额（溢缴款），信贷服务余额最高为 0；信用账户仅在余额为正时可转出，且不得使用授信额度转账。</p>
   <div id="transfer-fee-field">
     <label class="block text-sm text-gray-600 mb-1" for="transfer-fee-rate">默认转出费率（%）</label>
     <input id="transfer-fee-rate" name="transfer_fee_rate" type="number" min="0" max="100" step="0.01" value="{{ transfer_fee_rate }}" placeholder="0" class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-    <p class="text-xs text-gray-500 mt-1">留空为 0。仅作为手动转账默认值，每笔可覆盖费率或手续费金额（含 0）；手续费从转出账户在本金之外额外扣除并计为支出，不向历史或自动转账补收。</p>
+    <p class="text-xs text-gray-500 mt-1">留空为 0。仅作手动转账默认值，每笔可覆盖（含 0）；手续费在本金之外从转出账户扣除并计为支出，不补收历史或自动转账。</p>
   </div>
   <p id="investment-transfer-help" class="text-xs text-gray-500">投资分组不能直接转账，也不设置默认手续费；请在具体基金编辑页设置。</p>
   <div>

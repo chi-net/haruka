@@ -5,7 +5,7 @@
 <form method="post" action="{{ action }}" class="max-w-md bg-white rounded border border-gray-200 p-4 space-y-4">
 <div><label class="block text-sm mb-1">基金名称</label><input name="name" required value="{{ name }}" class="w-full border rounded px-3 py-2"></div>
 <div><label class="block text-sm mb-1">银行短信基金名称（可选，每行一个）</label><textarea name="aliases" rows="4" class="w-full border rounded px-3 py-2">{{ aliases }}</textarea><p class="text-xs text-gray-500">基金名称本身也能匹配。填写银行使用的简称或别名，匹配时忽略空白。旧计划中的名称已迁移至此。</p></div>
-<div><label class="block text-sm mb-1">默认转出费率（%）</label><input name="transfer_fee_rate" type="number" min="0" max="100" step="0.01" value="{{ transfer_fee_rate }}" placeholder="0" class="w-full border rounded px-3 py-2"><p class="text-xs text-gray-500">留空为 0。仅作为手动转账默认值，每笔可覆盖费率或手续费金额（含 0）；手续费在本金之外额外扣除并计为支出，不向历史或自动定投、分期、短信转账补收。</p></div>
+<div><label class="block text-sm mb-1">默认转出费率（%）</label><input name="transfer_fee_rate" type="number" min="0" max="100" step="0.01" value="{{ transfer_fee_rate }}" placeholder="0" class="w-full border rounded px-3 py-2"><p class="text-xs text-gray-500">留空为 0。仅作手动转账默认值，每笔可覆盖（含 0）；手续费在本金之外扣除并计为支出，不补收历史或自动定投、分期、短信转账。</p></div>
 <div><label class="block text-sm mb-1">备注</label><input name="note" value="{{ note }}" class="w-full border rounded px-3 py-2"></div>
 <div class="flex gap-3"><button class="bg-blue-600 text-white rounded px-4 py-2">保存</button><a href="/accounts/{{ parent_id }}/funds" class="px-4 py-2 text-gray-600">取消</a></div>
 </form>

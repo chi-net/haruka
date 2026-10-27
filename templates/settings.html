@@ -15,7 +15,7 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium">网站页脚</h2>
-  <p id="site-footer-help" class="text-sm text-gray-500 mt-1 mb-3">页脚会公开显示在所有屏幕页面，包括未登录页面和公开分享页面；打印证明不显示。以下内容以明文保存，请勿填写个人隐私或敏感信息。仅支持纯文本，不支持 HTML 或自定义链接。三项均留空保存可关闭页脚。</p>
+  <p id="site-footer-help" class="text-sm text-gray-500 mt-1 mb-3">页脚公开显示在所有页面（含未登录与公开分享，打印除外），以明文保存，请勿填写隐私或敏感信息；仅支持纯文本，三项均留空可关闭。</p>
   <form method="post" action="/settings/footer" class="space-y-3" aria-describedby="site-footer-help">
     <div>
       <label for="site-footer-text" class="block text-sm font-medium mb-1">页脚文字</label>
@@ -49,7 +49,7 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium">本人姓名</h2>
-  <p class="text-sm text-gray-500 mt-1 mb-3">仅用于判断招商银行短信中的收款人或信用卡还款人是否是你本人，以推测可能的转账或支出。你的姓名将会受到加密保护，不会在此显示。仅填写新姓名时更新，留空保存会保留原姓名。</p>
+  <p class="text-sm text-gray-500 mt-1 mb-3">仅用于判断招商银行短信的收款人或信用卡还款人是否本人，以识别可能的转账或支出；姓名加密保存且不在此显示，留空保存保留原姓名。</p>
   <form method="post" action="/settings/owner-name" class="flex flex-wrap gap-2">
     <input name="owner_name" maxlength="80" autocomplete="off" placeholder="输入新的本人姓名" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm">
     <button class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">保存本人姓名</button>

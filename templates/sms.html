@@ -42,7 +42,7 @@
             </select>
           </div>
           <button class="rounded bg-amber-600 px-3 py-1.5 text-sm text-white hover:bg-amber-700">确认并记账</button>
-          {% if event.custom %}<p class="w-full text-xs text-amber-800">短信所属账户已由模板固定；请选择另一账户，同一币种且不能相同。信用账户转出只能使用已有正余额，不能借款转账。</p>{% endif %}
+          {% if event.custom %}<p class="w-full text-xs text-amber-800">短信所属账户已由模板固定，请选择另一同币种账户；信用账户仅可转出已有正余额，不能借款转账。</p>{% endif %}
           {% if event.repayment && !event.custom && repayment_targets.is_empty() %}<p class="w-full text-xs text-red-700">没有可选的 CNY 信用卡或信贷服务账户，请先创建目标账户。</p>{% else if !event.repayment && transfer_targets.is_empty() %}<p class="w-full text-xs text-red-700">没有可选账户，请先创建账户；内置招商银行候选只支持 CNY。</p>{% endif %}
         </form>
         <form method="post" action="/sms/{{ event.id }}/ignore" class="mt-2" hx-confirm="忽略这条待确认短信？不会生成账单或转账。">

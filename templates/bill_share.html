@@ -24,7 +24,7 @@
       <div><dt class="text-xs text-gray-500">时间</dt><dd class="mt-1"><time data-utc-time="{{ bill.happened_at }}">{{ bill.happened_at }}</time></dd></div>
       {% if !bill.note.is_empty() %}<div><dt class="text-xs text-gray-500">备注</dt><dd class="mt-1 whitespace-pre-wrap break-words">{{ bill.note }}</dd></div>{% endif %}
     </dl>
-    <p class="text-xs text-amber-700 mt-4">需要注意的是：分享创建后编辑或删除原账单不会修改这份快照。</p>
+    <p class="text-xs text-amber-700 mt-4">需要注意的是：分享创建后，编辑或删除原账单不会影响这份快照。</p>
   </section>
   <section class="bg-white rounded-lg border border-gray-200 p-4">
     <h2 class="font-medium">创建分享链接</h2>

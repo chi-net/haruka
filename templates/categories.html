@@ -7,9 +7,9 @@
     <a href="/settings" class="text-sm text-blue-600 hover:underline">返回设置</a>
   </div>
   <section class="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-5">
-    <p class="text-sm text-blue-800 mt-1">已用达到 80% 或剩余不超过 1 次时，这里和仪表板会提醒；达到上限与超过上限会分别标记，仍可正常记录实际支出。</p>
-    <p class="text-xs text-blue-800 mt-2">只统计该分类当前周期截至今天的支出账单，每笔账单计 1 次，不受账户或货币影响。重命名不会重置次数；未来日期的账单暂不计入。上限留空即停用，收入分类不设置次数上限。</p>
-    <p class="text-xs text-gray-600 mt-2" data-business-time-zone="{{ time_zone }}">删除分类不会改变已有账单；重新创建同名分类也不会继承被删除分类的次数。</p>
+    <p class="text-sm text-blue-800 mt-1">已用达到 80% 或剩余不超过 1 次时，这里和仪表板会提醒；达到或超过上限仍可正常记账。</p>
+    <p class="text-xs text-blue-800 mt-2">只统计当前周期截至今天的支出账单，每笔计 1 次，不受账户或货币影响；重命名不重置，未来日期暂不计入；留空停用，收入分类不设置上限。</p>
+    <p class="text-xs text-gray-600 mt-2" data-business-time-zone="{{ time_zone }}">删除分类不影响已有账单；同名新建分类不继承历史次数。</p>
   </section>
 
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
@@ -23,7 +23,7 @@
           <div><label for="expense-count-period" class="block text-sm text-gray-600 mb-1">次数上限周期</label><select id="expense-count-period" name="count_limit_period" class="w-full border border-gray-300 rounded px-3 py-2 text-sm bg-white"><option value="day">每日</option><option value="week">每周（周一至周日）</option><option value="month" selected>每月（默认）</option></select></div>
           <div><label for="expense-count-limit" class="block text-sm text-gray-600 mb-1">最多支出次数</label><input id="expense-count-limit" name="count_limit" inputmode="numeric" pattern="[0-9]*[1-9][0-9]*" title="请输入正整数；留空停用" placeholder="留空停用，例如 10" class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></div>
         </div>
-        <p class="text-xs text-gray-500">填写正整数启用软上限，留空则停用；不限制支出金额。</p>
+        <p class="text-xs text-gray-500">留空停用；只限制笔数，不限制金额。</p>
         <button class="bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700">新增支出分类</button>
       </form>
       <ul class="space-y-3">
@@ -45,7 +45,7 @@
             <p class="text-xs text-gray-500 mt-1">已用 {{ status.percent }}%{% if status.at_limit %} · 仍可正常记账{% else if status.over_limit %} · 仍可正常记账{% endif %}</p>
           </div>
           {% when None %}
-          <p class="text-xs text-gray-500 mt-2">次数上限未启用，编辑分类可设置每日、每周或每月的正整数上限。</p>
+          <p class="text-xs text-gray-500 mt-2">未启用次数上限，编辑分类可设置。</p>
           {% endmatch %}
         </li>
         {% endfor %}

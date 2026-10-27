@@ -27,7 +27,7 @@
 <section class="mb-5 border-b border-gray-200 pb-5">
   <h3 class="font-medium mb-3">转账</h3>
   {% if ordinary_accounts.is_empty() || transfer_source_accounts.len() < 2 %}
-  <p class="text-sm text-amber-700">普通转账需要普通资金账户或当前正余额信用卡作为来源，以及另一个非信用资金账户作为接收方；信用账户欠款请使用下方“还款”入口。</p>
+  <p class="text-sm text-amber-700">转出方为普通资金账户或正余额信用卡，接收方为另一非信用资金账户；信用账户欠款请走下方“还款”。</p>
   {% else %}
   <form method="post" action="/transfers" hx-boost="false" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
     <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
@@ -39,13 +39,13 @@
     <label class="text-sm">手续费金额（来源原币，手填优先）<input name="fee_amount" type="number" min="0" step="0.01" class="block w-full border rounded px-3 py-2"></label>
     <label class="text-sm">实际到账金额（跨币转账可选）<input name="to_amount" type="number" min="0.01" step="0.01" class="block w-full border rounded px-3 py-2"></label>
     <label class="text-sm">备注<textarea name="note" rows="2" class="block w-full border rounded px-3 py-2"></textarea></label>
-    <p class="sm:col-span-2 text-xs text-gray-500">手续费在本金之外扣除，计入支出；手填金额（含 0）优先，留空按费率计算。正余额信用卡可转出，但本金加手续费不得超过当前余额；接收方仅限非信用资金账户，信用账户欠款请使用“还款”。</p>
+    <p class="sm:col-span-2 text-xs text-gray-500">手续费在本金之外扣除并计入支出；手填金额（含 0）优先，留空按费率计算。正余额信用卡可转出，本金加手续费不得超过现有余额。</p>
     <div class="sm:col-span-2"><button class="rounded bg-blue-600 px-4 py-2 text-sm text-white">确认转账</button></div>
   </form>
   {% endif %}
 </section>
 <section>
   <h3 class="mb-3 font-medium">还款</h3>
-  <p class="mb-3 text-sm text-gray-600">选择信用账户与同币种资金账户，记录普通欠款还款、分期本期/全部结清，或按机构实际最低还款额还款并将剩余普通欠款转分期。仅记录，不连接银行或发起扣款。</p>
+  <p class="mb-3 text-sm text-gray-600">选择信用账户与同币种资金账户，记录普通还款、分期本期/全部结清或最低还款转分期；仅记录，不连接银行或发起扣款。</p>
   <a href="/repayments/new" class="inline-block rounded bg-blue-600 px-4 py-2 text-sm text-white">进入还款表单（无需 JavaScript）</a>
 </section>

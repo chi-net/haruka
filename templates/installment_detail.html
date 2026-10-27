@@ -11,7 +11,7 @@
 {% if needs_review %}
 <section class="bg-amber-50 border border-amber-300 p-4 mb-4">
 <h2 class="font-bold">退款后待核对：已暂停还款</h2>
-<p class="text-sm my-2">请按银行实际剩余计划逐期修改下列本金、利息、手续费和日期（金钱单位为元，最多两位小数）。必须包含全部未还期次，不能修改已还记录。未核对前不展示旧计划应还提醒。</p>
+<p class="text-sm my-2">请按银行实际剩余计划逐期修改本金、利息、手续费和日期（元，最多两位小数），须包含全部未还期次，已还记录不可改；未核对前不展示旧计划应还提醒。</p>
 <form method="post" action="/installments/{{ plan_id }}/review">
 <input type="hidden" name="refunded_cents" value="{{ refunded_cents }}">
 <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr><th>期次</th><th>本金</th><th>利息</th><th>手续费</th><th>还款日</th></tr></thead><tbody>
@@ -24,7 +24,7 @@
 </tr>{% endfor %}</tbody></table></div>
 <label class="block mt-3 text-sm">补充实际未还期次（可选）
 <textarea name="additional_schedule" rows="3" class="block w-full border rounded p-2 mt-1 font-mono text-base" placeholder="2026-12-01,100.00,0,0"></textarea></label>
-<p class="text-xs mt-1">仅补充银行实际新增的期次；每行填写“还款日,本金,利息,手续费”，使用英文逗号。已还清后撤销退款产生的待还本金也在此补充；不会修改已还流水。未还本金合计仍须与退款后的实际剩余本金一致。</p>
+<p class="text-xs mt-1">每行按“还款日,本金,利息,手续费”（英文逗号）补充银行实际新增的期次；撤销退款产生的待还本金也在此补充，不修改已还流水，未还本金合计须等于退款后实际剩余本金。</p>
 <button class="bg-blue-600 text-white rounded px-4 py-2 mt-2">确认已与银行逐期核对</button>
 </form></section>
 {% endif %}
@@ -47,8 +47,8 @@
     <div class="min-w-0"><dt class="text-xs text-gray-500">全年已还</dt><dd class="font-mono break-words mt-1">{{ current_annual.paid }}</dd></div>
     <div class="min-w-0"><dt class="text-xs text-gray-500">全年未还</dt><dd class="font-mono break-words mt-1">{{ current_annual.unpaid }}</dd></div>
   </dl>
-  <p class="text-xs text-gray-500 mt-3">按全量期次的还款日所属自然年汇总，不受期次分页影响；包含本金、利息和手续费，逾期未还仍保留。已还只降低未还，跨年提前还款不改变年度应还与归属年份。</p>
-  <p class="text-xs text-gray-500 mt-1">仅展示原币 {{ currency }} 的年度还款安排，并非新增统计支出，不改变余额、资金流水或分期计划。</p>
+  <p class="text-xs text-gray-500 mt-3">按全量期次的还款日所属自然年汇总、不受期次分页影响（含本金、利息、手续费）；逾期保留原年，已还只降低未还，跨年提前还款不改归属年份。</p>
+  <p class="text-xs text-gray-500 mt-1">仅为原币 {{ currency }} 的年度还款安排展示，不计入统计支出，不改变余额、流水或分期计划。</p>
   {% if deleted %}<p class="text-sm text-gray-600 mt-2">已删除计划仅汇总真实已还历史，未还期次不再计入年度还款安排。</p>{% endif %}
   {% if needs_review %}<p class="text-sm text-amber-700 mt-2">剩余安排尚未核对，以下年度金额只保留已还历史；暂不估算未还金额，不代表没有欠款。</p>{% endif %}
   <details class="mt-4">

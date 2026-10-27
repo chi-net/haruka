@@ -16,8 +16,8 @@
         <div><label for="quick-bill-category" class="mb-1 block text-xs text-gray-500">分类</label><select id="quick-bill-category" name="category" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for c in categories %}<option value="{{ c.name }}" data-kind="{{ c.kind }}">{{ c.name }}</option>{% endfor %}</select><p class="mt-1 text-xs text-gray-400">只显示当前收支类型的分类。</p></div>
       </fieldset>
       <fieldset data-quick-fields="transfer" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
-        <div class="min-w-0"><label for="quick-transfer-from" class="mb-1 block text-xs text-gray-500">转出账户</label><select id="quick-transfer-from" name="from_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in accounts %}{% if a.kind != "credit_service" %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}" data-transfer-fee-rate="{{ a.transfer_fee_rate }}"{% if a.kind == "credit_card" %} disabled hidden{% endif %}>{{ a.name }}</option>{% endif %}{% endfor %}</select><div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-3"><p data-account-balance-for="quick-transfer-from" class="min-w-0 break-words text-xs text-gray-400" aria-live="polite">正在读取余额…</p><button id="quick-transfer-all-balance" type="button" disabled aria-describedby="quick-transfer-all-balance-status" class="min-h-11 shrink-0 rounded-lg px-3 py-2 text-sm text-blue-700 disabled:cursor-not-allowed disabled:opacity-50">全部余额</button></div><p id="quick-transfer-all-balance-status" class="break-words text-xs text-gray-500" aria-live="polite">正在读取余额，暂不可用。</p><p class="mt-1 break-words text-xs text-gray-500">全部余额为本金，另有手续费时可能不足；手续费仍在本金之外扣除。</p></div>
-        <div class="min-w-0"><label for="quick-transfer-to" class="mb-1 block text-xs text-gray-500">转入账户</label><select id="quick-transfer-to" name="to_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in ordinary_accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-to" class="mt-1 break-words text-xs text-gray-400" aria-live="polite">正在读取余额…</p><p class="mt-1 break-words text-xs text-gray-500">接收方仅限非信用资金账户；正余额信用卡可作为转出方，信贷服务不可参与普通转账。</p></div>
+        <div class="min-w-0"><label for="quick-transfer-from" class="mb-1 block text-xs text-gray-500">转出账户</label><select id="quick-transfer-from" name="from_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in accounts %}{% if a.kind != "credit_service" %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}" data-transfer-fee-rate="{{ a.transfer_fee_rate }}"{% if a.kind == "credit_card" %} disabled hidden{% endif %}>{{ a.name }}</option>{% endif %}{% endfor %}</select><div class="mt-1 flex min-w-0 flex-wrap items-center gap-x-3"><p data-account-balance-for="quick-transfer-from" class="min-w-0 break-words text-xs text-gray-400" aria-live="polite">正在读取余额…</p><button id="quick-transfer-all-balance" type="button" disabled aria-describedby="quick-transfer-all-balance-status" class="min-h-11 shrink-0 rounded-lg px-3 py-2 text-sm text-blue-700 disabled:cursor-not-allowed disabled:opacity-50">全部余额</button></div><p id="quick-transfer-all-balance-status" class="break-words text-xs text-gray-500" aria-live="polite">正在读取余额，暂不可用。</p><p class="mt-1 break-words text-xs text-gray-500">全部余额仅含本金，手续费在本金之外另计。</p></div>
+        <div class="min-w-0"><label for="quick-transfer-to" class="mb-1 block text-xs text-gray-500">转入账户</label><select id="quick-transfer-to" name="to_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in ordinary_accounts %}<option value="{{ a.id }}" data-kind="{{ a.kind }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-transfer-to" class="mt-1 break-words text-xs text-gray-400" aria-live="polite">正在读取余额…</p><p class="mt-1 break-words text-xs text-gray-500">仅非信用资金账户可接收；正余额信用卡可作转出方，信贷服务不可参与。</p></div>
       </fieldset>
       <fieldset data-quick-fields="repayment" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
         <div><label for="quick-repayment-to" class="mb-1 block text-xs text-gray-500">还款信用账户</label><select id="quick-repayment-to" name="to_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in repayment_accounts %}<option value="{{ a.id }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-repayment-to" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
@@ -30,7 +30,7 @@
         <input id="quick-repayment-ordinary" name="ordinary_cents" type="hidden" disabled>
         <input id="quick-repayment-remaining" name="remaining_cents" type="hidden" disabled>
         <fieldset id="quick-repayment-minimum-fields" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 rounded-lg border border-amber-200 p-3 sm:col-span-2 sm:grid-cols-2">
-          <p class="break-words text-xs text-amber-800 sm:col-span-2">请手填机构账单上的实际最低还款额，以及机构提供的真实利率、总手续费和期限；这里不会推算或代替机构确定最低还款额。仅将剩余普通欠款转分期，不新增消费、不改原资金记录。</p>
+          <p class="break-words text-xs text-amber-800 sm:col-span-2">请按机构账单手填实际最低还款额、利率、总手续费和期限；这里不推算最低还款额，仅将剩余普通欠款转分期，不新增消费、不改原资金记录。</p>
           <div><label for="quick-repayment-term" class="mb-1 block text-xs text-gray-500">期限</label><select id="quick-repayment-term" name="installment_term" required class="w-full rounded-lg border bg-white px-3 py-2 text-sm"><option value="">请选择机构实际期限</option><option value="3">3 期</option><option value="6">6 期</option><option value="9">9 期</option><option value="12">12 期</option><option value="24">24 期</option><option value="36">3 年（36 期）</option><option value="60">5 年（60 期）</option><option value="120">10 年（120 期）</option><option value="180">15 年（180 期）</option><option value="240">20 年（240 期）</option><option value="360">30 年（360 期）</option></select></div>
           <div><label for="quick-repayment-method" class="mb-1 block text-xs text-gray-500">还款方式</label><select id="quick-repayment-method" name="installment_method" required class="w-full rounded-lg border bg-white px-3 py-2 text-sm"><option value="equal_payment">等额本息</option><option value="equal_principal">等额本金</option><option value="flat">等本等息</option></select></div>
           <div><label for="quick-repayment-rate" class="mb-1 block text-xs text-gray-500">机构实际年利率（%）</label><input id="quick-repayment-rate" name="installment_annual_rate" type="number" min="0" max="100" step="0.01" required placeholder="按机构实际填写，可填 0" class="w-full rounded-lg border px-3 py-2 text-sm"></div>
@@ -39,7 +39,7 @@
           <p id="quick-repayment-minimum-preview" class="break-words text-sm text-gray-700 sm:col-span-2" aria-live="polite"></p>
         </fieldset>
         <p id="quick-repayment-preview" class="break-words text-sm text-gray-700 sm:col-span-2" aria-live="polite"></p>
-        <p class="break-words text-xs text-gray-500 sm:col-span-2">仅记录你已实际完成的还款，不连接银行、不发起真实扣款。分期还款扣款额包含所选期次的本金、利息和手续费。</p>
+        <p class="break-words text-xs text-gray-500 sm:col-span-2">仅记录已实际完成的还款，不连接银行、不发起真实扣款；分期还款额含所选期次的本金、利息和手续费。</p>
       </fieldset>
       <p id="quick-entry-unavailable" class="hidden text-sm text-amber-700" role="status"></p>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -53,7 +53,7 @@
             <div><label id="quick-transfer-fee-amount-label" for="quick-transfer-fee-amount" class="mb-1 block text-xs text-gray-500">手续费金额（转出账户原币）</label><input id="quick-transfer-fee-amount" name="fee_amount" type="number" min="0" step="0.01" placeholder="留空按费率计算" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"><p class="mt-1 text-xs text-gray-400">手填金额优先，填 0 免手续费。</p></div>
             <div id="quick-transfer-to-amount-field" class="hidden sm:col-span-2"><label id="quick-transfer-to-amount-label" for="quick-transfer-to-amount" class="mb-1 block text-xs text-gray-500">实际转入金额</label><input id="quick-transfer-to-amount" name="to_amount" type="number" step="0.01" min="0.01" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono"></div>
             <p id="quick-transfer-quote-status" class="hidden break-words text-xs text-gray-500 sm:col-span-2" aria-live="polite"></p>
-            <p id="quick-transfer-fee-preview" class="break-words text-xs text-gray-500 sm:col-span-2" aria-live="polite">手续费在本金之外扣除并计入支出及预算；信用卡只能转出现有正余额。</p>
+            <p id="quick-transfer-fee-preview" class="break-words text-xs text-gray-500 sm:col-span-2" aria-live="polite">手续费在本金之外扣除，计入支出及预算。</p>
           </div>
         </div>
       </fieldset>
@@ -85,7 +85,7 @@
     <details id="receipt-scanner" class="mb-4 rounded-lg border border-violet-200 bg-violet-50">
       <summary class="cursor-pointer px-3 py-2 text-sm font-medium text-violet-900">扫描票据</summary>
       <div class="border-t border-violet-200 p-3 space-y-3">
-        <p class="text-xs text-violet-800">图片只在当前浏览器内处理，不会上传给 haruka。只有点击“使用 AI 整理”时，OCR 文字才会由浏览器直接发送到你配置的 URL。</p>
+        <p class="text-xs text-violet-800">图片仅在浏览器内处理，不会上传；只有点击“使用 AI 整理”时，OCR 文字才由浏览器直接发送到你配置的 URL。</p>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <div class="space-y-3">
             <div><label class="block text-xs text-violet-800 mb-1">票据图片</label><input id="receipt-image" type="file" accept="image/*" capture="environment" class="block w-full text-sm text-gray-700 file:mr-3 file:rounded file:border-0 file:bg-violet-100 file:px-3 file:py-1.5 file:text-violet-800"></div>
@@ -100,7 +100,7 @@
           <summary class="cursor-pointer px-3 py-2 text-sm text-violet-900">可选：AI 整理设置（仅保存在这个浏览器）</summary>
           <div class="border-t border-violet-100 p-3 space-y-3">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3"><div><label class="block text-xs text-gray-600 mb-1">Chat Completions 完整 URL</label><input id="receipt-ai-url" type="url" placeholder="http://localhost:11434/v1/chat/completions" class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"></div><div><label class="block text-xs text-gray-600 mb-1">模型</label><input id="receipt-ai-model" placeholder="例如：qwen3" class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"></div></div>
-            <div><label class="block text-xs text-gray-600 mb-1">API Key</label><input id="receipt-ai-key" type="password" autocomplete="off" placeholder="只保留到本页关闭或刷新" class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"><p class="text-xs text-gray-500 mt-1">URL 和模型保存到 localStorage；API Key 不保存。目标服务必须允许当前 haruka 来源进行 CORS 请求。</p></div>
+            <div><label class="block text-xs text-gray-600 mb-1">API Key</label><input id="receipt-ai-key" type="password" autocomplete="off" placeholder="只保留到本页关闭或刷新" class="w-full rounded border border-gray-300 px-3 py-1.5 text-sm"><p class="text-xs text-gray-500 mt-1">URL 和模型存于本浏览器 localStorage，API Key 不保存；目标服务需允许本站 CORS 请求。</p></div>
             <div class="flex flex-wrap items-center gap-2"><button id="receipt-ai-fill" type="button" class="bg-violet-700 text-white text-sm px-3 py-1.5 rounded disabled:opacity-50">使用 AI 整理并填入</button><span id="receipt-ai-status" class="text-xs text-violet-800" aria-live="polite"></span></div>
           </div>
         </details>
@@ -467,7 +467,7 @@
           : '输入机构实际最低还款额后，预览剩余普通欠款转分期本金。';
       } else if (cents !== null) {
         preview.textContent = allowOverpayment
-          ? `本次信用卡还款：${formatCents(cents)} ${currency}。允许保留溢缴款；如需更新分期已还状态，请选择分期还款，实际溢缴款以保存后余额为准。`
+          ? `本次信用卡还款：${formatCents(cents)} ${currency}，允许保留溢缴款；如需标记分期已还请选择分期还款，实际溢缴款以保存后余额为准。`
           : `本次记录普通欠款还款：${formatCents(cents)} ${currency}。`;
       }
     }
