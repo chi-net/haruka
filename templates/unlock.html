@@ -42,7 +42,7 @@ button.addEventListener('click', async () => {
   for (const item of buttons) item.disabled = true;
   status.className = 'text-sm text-blue-600 mt-3';
   status.textContent = button.dataset.passkeyLogin === 'platform'
-    ? '正在验证中，请稍安勿躁...'
+    ? '正在验证中，请坐和放宽...'
     : '正在等待手机或安全密钥...';
   try {
     const result = await harukaLoginWithPasskey(button.dataset.passkeyLogin);
