@@ -157,12 +157,14 @@ document.getElementById('settings-update-btn').addEventListener('click', async (
 </script>
 
 {% if !developer_enabled %}
+<p class="text-xs text-gray-400 mt-2" data-konami-hint>提示：在页面任意位置依次按下「上上下下左左右右ABAB」可开启开发者模式（每次按键会在 Console 输出调试信息）。</p>
 <script>
 // Konami 隐藏开启：捕获阶段监听 + code/key 双兼容，覆盖 Firefox/macOS。
 (() => {
   if (window.harukaKonamiArmed) return;
   window.harukaKonamiArmed = true;
   const sequence = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'KeyA', 'KeyB', 'KeyA', 'KeyB'];
+  console.debug('[konami] listener armed');
   const matches = (event, expected) => {
     if (event.code === expected) return true;
     const key = (event.key || '').toLowerCase();
@@ -171,6 +173,7 @@ document.getElementById('settings-update-btn').addEventListener('click', async (
   };
   let index = 0;
   document.addEventListener('keydown', async event => {
+    console.debug('[konami] keydown code=%s key=%s index=%d', event.code, event.key, index);
     // Konami 激活期间方向键一律阻止默认滚动，避免页面滚动干扰序列输入。
     if (event.code && event.code.startsWith('Arrow')) event.preventDefault();
     if (matches(event, sequence[index])) {
@@ -179,8 +182,10 @@ document.getElementById('settings-update-btn').addEventListener('click', async (
     } else {
       index = matches(event, sequence[0]) ? 1 : 0;
     }
+    console.debug('[konami] progress=%d', index);
     if (index !== sequence.length) return;
     index = 0;
+    console.debug('[konami] sequence complete, enabling developer mode');
     try {
       const response = await fetch('/settings/developer/enable', { method: 'POST' });
       if (response.ok) {
