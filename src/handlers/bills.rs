@@ -763,12 +763,19 @@ async fn ledger_rows(
                 .get(&bill.id)
                 .map(|plan_id| format!("/installments/{plan_id}"))
                 .unwrap_or_default(),
-            delete_action: if automatic_fee || refunded_bill_ids.contains(&bill.id) {
+            delete_action: if automatic_fee
+                || (refunded_bill_ids.contains(&bill.id)
+                    && installment_plan_ids.contains_key(&bill.id))
+            {
                 String::new()
             } else {
                 format!("/bills/{}/delete", bill.id)
             },
-            delete_confirm: "确认删除这条账单？".into(),
+            delete_confirm: if refunded_bill_ids.contains(&bill.id) {
+                "确认删除这条账单及其全部退款流水？账户余额将按净影响回滚。".into()
+            } else {
+                "确认删除这条账单？".into()
+            },
             sort_key: bill.happened_at,
             bill_kind: bill.kind,
             amount_cents: converted,
@@ -1773,13 +1780,22 @@ pub async fn delete(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账单不存在".into()))?;
     require_bill_access(&b, unlocked)?;
-    super::refunds::ensure_deletable(&state, id).await?;
+    let refunds = bill::Entity::find()
+        .filter(bill::Column::RefundOfBillId.eq(id))
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
     if let Some(plan) = installment_plan::Entity::find()
         .filter(installment_plan::Column::BillId.eq(id))
         .one(&state.db)
         .await
         .map_err(err500)?
     {
+        if !refunds.is_empty() {
+            return Err(bad_request(
+                "分期原消费已有退款，请通过分期详情的删除流程处理",
+            ));
+        }
         if installment_item::Entity::find()
             .filter(installment_item::Column::PlanId.eq(plan.id))
             .filter(installment_item::Column::PaidAt.is_not_null())
@@ -1793,20 +1809,30 @@ pub async fn delete(
             ));
         }
     }
-    let signed = signed_amount(&b.kind, crypto::decrypt_cents(&dek, &b.amount))?;
-    super::accounts::ensure_balance_delta(
-        &state,
-        &dek,
-        b.account_id,
-        signed
-            .checked_neg()
-            .ok_or_else(|| bad_request("金额超出范围"))?,
-    )
-    .await?;
+    // 有退款的原账单允许直接删除：退款流水与原账单同账户（record_refund_on
+    // 保证），在同一事务中一并物理删除，余额按合并后的净影响回滚校验。
+    let mut delta = signed_amount(&b.kind, crypto::decrypt_cents(&dek, &b.amount))?
+        .checked_neg()
+        .ok_or_else(|| bad_request("金额超出范围"))?;
+    for refund in &refunds {
+        let signed = signed_amount(&refund.kind, crypto::decrypt_cents(&dek, &refund.amount))?;
+        delta = delta
+            .checked_sub(signed)
+            .ok_or_else(|| bad_request("金额超出范围"))?;
+    }
+    let transaction = state.db.begin().await.map_err(err500)?;
+    super::accounts::ensure_balance_delta_on(&transaction, &dek, b.account_id, delta).await?;
+    for refund in &refunds {
+        bill::Entity::delete_by_id(refund.id)
+            .exec(&transaction)
+            .await
+            .map_err(err500)?;
+    }
     bill::Entity::delete_by_id(id)
-        .exec(&state.db)
+        .exec(&transaction)
         .await
         .map_err(err500)?;
+    transaction.commit().await.map_err(err500)?;
     Ok(Redirect::to(if b.is_private {
         "/privacy/bills"
     } else {

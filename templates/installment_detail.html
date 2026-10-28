@@ -3,7 +3,7 @@
 {% block content %}
 <div class="flex items-start justify-between gap-3 mb-4">
   <div><h1 class="text-xl font-bold">{{ title }}</h1><p class="text-sm text-gray-500 mt-1">{{ account_name }}</p></div>
-  <div class="flex gap-3 text-sm">{% if let Some(id) = bill_id %}<a href="/bills/{{ id }}/edit" class="text-blue-600 hover:underline">编辑分类与备注</a>{% if !deleted %}<a href="/installments/{{ plan_id }}/delete" class="text-red-700 hover:underline">删除分期安排</a>{% endif %}{% endif %}<a href="/installments" class="text-blue-600 hover:underline">返回分期</a></div>
+  <div class="flex gap-3 text-sm">{% if let Some(id) = bill_id %}<a href="/bills/{{ id }}/edit" class="text-blue-600 hover:underline">编辑分类与备注</a>{% if !deleted %}<a href="/installments/{{ plan_id }}/delete" class="text-red-700 hover:underline">删除分期安排</a>{% else if full_refund %}<a href="/installments/{{ plan_id }}/delete" class="text-red-700 hover:underline">硬删除交易记录</a>{% endif %}{% endif %}<a href="/installments" class="text-blue-600 hover:underline">返回分期</a></div>
 </div>
 {% if !deleted && bill_id.is_none() && review_schedule.len() == total_records %}<form method="post" action="/installments/{{ plan_id }}/cancel-conversion" class="mb-4"><button class="text-red-700 underline">撤销余款分期转换（保留真实最低还款转账）</button></form>{% endif %}
 {% if deleted %}<p class="bg-gray-50 border p-4 mb-4">分期已删除，所有未还安排已终止，仅保留历史。原消费净额和真实已还本金按普通流水计算欠款；不撤销已还款，不追加退款，也不代表银行免除债务。撤销退款不会重新打开分期。</p>{% endif %}

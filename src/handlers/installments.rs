@@ -626,6 +626,7 @@ struct InstallmentDetailTemplate {
     title: String,
     bill_id: Option<i64>,
     refunded: bool,
+    full_refund: bool,
     deleted: bool,
     needs_review: bool,
     refunded_cents: i64,
@@ -1448,6 +1449,7 @@ pub async fn detail(
             deleted: plan.deleted_at.is_some(),
             refunded: plan.deleted_at.is_none() && refund.full_refund,
             needs_review: plan.deleted_at.is_none() && refund.needs_review,
+            full_refund: refund.full_refund,
             refunded_cents: refund.refunded,
             review_schedule,
             account_name: super::bills::account_display_name(&dek, &account, detail.as_ref()),
@@ -1496,6 +1498,9 @@ pub struct DeleteFormData {
     refunded_cents: i64,
     #[serde(default)]
     treat_as_return: bool,
+    /// 全额退款的分期允许把计划、期次、自动流水、原消费与退款一并物理删除。
+    #[serde(default)]
+    hard: bool,
 }
 
 #[derive(Template)]
@@ -1509,6 +1514,7 @@ struct DeleteTemplate {
     refunded_amount: String,
     remaining_amount: String,
     has_refund: bool,
+    full_refund: bool,
     deleted: bool,
     refund_authorized: bool,
 }
@@ -1555,6 +1561,7 @@ pub async fn delete_form(
             refunded_amount: currency::format(refunded, &account.currency),
             remaining_amount: currency::format(remaining, &account.currency),
             has_refund: refunded > 0,
+            full_refund: refunded > 0 && remaining == 0,
             deleted: plan.deleted_at.is_some(),
             refund_authorized: !original.is_private || unlocked,
         }
@@ -1580,7 +1587,8 @@ pub async fn delete(
     let bill_id = plan
         .bill_id
         .ok_or_else(|| bad_request("最低还款余款分期不能按退货删除，请使用撤销余款分期转换"))?;
-    if plan.deleted_at.is_some() {
+    // 软删除重复提交保持幂等重放，不再校验退款基线；硬删除仍需继续核对。
+    if plan.deleted_at.is_some() && !form.hard {
         return Ok(Redirect::to(&format!("/installments/{id}")));
     }
     let original = bill::Entity::find_by_id(bill_id)
@@ -1591,6 +1599,18 @@ pub async fn delete(
     let (_, refunded, remaining) = super::refunds::refund_totals(&tx, &dek, &original).await?;
     if refunded != form.refunded_cents {
         return Err(bad_request("退款已变更，请刷新后重新确认"));
+    }
+    let full_refund = refunded > 0 && remaining == 0;
+    if form.hard {
+        // 已全额退款（含此前仅软删的历史计划）才允许物理删除整条交易链。
+        if !full_refund {
+            return Err(bad_request(
+                "只有已全额退款的分期可以硬删除，其余只能软删除",
+            ));
+        }
+        hard_delete_returned_plan(&tx, &dek, &plan, &original, unlocked).await?;
+        tx.commit().await.map_err(err500)?;
+        return Ok(Redirect::to("/installments"));
     }
     if refunded == 0 {
         if !form.treat_as_return {
@@ -1614,6 +1634,124 @@ pub async fn delete(
     active.update(&tx).await.map_err(err500)?;
     tx.commit().await.map_err(err500)?;
     Ok(Redirect::to(&format!("/installments/{id}")))
+}
+/// 全额退款视为整笔交易取消：在同一金融事务中物理删除分期计划、全部期次、
+/// 期次自动本金转账与费用账单、原消费及其全部退款流水；按账户合并净影响
+/// 校验余额，删除后账面回到交易发生前，不产生任何调整流水。
+async fn hard_delete_returned_plan(
+    tx: &sea_orm::DatabaseTransaction,
+    dek: &crypto::Dek,
+    plan: &installment_plan::Model,
+    original: &bill::Model,
+    unlocked: bool,
+) -> HandlerResult<()> {
+    super::bills::require_bill_access(original, unlocked)?;
+    if plan.repayment_transfer_id.is_some() {
+        return Err(bad_request("最低还款转换关联的分期不能按退货硬删除"));
+    }
+    let items = installment_item::Entity::find()
+        .filter(installment_item::Column::PlanId.eq(plan.id))
+        .all(tx)
+        .await
+        .map_err(err500)?;
+    let refunds = bill::Entity::find()
+        .filter(bill::Column::RefundOfBillId.eq(original.id))
+        .all(tx)
+        .await
+        .map_err(err500)?;
+    let mut balance_changes: HashMap<i64, i64> = HashMap::new();
+    let mut add_change = |account_id: i64, delta: i64| -> HandlerResult<()> {
+        let entry = balance_changes.entry(account_id).or_default();
+        *entry = checked_add(*entry, delta)?;
+        Ok(())
+    };
+    for item in &items {
+        if let Some(transfer_id) = item.principal_transfer_id {
+            let transfer = transfer::Entity::find_by_id(transfer_id)
+                .one(tx)
+                .await
+                .map_err(err500)?
+                .ok_or_else(|| bad_request("期次本金转账不存在"))?;
+            add_change(
+                transfer.from_account_id,
+                crypto::decrypt_cents(dek, &transfer.amount),
+            )?;
+            let to_change = super::transfer_to_cents(dek, &transfer)
+                .checked_neg()
+                .ok_or_else(|| bad_request("还款金额超出范围"))?;
+            add_change(transfer.to_account_id, to_change)?;
+        }
+        if let Some(charge_id) = item.charge_bill_id {
+            if bill::Entity::find()
+                .filter(bill::Column::RefundOfBillId.eq(charge_id))
+                .one(tx)
+                .await
+                .map_err(err500)?
+                .is_some()
+            {
+                return Err(bad_request(
+                    "分期费用账单已有退款，请先删除费用退款记录再硬删除",
+                ));
+            }
+            let charge = bill::Entity::find_by_id(charge_id)
+                .one(tx)
+                .await
+                .map_err(err500)?
+                .ok_or_else(|| bad_request("期次费用账单不存在"))?;
+            super::bills::require_bill_access(&charge, unlocked)?;
+            add_change(
+                charge.account_id,
+                crypto::decrypt_cents(dek, &charge.amount),
+            )?;
+        }
+    }
+    for refund in &refunds {
+        let change = crypto::decrypt_cents(dek, &refund.amount)
+            .checked_neg()
+            .ok_or_else(|| bad_request("退款金额超出范围"))?;
+        add_change(refund.account_id, change)?;
+    }
+    add_change(
+        original.account_id,
+        crypto::decrypt_cents(dek, &original.amount),
+    )?;
+    for (account_id, delta) in balance_changes {
+        super::accounts::ensure_balance_delta_on(tx, dek, account_id, delta).await?;
+    }
+    for item in &items {
+        if let Some(transfer_id) = item.principal_transfer_id {
+            transfer::Entity::delete_by_id(transfer_id)
+                .exec(tx)
+                .await
+                .map_err(err500)?;
+        }
+        if let Some(charge_id) = item.charge_bill_id {
+            bill::Entity::delete_by_id(charge_id)
+                .exec(tx)
+                .await
+                .map_err(err500)?;
+        }
+    }
+    installment_item::Entity::delete_many()
+        .filter(installment_item::Column::PlanId.eq(plan.id))
+        .exec(tx)
+        .await
+        .map_err(err500)?;
+    installment_plan::Entity::delete_by_id(plan.id)
+        .exec(tx)
+        .await
+        .map_err(err500)?;
+    for refund in &refunds {
+        bill::Entity::delete_by_id(refund.id)
+            .exec(tx)
+            .await
+            .map_err(err500)?;
+    }
+    bill::Entity::delete_by_id(original.id)
+        .exec(tx)
+        .await
+        .map_err(err500)?;
+    Ok(())
 }
 
 pub async fn set_paid(

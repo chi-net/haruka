@@ -360,12 +360,6 @@ async fn partial_then_full_keeps_expense_and_supports_only_balance_safe_refund_d
         .status(),
         StatusCode::BAD_REQUEST
     );
-    assert_eq!(
-        app.post(&format!("/bills/{original}/delete"), &[], None)
-            .await
-            .status(),
-        StatusCode::BAD_REQUEST
-    );
     let refund = app.scalar("SELECT MAX(id) AS value FROM bills").await;
     assert_eq!(
         app.get(&format!("/bills/{refund}/edit"), None)
@@ -606,12 +600,6 @@ async fn private_refunds_require_authorization_inherit_privacy_and_can_be_revoke
             .await
             .status(),
         StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        app.post(&format!("/bills/{original}/delete"), &[], Some(token))
-            .await
-            .status(),
-        StatusCode::BAD_REQUEST
     );
     let public_ledger = app.get("/bills", None).await.text().await.unwrap();
     assert!(!public_ledger.contains("退款备注"));
@@ -1868,4 +1856,363 @@ async fn private_deletion_cannot_bypass_refund_access_but_existing_refunds_allow
         bills
     );
     assert_eq!(app.balance(credit).await, "CNY -240.00");
+}
+
+#[tokio::test]
+async fn fully_refunded_installment_supports_hard_delete_of_entire_transaction() {
+    let app = TestApp::start().await;
+    let cash = app.account("bank").await;
+    app.force_balance(cash, "1000").await;
+    let credit = app.account("credit_card").await;
+    let original = app.installment_bill(credit, false).await;
+    let plan = app
+        .scalar(&format!(
+            "SELECT id AS value FROM installment_plans WHERE bill_id = {original}"
+        ))
+        .await;
+    let item = app
+        .scalar(&format!(
+            "SELECT MIN(id) AS value FROM installment_items WHERE plan_id = {plan} AND paid_at IS NULL"
+        ))
+        .await;
+    assert_eq!(
+        app.post(
+            &format!("/installments/items/{item}/paid"),
+            &[
+                ("paid", "true".into()),
+                ("repayment_account_id", cash.to_string())
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    // 部分退款不允许硬删除
+    assert_eq!(
+        app.refund(original, "partial", "60", None).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.post(
+            &format!("/installments/{plan}/delete"),
+            &[
+                ("refunded_cents", "6000".into()),
+                ("hard", "true".into())
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.refund(original, "full", "240", None).await.status(),
+        StatusCode::OK
+    );
+    let page = app
+        .get(&format!("/installments/{plan}/delete"), None)
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("硬删除全部交易记录"));
+    assert!(page.contains("软删除分期安排"));
+    assert_eq!(app.balance(cash).await, "CNY 899.00");
+    assert_eq!(app.balance(credit).await, "CNY 100.00");
+    assert_eq!(
+        app.post(
+            &format!("/installments/{plan}/delete"),
+            &[
+                ("refunded_cents", "30000".into()),
+                ("hard", "true".into())
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    // 整条交易链物理删除，余额回到交易发生前
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_plans")
+            .await,
+        0
+    );
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items")
+            .await,
+        0
+    );
+    assert_eq!(app.scalar("SELECT COUNT(*) AS value FROM bills").await, 0);
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM transfers").await,
+        0
+    );
+    assert_eq!(app.balance(cash).await, "CNY 1000.00");
+    assert_eq!(app.balance(credit).await, "CNY 0.00");
+    assert_eq!(
+        app.post(
+            &format!("/installments/{plan}/delete"),
+            &[
+                ("refunded_cents", "30000".into()),
+                ("hard", "true".into())
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn soft_deleted_fully_refunded_installment_can_be_hard_deleted() {
+    let app = TestApp::start().await;
+    let credit = app.account("credit_card").await;
+    let original = app.installment_bill(credit, false).await;
+    let plan = app
+        .scalar(&format!(
+            "SELECT id AS value FROM installment_plans WHERE bill_id = {original}"
+        ))
+        .await;
+    assert_eq!(
+        app.refund(original, "full", "0", None).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.post(
+            &format!("/installments/{plan}/delete"),
+            &[("refunded_cents", "30000".into())],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        app.scalar(&format!(
+            "SELECT COUNT(*) AS value FROM installment_plans WHERE id = {plan} AND deleted_at IS NOT NULL"
+        ))
+        .await,
+        1
+    );
+    // 历史残留的软删记录：详情与确认页都提供硬删除入口
+    let detail = app
+        .get(&format!("/installments/{plan}"), None)
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(detail.contains("硬删除交易记录"));
+    let page = app
+        .get(&format!("/installments/{plan}/delete"), None)
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("硬删除全部交易记录"));
+    assert_eq!(
+        app.post(
+            &format!("/installments/{plan}/delete"),
+            &[
+                ("refunded_cents", "30000".into()),
+                ("hard", "true".into())
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_plans")
+            .await,
+        0
+    );
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items")
+            .await,
+        0
+    );
+    assert_eq!(app.scalar("SELECT COUNT(*) AS value FROM bills").await, 0);
+    assert_eq!(app.balance(credit).await, "CNY 0.00");
+}
+
+#[tokio::test]
+async fn hard_delete_rejects_unrefunded_plans_and_refunded_fee_bills() {
+    let app = TestApp::start().await;
+    let cash = app.account("bank").await;
+    app.force_balance(cash, "1000").await;
+    let credit = app.account("credit_card").await;
+    // 无退款不能硬删除
+    let unrefunded = app.installment_bill(credit, false).await;
+    let unrefunded_plan = app
+        .scalar(&format!(
+            "SELECT id AS value FROM installment_plans WHERE bill_id = {unrefunded}"
+        ))
+        .await;
+    assert_eq!(
+        app.post(
+            &format!("/installments/{unrefunded_plan}/delete"),
+            &[("refunded_cents", "0".into()), ("hard", "true".into())],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    // 费用账单已有退款时不能硬删除，需先处理费用退款
+    let original = app.installment_bill(credit, false).await;
+    let plan = app
+        .scalar(&format!(
+            "SELECT id AS value FROM installment_plans WHERE bill_id = {original}"
+        ))
+        .await;
+    let item = app
+        .scalar(&format!(
+            "SELECT MIN(id) AS value FROM installment_items WHERE plan_id = {plan} AND paid_at IS NULL"
+        ))
+        .await;
+    assert_eq!(
+        app.post(
+            &format!("/installments/items/{item}/paid"),
+            &[
+                ("paid", "true".into()),
+                ("repayment_account_id", cash.to_string())
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    let charge = app
+        .scalar(&format!(
+            "SELECT charge_bill_id AS value FROM installment_items WHERE id = {item}"
+        ))
+        .await;
+    assert_eq!(
+        app.refund(charge, "full", "0", None).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.refund(original, "full", "0", None).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.post(
+            &format!("/installments/{plan}/delete"),
+            &[
+                ("refunded_cents", "30000".into()),
+                ("hard", "true".into())
+            ],
+            None,
+        )
+        .await
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.scalar(&format!(
+            "SELECT COUNT(*) AS value FROM installment_plans WHERE id = {plan}"
+        ))
+        .await,
+        1
+    );
+}
+
+#[tokio::test]
+async fn refunded_bill_delete_cascades_refund_rows_and_rolls_back_balance() {
+    let app = TestApp::start().await;
+    let account = app.account("bank").await;
+    app.force_balance(account, "1000").await;
+    let original = app.bill(account, "expense", "100", false).await;
+    assert_eq!(
+        app.refund(original, "partial", "40", None).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.refund(original, "partial", "20", None).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(app.scalar("SELECT COUNT(*) AS value FROM bills").await, 3);
+    assert_eq!(app.balance(account).await, "CNY 960.00");
+    // 有退款的原账单可以直接删除，全部退款流水在同一事务中级联删除
+    assert_eq!(
+        app.post(&format!("/bills/{original}/delete"), &[], None)
+            .await
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(app.scalar("SELECT COUNT(*) AS value FROM bills").await, 0);
+    assert_eq!(app.balance(account).await, "CNY 1000.00");
+    assert_eq!(
+        app.post(&format!("/bills/{original}/delete"), &[], None)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn private_refunded_bill_delete_requires_privacy_authorization() {
+    let app = TestApp::start().await;
+    let account = app.account("other").await;
+    app.force_balance(account, "100").await;
+    let original = app.bill(account, "expense", "100", true).await;
+    let setup = app
+        .post(
+            "/privacy/setup",
+            &[
+                ("password", "cascade-private-password".into()),
+                ("confirm", "cascade-private-password".into()),
+            ],
+            None,
+        )
+        .await;
+    assert_eq!(setup.status(), StatusCode::OK);
+    let payload: Value = setup.json().await.unwrap();
+    let token = payload["token"].as_str().unwrap();
+    assert_eq!(
+        app.refund(original, "full", "", Some(token)).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.post(&format!("/bills/{original}/delete"), &[], None)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.post(&format!("/bills/{original}/delete"), &[], Some(token))
+            .await
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(app.scalar("SELECT COUNT(*) AS value FROM bills").await, 0);
+    assert_eq!(app.balance(account).await, "CNY 100.00");
+}
+
+#[tokio::test]
+async fn installment_original_with_refunds_must_use_plan_delete_flow() {
+    let app = TestApp::start().await;
+    let credit = app.account("credit_card").await;
+    let original = app.installment_bill(credit, false).await;
+    assert_eq!(
+        app.refund(original, "full", "", None).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.post(&format!("/bills/{original}/delete"), &[], None)
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_plans")
+            .await,
+        1
+    );
+    assert_eq!(app.scalar("SELECT COUNT(*) AS value FROM bills").await, 2);
 }
