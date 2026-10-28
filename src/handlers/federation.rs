@@ -137,7 +137,7 @@ pub struct PairStartForm {
 /// 生成配对码：输入对方域名，返回一次性配对码（24 小时有效）。
 pub async fn pair_start(
     State(state): State<AppState>,
-    Extension(SessionDek(_dek)): Extension<SessionDek>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     Json(form): Json<PairStartForm>,
 ) -> HandlerResult<Json<Value>> {
     let domain = federation::normalize_domain(&form.domain).map_err(|error| bad_request(&error))?;
@@ -146,9 +146,11 @@ pub async fn pair_start(
     }
     let (code_text, code_bytes) = federation::new_pairing_code();
     let key = federation::pairing_key(&code_bytes);
+    let person_id = ensure_person(&state, &dek, &domain).await?;
     linked_instance::ActiveModel {
         domain: Set(domain.clone()),
         self_domain: Set(String::new()),
+        person_id: Set(Some(person_id)),
         role: Set("debtor".into()),
         status: Set("pending".into()),
         pairing_key: Set(key.as_slice().to_vec()),
@@ -182,11 +184,12 @@ struct JoinPayload {
 /// 验证绑定：输入对方域名与配对码，调用对方实例完成加密握手。
 pub async fn pair_join(
     State(state): State<AppState>,
-    Extension(SessionDek(_dek)): Extension<SessionDek>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
     headers: HeaderMap,
     Json(form): Json<PairJoinForm>,
 ) -> HandlerResult<Json<Value>> {
     let domain = federation::normalize_domain(&form.domain).map_err(|error| bad_request(&error))?;
+    let person_id = ensure_person(&state, &dek, &domain).await?;
     let code =
         federation::decode_code(&form.code).ok_or_else(|| bad_request("配对码格式不正确"))?;
     let key = federation::pairing_key(&code);
@@ -230,6 +233,7 @@ pub async fn pair_join(
     linked_instance::ActiveModel {
         domain: Set(domain.clone()),
         self_domain: Set(self_domain),
+        person_id: Set(Some(person_id)),
         role: Set("creditor".into()),
         status: Set("paired".into()),
         pairing_key: Set(key.as_slice().to_vec()),
@@ -307,16 +311,6 @@ pub async fn receive_pair(
     Json(json!({ "cipher": response })).into_response()
 }
 
-#[derive(Deserialize)]
-pub struct CreateForm {
-    instance_id: i64,
-    kind: String,
-    account_id: i64,
-    amount: String,
-    note: String,
-    paid_at: String,
-}
-
 /// 本地入账并推送 created 事件。返回（本地 debt_requests.id，借贷对象 id）。
 async fn book_locally(
     state: &AppState,
@@ -365,7 +359,11 @@ async fn book_locally(
 }
 
 /// 按对方域名查找或创建借贷对象，联邦入账复用同一对象。
-async fn ensure_person(state: &AppState, dek: &crypto::Dek, domain: &str) -> HandlerResult<i64> {
+pub(crate) async fn ensure_person(
+    state: &AppState,
+    dek: &crypto::Dek,
+    domain: &str,
+) -> HandlerResult<i64> {
     for person in debt_person::Entity::find()
         .all(&state.db)
         .await
@@ -390,50 +388,42 @@ async fn ensure_person(state: &AppState, dek: &crypto::Dek, domain: &str) -> Han
     Ok(person.id)
 }
 
-/// 创建联邦借还：本地入账 + created 事件推送。
-pub async fn create_request(
-    State(state): State<AppState>,
-    Extension(SessionDek(dek)): Extension<SessionDek>,
-    Json(form): Json<CreateForm>,
-) -> HandlerResult<Json<Value>> {
-    if !matches!(form.kind.as_str(), "borrow" | "lend") {
-        return Err(bad_request("借还类型不正确"));
-    }
-    let instance = linked_instance::Entity::find_by_id(form.instance_id)
+/// 统一新建请求后的镜像：借贷对象绑定了配对实例时，同步 created 事件到对方。
+/// 仅本方主动创建时单向推送；对方镜像不再二次推送（避免循环）。
+pub(crate) async fn mirror_after_create(
+    state: &AppState,
+    person_id: Option<i64>,
+    local_request_id: i64,
+    account_id: i64,
+    kind: &str,
+    amount_cents: i64,
+    currency: &str,
+    note: &str,
+) -> HandlerResult<()> {
+    let Some(person_id) = person_id else {
+        return Ok(());
+    };
+    let Some(instance) = linked_instance::Entity::find()
+        .filter(linked_instance::Column::PersonId.eq(person_id))
+        .filter(linked_instance::Column::Status.eq("paired"))
         .one(&state.db)
         .await
         .map_err(err500)?
-        .filter(|instance| instance.status == "paired")
-        .ok_or_else(|| bad_request("实例未绑定"))?;
-    let account = crate::entity::account::Entity::find_by_id(form.account_id)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or_else(|| bad_request("资金账户不存在"))?;
-    let (local_id, person_id) = book_locally(
-        &state,
-        &dek,
-        &instance,
-        &form.kind,
-        form.account_id,
-        &form.amount,
-        &form.note,
-        &form.paid_at,
-    )
-    .await?;
-    let amount_cents = super::debt_requests::parse_amount(&form.amount)?;
+    else {
+        return Ok(());
+    };
     let federation_id = federation::new_federation_id();
     let request = federated_request::ActiveModel {
         federation_id: Set(federation_id.clone()),
         instance_id: Set(instance.id),
         origin: Set("local".into()),
-        kind: Set(form.kind.clone()),
+        kind: Set(kind.into()),
         amount: Set(crypto::encrypt_cents(&key_of(&instance), amount_cents)),
-        currency: Set(account.currency.clone()),
-        note: Set(crypto::encrypt(&key_of(&instance), form.note.as_bytes())),
+        currency: Set(currency.into()),
+        note: Set(crypto::encrypt(&key_of(&instance), note.as_bytes())),
         status: Set("open".into()),
-        local_debt_request_id: Set(Some(local_id)),
-        account_id: Set(Some(form.account_id)),
+        local_debt_request_id: Set(Some(local_request_id)),
+        account_id: Set(Some(account_id)),
         person_id: Set(Some(person_id)),
         remote_status: Set(String::new()),
         remote_status_at: Set(None),
@@ -447,20 +437,19 @@ pub async fn create_request(
     .await
     .map_err(err500)?;
     let payload = json!({
-        "kind": form.kind,
+        "kind": kind,
         "amount_cents": amount_cents,
-        "currency": account.currency,
-        "note": form.note,
-        "paid_at": form.paid_at,
+        "currency": currency,
+        "note": note,
     });
-    let sync_error = match push_event(&state, &instance, &request, "created", payload).await {
+    let sync_error = match push_event(state, &instance, &request, "created", payload).await {
         Ok(()) => String::new(),
         Err(error) => error,
     };
     let mut active = request.into_active_model();
-    active.sync_error = Set(sync_error.clone());
+    active.sync_error = Set(sync_error);
     active.update(&state.db).await.map_err(err500)?;
-    Ok(Json(json!({ "ok": true, "sync_error": sync_error })))
+    Ok(())
 }
 
 /// 推送事件：先写本地事件链，再调用对方实例；失败时返回原因供重试。

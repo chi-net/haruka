@@ -74,6 +74,7 @@ struct AccountOption {
 struct PersonOption {
     id: i64,
     name: String,
+    linked_domain: String,
 }
 
 struct OriginOption {
@@ -1126,6 +1127,15 @@ pub async fn new_form(
             currency: item.currency,
         })
         .collect();
+    let linked_instances: std::collections::HashMap<i64, String> =
+        crate::entity::linked_instance::Entity::find()
+            .filter(crate::entity::linked_instance::Column::Status.eq("paired"))
+            .all(&state.db)
+            .await
+            .map_err(err500)?
+            .into_iter()
+            .filter_map(|instance| instance.person_id.map(|id| (id, instance.domain)))
+            .collect();
     let people: Vec<PersonOption> = debt_person::Entity::find()
         .order_by_asc(debt_person::Column::Id)
         .all(&state.db)
@@ -1135,6 +1145,10 @@ pub async fn new_form(
         .map(|person| PersonOption {
             id: person.id,
             name: crypto::decrypt_string(&dek, &person.name),
+            linked_domain: linked_instances
+                .get(&person.id)
+                .cloned()
+                .unwrap_or_default(),
         })
         .collect();
     let settled_origins = settled_amounts(&state, &dek).await?;
@@ -1383,7 +1397,7 @@ pub async fn create(
     let created = debt_request::ActiveModel {
         person_id: Set(person_id),
         account_id: Set(account.id),
-        kind: Set(form.kind),
+        kind: Set(form.kind.clone()),
         requires_confirmation: Set(requires_confirmation),
         origin_debt_record_id: Set(form.origin_debt_record_id),
         proof_version: Set(2),
@@ -1420,6 +1434,18 @@ pub async fn create(
     .await
     .map_err(err500)?;
     transaction.commit().await.map_err(err500)?;
+    // 借贷对象绑定了配对实例时，统一在新建请求后同步镜像到对方实例。
+    super::federation::mirror_after_create(
+        &state,
+        person_id,
+        created.id,
+        account.id,
+        &form.kind,
+        amount_cents,
+        &account.currency,
+        form.note.trim(),
+    )
+    .await?;
     Ok(Redirect::to(&format!(
         "/debt-requests?created={}",
         created.id

@@ -389,6 +389,7 @@ pub async fn init() -> DatabaseConnection {
             .await
             .expect("建联邦配对与请求表失败");
     }
+    ensure_column(&db, "linked_instances", "person_id", "INTEGER").await;
     ensure_column(
         &db,
         "debt_requests",

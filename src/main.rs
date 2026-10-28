@@ -750,10 +750,6 @@ async fn main() {
             post(handlers::federation::pair_join),
         )
         .route(
-            "/debt-links/requests",
-            post(handlers::federation::create_request),
-        )
-        .route(
             "/debt-links/requests/{id}/confirm",
             post(handlers::federation::confirm_request),
         )

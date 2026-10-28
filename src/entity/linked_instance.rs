@@ -9,6 +9,8 @@ pub struct Model {
     pub domain: String,
     /// 我方对外域名（配对时确定），明文。
     pub self_domain: String,
+    /// 绑定的本地借贷对象（debt_people.id），配对时按对方域名建立。
+    pub person_id: Option<i64>,
     /// 对方角色：creditor（对方是我的债权人）/ debtor（对方是我的借款人）。
     pub role: String,
     /// "pending"（等待对方验证）/ "paired"（已绑定）。
