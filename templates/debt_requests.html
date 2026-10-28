@@ -39,5 +39,153 @@
 {% endfor %}
 </div>
 {% endif %}
+
+<section class="mt-8 bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+  <h2 class="font-medium">Haruka 实例配对</h2>
+  <p class="text-sm text-gray-500 mt-1">与其他 Haruka 用户绑定后，可在双方实例间同步借还请求、查询进度与催款。握手与事件数据均加密，双方各自存储并验证事件哈希链。</p>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+    <div class="border border-gray-200 rounded-lg p-3">
+      <h3 class="text-sm font-medium">① 生成配对码（我是账主）</h3>
+      <label class="block text-xs text-gray-500 mt-2 mb-1" for="pair-start-domain">对方实例域名</label>
+      <input id="pair-start-domain" placeholder="haruka.example.com" class="w-full rounded border bg-white px-3 py-2 text-sm">
+      <button id="pair-start-btn" type="button" class="mt-2 rounded-lg bg-blue-700 px-3 py-2 text-sm font-semibold text-white">生成配对码</button>
+      <div id="pair-start-result" class="text-sm mt-2 break-all"></div>
+    </div>
+    <div class="border border-gray-200 rounded-lg p-3">
+      <h3 class="text-sm font-medium">② 验证绑定（我收到配对码）</h3>
+      <label class="block text-xs text-gray-500 mt-2 mb-1" for="pair-join-domain">对方实例域名</label>
+      <input id="pair-join-domain" placeholder="对方域名" class="w-full rounded border bg-white px-3 py-2 text-sm">
+      <label class="block text-xs text-gray-500 mt-2 mb-1" for="pair-join-code">配对码</label>
+      <input id="pair-join-code" placeholder="粘贴对方发来的配对码" class="w-full rounded border bg-white px-3 py-2 text-sm">
+      <button id="pair-join-btn" type="button" class="mt-2 rounded-lg bg-green-700 px-3 py-2 text-sm font-semibold text-white">验证并绑定</button>
+      <div id="pair-join-result" class="text-sm mt-2"></div>
+    </div>
+  </div>
+  {% if !linked_instances.is_empty() %}
+  <ul class="mt-4 space-y-1 text-sm">
+    {% for instance in linked_instances %}
+    <li class="flex flex-wrap gap-2 items-center"><span class="font-mono">{{ instance.domain }}</span><span class="text-xs text-gray-500">{% if instance.status == "paired" %}已绑定{% if instance.role == "creditor" %}（对方是我的债权人）{% else %}（对方是我的借款人）{% endif %} · {{ instance.paired_at }}{% else %}等待对方验证{% endif %}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+
+<section class="mt-6 bg-white rounded-xl border border-gray-200 p-5 shadow-sm">
+  <h2 class="font-medium">实例间借还</h2>
+  <p class="text-sm text-gray-500 mt-1">创建后本地立即入账并加密推送到对方实例；对方确认后可各自入账，双方事件链分别验证。</p>
+  <form id="fed-create-form" class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div><label class="block text-xs font-medium mb-1">对方实例</label><select id="fed-instance" required class="w-full rounded border bg-white px-3 py-2 text-sm">{% for instance in linked_instances %}{% if instance.status == "paired" %}<option value="{{ instance.id }}">{{ instance.domain }}</option>{% endif %}{% endfor %}</select></div>
+    <div><label class="block text-xs font-medium mb-1">方向（本方视角）</label><select id="fed-kind" class="w-full rounded border bg-white px-3 py-2 text-sm"><option value="borrow">我向对方借入</option><option value="lend">我借给对方</option></select></div>
+    <div><label class="block text-xs font-medium mb-1">我的资金账户</label><select id="fed-account" required class="w-full rounded border bg-white px-3 py-2 text-sm">{% for account in repayment_accounts %}<option value="{{ account.id }}">{{ account.name }} · {{ account.currency }}</option>{% endfor %}</select></div>
+    <div><label class="block text-xs font-medium mb-1">金额</label><input id="fed-amount" type="number" step="0.01" min="0.01" required class="w-full rounded border bg-white px-3 py-2 text-sm"></div>
+    <div><label class="block text-xs font-medium mb-1">实际收付时间</label><input id="fed-paid-at" type="datetime-local" required class="w-full rounded border bg-white px-3 py-2 text-sm"></div>
+    <div><label class="block text-xs font-medium mb-1">说明</label><input id="fed-note" class="w-full rounded border bg-white px-3 py-2 text-sm"></div>
+    <div class="sm:col-span-2"><button type="submit" class="rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white">创建并推送到对方实例</button><span id="fed-create-result" class="text-sm ml-2"></span></div>
+  </form>
+
+  <div class="space-y-3 mt-5">
+    {% for request in federated %}
+    <article class="border border-gray-200 rounded-lg p-4">
+      <div class="flex flex-wrap items-start justify-between gap-2">
+        <div><h3 class="text-sm font-medium">{% if request.kind == "borrow" %}我借入{% else %}我借出{% endif %} · {{ request.amount }}</h3><p class="text-xs text-gray-500 mt-1">{{ request.instance_domain }} · {% if request.origin == "local" %}本方创建{% else %}对方创建{% endif %}{% if request.local_debt_request_id.is_some() %} · 已入账{% endif %}</p></div>
+        <span class="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold">{% if request.status == "open" %}待确认{% else if request.status == "confirmed" %}已确认{% else %}已结清{% endif %}</span>
+      </div>
+      {% if !request.note.is_empty() %}<p class="text-sm text-gray-600 mt-2 whitespace-pre-wrap">{{ request.note }}</p>{% endif %}
+      <p class="text-xs text-gray-500 mt-2">{% if !request.remote_status.is_empty() %}对方状态：{{ request.remote_status }}（{{ request.remote_status_at }}）{% else %}对方状态未同步{% endif %}{% if !request.last_reminded_at.is_empty() %} · 最近催款：{{ request.last_reminded_at }}{% endif %}</p>
+      {% if !request.sync_error.is_empty() %}<p class="text-xs text-red-600 mt-1">同步异常：{{ request.sync_error }}</p>{% endif %}
+      <div class="flex flex-wrap gap-2 mt-3 text-sm">
+        {% if request.origin == "remote" && request.status == "open" %}
+        <button type="button" data-fed-action="confirm" data-fed-id="{{ request.id }}" class="rounded-lg bg-green-700 px-3 py-1.5 text-white">确认收付（可选同时入账）</button>
+        {% endif %}
+        <button type="button" data-fed-action="status" data-fed-id="{{ request.id }}" class="rounded-lg border border-blue-300 px-3 py-1.5 text-blue-800">查询对方进度</button>
+        <button type="button" data-fed-action="remind" data-fed-id="{{ request.id }}" class="rounded-lg border border-amber-400 px-3 py-1.5 text-amber-900">催促对方</button>
+        {% if request.status != "settled" %}<button type="button" data-fed-action="settle" data-fed-id="{{ request.id }}" class="rounded-lg border border-gray-400 px-3 py-1.5">结清</button>{% endif %}
+      </div>
+      <p class="text-xs mt-2" id="fed-result-{{ request.id }}"></p>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+
+<script>
+const fedResult = (id, message, isError) => {
+  const element = document.getElementById(id);
+  element.textContent = message;
+  element.className = isError ? 'text-xs mt-2 text-red-600' : 'text-xs mt-2 text-green-700';
+};
+document.getElementById('pair-start-btn').addEventListener('click', async () => {
+  const domain = document.getElementById('pair-start-domain').value;
+  try {
+    const response = await fetch('/debt-links/pair/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ domain }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '生成失败');
+    document.getElementById('pair-start-result').innerHTML = `配对码（24 小时内有效，请发送给对方）：<code class="select-all font-mono font-bold">${data.code}</code>`;
+  } catch (error) { document.getElementById('pair-start-result').textContent = String(error.message || error); }
+});
+document.getElementById('pair-join-btn').addEventListener('click', async () => {
+  try {
+    const response = await fetch('/debt-links/pair/join', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        domain: document.getElementById('pair-join-domain').value,
+        code: document.getElementById('pair-join-code').value,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '绑定失败');
+    document.getElementById('pair-join-result').textContent = '绑定成功，正在刷新…';
+    window.location.reload();
+  } catch (error) { document.getElementById('pair-join-result').textContent = String(error.message || error); }
+});
+const nowLocal = () => {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 16);
+};
+document.getElementById('fed-paid-at').value = nowLocal();
+document.getElementById('fed-create-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  try {
+    const response = await fetch('/debt-links/requests', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instance_id: Number(document.getElementById('fed-instance').value),
+        kind: document.getElementById('fed-kind').value,
+        account_id: Number(document.getElementById('fed-account').value),
+        amount: document.getElementById('fed-amount').value,
+        note: document.getElementById('fed-note').value,
+        paid_at: new Date(document.getElementById('fed-paid-at').value).toISOString().slice(0, 16),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '创建失败');
+    fedResult('fed-create-result', data.sync_error ? `已创建，但推送失败：${data.sync_error}` : '已创建并推送，正在刷新…', Boolean(data.sync_error));
+    if (!data.sync_error) window.location.reload();
+  } catch (error) { fedResult('fed-create-result', String(error.message || error), true); }
+});
+document.querySelectorAll('[data-fed-action]').forEach(button => {
+  button.addEventListener('click', async () => {
+    const id = button.dataset.fedId;
+    const action = button.dataset.fedAction;
+    const body = {};
+    if (action === 'confirm') {
+      body.paid_at = new Date().toISOString().slice(0, 16);
+      body.account_id = Number(document.getElementById('fed-account').value);
+    }
+    try {
+      const response = await fetch(`/debt-links/requests/${id}/${action}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || '操作失败');
+      fedResult(`fed-result-${id}`, data.sync_error ? `已处理，推送失败：${data.sync_error}` : (data.remote_status ? `对方状态：${data.remote_status}` : '已处理，正在刷新…'), Boolean(data.sync_error));
+      if (!data.sync_error) setTimeout(() => window.location.reload(), 600);
+    } catch (error) { fedResult(`fed-result-${id}`, String(error.message || error), true); }
+  });
+});
+</script>
 {% include "share_copy_script.html" %}
 {% endblock %}

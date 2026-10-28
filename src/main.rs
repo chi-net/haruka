@@ -6,6 +6,7 @@ mod currency;
 mod db;
 mod dev_log;
 mod entity;
+mod federation;
 mod financial_planning;
 mod handlers;
 mod installment_state;
@@ -737,6 +738,34 @@ async fn main() {
             "/settings/passkeys/{id}/delete",
             post(handlers::passkeys::delete),
         )
+        .route(
+            "/debt-links/pair/start",
+            post(handlers::federation::pair_start),
+        )
+        .route(
+            "/debt-links/pair/join",
+            post(handlers::federation::pair_join),
+        )
+        .route(
+            "/debt-links/requests",
+            post(handlers::federation::create_request),
+        )
+        .route(
+            "/debt-links/requests/{id}/confirm",
+            post(handlers::federation::confirm_request),
+        )
+        .route(
+            "/debt-links/requests/{id}/status",
+            post(handlers::federation::sync_status),
+        )
+        .route(
+            "/debt-links/requests/{id}/remind",
+            post(handlers::federation::remind),
+        )
+        .route(
+            "/debt-links/requests/{id}/settle",
+            post(handlers::federation::settle_request),
+        )
         .route("/lock", post(handlers::auth::lock))
         // 先合并开发者路由再统一挂解锁中间件，保证 SessionDek 注入覆盖全部路由。
         .merge(developer)
@@ -786,6 +815,15 @@ async fn main() {
             post(handlers::debt_requests::account_identifier),
         )
         .route("/r/{token}/verify", post(handlers::debt_requests::verify))
+        .route("/debt-link/pair", post(handlers::federation::receive_pair))
+        .route(
+            "/debt-link/events",
+            post(handlers::federation::receive_events),
+        )
+        .route(
+            "/debt-link/status",
+            post(handlers::federation::receive_status),
+        )
         .route("/api/sms", post(handlers::investments::receive_sms))
         .merge(protected)
         .with_state(state)

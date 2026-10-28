@@ -24,7 +24,7 @@ use crate::{
 };
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
-const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
+pub(crate) const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
 const REQUEST_KEY_CONTEXT: &[u8] = b"haruka debt request key v1\0";
 const DIGEST_CONTEXT: &[u8] = b"haruka debt request verification chain v1\0";
 
@@ -145,6 +145,8 @@ struct DebtRequestsTemplate {
     requests: Vec<RequestView>,
     repayment_accounts: Vec<RepaymentAccountOption>,
     default_repayment_at: String,
+    linked_instances: Vec<super::federation::InstanceView>,
+    federated: Vec<super::federation::FedRequestView>,
 }
 
 #[derive(Template)]
@@ -214,22 +216,22 @@ struct UnavailableTemplate {}
 
 #[derive(Deserialize)]
 pub struct CreateRequestForm {
-    kind: String,
+    pub(crate) kind: String,
     #[serde(default)]
-    person_id: i64,
-    account_id: i64,
-    amount: String,
-    recipient_name: String,
+    pub(crate) person_id: i64,
+    pub(crate) account_id: i64,
+    pub(crate) amount: String,
+    pub(crate) recipient_name: String,
     #[serde(default)]
-    note: String,
-    expires_at: String,
+    pub(crate) note: String,
+    pub(crate) expires_at: String,
     /// Omitted by legacy clients means the old, confirmation-required policy.
     #[serde(default)]
-    requires_confirmation: Option<bool>,
+    pub(crate) requires_confirmation: Option<bool>,
     #[serde(default)]
-    origin_debt_record_id: Option<i64>,
+    pub(crate) origin_debt_record_id: Option<i64>,
     #[serde(default)]
-    paid_at: String,
+    pub(crate) paid_at: String,
 }
 
 #[derive(Deserialize)]
@@ -749,7 +751,7 @@ fn booking_chain_head(request: &debt_request::Model) -> &[u8] {
     }
 }
 
-fn parse_amount(value: &str) -> HandlerResult<i64> {
+pub(crate) fn parse_amount(value: &str) -> HandlerResult<i64> {
     let decimal = Decimal::from_str(value.trim())
         .map_err(|_| bad_request("金额格式不正确"))?
         .round_dp(2);
@@ -1582,11 +1584,14 @@ pub async fn list(
             origin_debt_record_id: request.origin_debt_record_id.unwrap_or_default(),
         });
     }
+    let (linked_instances, federated) = super::federation::load_views(&state).await?;
     Ok(Html(
         DebtRequestsTemplate {
             requests: views,
             repayment_accounts,
             default_repayment_at: Utc::now().format(TIME_FMT).to_string(),
+            linked_instances,
+            federated,
         }
         .render()
         .map_err(err500)?,

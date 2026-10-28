@@ -380,6 +380,15 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_debt_requests.if_not_exists()))
         .await
         .expect("建借还请求表失败");
+    for mut entity in [
+        schema.create_table_from_entity(crate::entity::linked_instance::Entity),
+        schema.create_table_from_entity(crate::entity::federated_request::Entity),
+        schema.create_table_from_entity(crate::entity::federated_event::Entity),
+    ] {
+        db.execute(builder.build(entity.if_not_exists()))
+            .await
+            .expect("建联邦配对与请求表失败");
+    }
     ensure_column(
         &db,
         "debt_requests",

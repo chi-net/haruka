@@ -11,6 +11,7 @@ pub mod debts;
 pub mod developer;
 pub(crate) mod fees;
 pub mod finance;
+pub mod federation;
 pub mod funds;
 pub mod installments;
 pub mod investments;
