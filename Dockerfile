@@ -23,6 +23,7 @@ RUN apt-get update \
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./
 COPY src ./src
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -34,6 +35,7 @@ RUN cargo chef cook --locked --release --recipe-path recipe.json
 FROM dependencies AS builder
 
 COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./
 COPY src ./src
 COPY templates ./templates
 COPY --from=web-assets /app/static ./static
