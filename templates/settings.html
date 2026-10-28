@@ -154,17 +154,29 @@ document.getElementById('settings-update-btn').addEventListener('click', async (
     }
   } catch (error) { result.textContent = '检查更新失败：' + error; }
 });
+</script>
 
 {% if !developer_enabled %}
 <script>
-// Konami 隐藏开启：仅在未开启时注册，IIFE + armed 标记避免 htmx 重复执行报错。
+// Konami 隐藏开启：捕获阶段监听 + code/key 双兼容，覆盖 Firefox/macOS。
 (() => {
   if (window.harukaKonamiArmed) return;
   window.harukaKonamiArmed = true;
   const sequence = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'KeyA', 'KeyB', 'KeyA', 'KeyB'];
+  const matches = (event, expected) => {
+    if (event.code === expected) return true;
+    const key = (event.key || '').toLowerCase();
+    if (expected.startsWith('Arrow')) return key === expected.toLowerCase();
+    return key === expected.slice(3).toLowerCase();
+  };
   let index = 0;
   document.addEventListener('keydown', async event => {
-    index = event.code === sequence[index] ? index + 1 : (event.code === sequence[0] ? 1 : 0);
+    if (matches(event, sequence[index])) {
+      event.preventDefault();
+      index += 1;
+    } else {
+      index = matches(event, sequence[0]) ? 1 : 0;
+    }
     if (index !== sequence.length) return;
     index = 0;
     try {
@@ -173,10 +185,9 @@ document.getElementById('settings-update-btn').addEventListener('click', async (
         window.location.assign('/developer');
       }
     } catch (_) { /* 网络失败时保持未开启状态，可重新输入 */ }
-  });
+  }, true);
 })();
 </script>
 {% endif %}
 
-</script>
 {% endblock %}
