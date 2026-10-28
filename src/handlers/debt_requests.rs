@@ -897,7 +897,7 @@ pub(super) async fn settled_amounts(
         let id = request
             .confirmed_debt_record_id
             .ok_or_else(|| err500("结清记录缺少原借款"))?;
-        if amount <= 0 || amounts.insert(id, amount).is_some() {
+        if amount < 0 || amounts.insert(id, amount).is_some() {
             return Err(err500("借款结清金额或关联异常"));
         }
     }
@@ -1862,8 +1862,10 @@ pub async fn settle(
         Some(original.id),
     )
     .await?;
-    if amount <= 0 {
-        return Err(bad_request("没有待结清金额，无需强制平账"));
+    // 历史还款流水可能已把对象净额或本笔剩余抵消为零：仍允许以零金额
+    // 单方结清，给已入账原借款打上不可撤销的终结标记，不重复扣减汇总。
+    if amount < 0 {
+        return Err(err500("待结清金额不能为负"));
     }
     let token = crypto::decrypt_string(&dek, &request.token);
     let bytes = decode_token(&token).ok_or_else(|| err500("请求令牌无法解密"))?;

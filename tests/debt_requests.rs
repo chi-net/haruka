@@ -1248,8 +1248,34 @@ async fn forced_settlement_closes_remaining_debt_without_faking_money_or_counter
     );
     app.book("repayment_paid", account, person, "3", Some(new_origin))
         .await;
+    // 还款流水已全额抵消的借款允许以零金额单方结清，只追加终结标记，
+    // 不重复扣减对象净额；零金额结清同样封死后续还款。
     assert_eq!(
         app.settle(new_loan, "").await.status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        crypto::decrypt_cents(
+            &app.dek,
+            &app
+                .row(new_loan)
+                .await
+                .try_get::<String>("", "settled_amount")
+                .unwrap()
+        ),
+        0
+    );
+    assert_eq!(
+        app.create(
+            "repayment_paid",
+            account,
+            person,
+            "0.01",
+            Some(false),
+            Some(new_origin)
+        )
+        .await
+        .status(),
         StatusCode::BAD_REQUEST
     );
     assert!(app
@@ -1378,4 +1404,84 @@ async fn foreign_currency_settlement_nets_before_conversion_without_rounding_deb
         .await
         .unwrap()
         .contains("回归对象"));
+}
+
+#[tokio::test]
+async fn forced_settlement_marks_zero_remaining_loan_closed() {
+    let app = App::start().await;
+    let account = app.account("CNY").await;
+    let person = app.person().await;
+    app.force_balance(account, "400").await;
+    // 场景一：原借款已被关联还款全额入账抵消（用户在系统外另行归还）
+    let (borrow, borrowed) = app.book("borrow", account, person, "308.08", None).await;
+    app.book("repayment_paid", account, person, "308.08", Some(borrowed))
+        .await;
+    let response = app.settle(borrow, "已另行归还，单方结清").await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let closed = app.row(borrow).await;
+    assert_eq!(
+        crypto::decrypt_cents(
+            &app.dek,
+            &closed.try_get::<String>("", "settled_amount").unwrap()
+        ),
+        0
+    );
+    assert!(closed
+        .try_get::<Option<DateTime<Utc>>>("", "settled_at")
+        .unwrap()
+        .is_some());
+    // 结清金额为零，不重复扣减对象净额
+    assert!(!app
+        .get("/debt-people/search?min_payable=0.01", true)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("回归对象"));
+    assert!(app
+        .get("/debt-people/search?relationship=settled", true)
+        .await
+        .text()
+        .await
+        .unwrap()
+        .contains("回归对象"));
+    // 重复平账幂等
+    assert_eq!(
+        app.settle(borrow, "重复不应覆盖").await.status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(
+        crypto::decrypt_cents(
+            &app.dek,
+            &app.row(borrow)
+                .await
+                .try_get::<String>("", "settled_amount")
+                .unwrap()
+        ),
+        0
+    );
+    // 结清后禁止继续对本笔还款
+    assert_eq!(
+        app.create("repayment_paid", account, person, "0.01", Some(false), Some(borrowed))
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+
+    // 场景二：对象级净额被历史遗留的无关联还款流水压平，本笔剩余同样允许平账
+    let (borrow2, _) = app.book("borrow", account, person, "50", None).await;
+    app.historical_record("repayment_paid", person, account, 5000)
+        .await;
+    let response = app.settle(borrow2, "净额已平").await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        crypto::decrypt_cents(
+            &app.dek,
+            &app.row(borrow2)
+                .await
+                .try_get::<String>("", "settled_amount")
+                .unwrap()
+        ),
+        0
+    );
 }
