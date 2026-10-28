@@ -8,6 +8,7 @@ pub mod currencies;
 pub mod dashboard;
 pub mod debt_requests;
 pub mod debts;
+pub mod developer;
 pub(crate) mod fees;
 pub mod finance;
 pub mod funds;
@@ -154,7 +155,7 @@ pub async fn render_error_response(request: Request, next: Next) -> Response {
         ),
     };
     if status.is_server_error() {
-        eprintln!("请求处理失败（{}）: {message}", status.as_u16());
+        crate::dev_log::error(format!("请求处理失败（{}）: {message}", status.as_u16()));
     }
 
     let rendered = if is_sms_webhook || accepts_json || sends_json || is_htmx {

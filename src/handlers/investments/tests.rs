@@ -44,6 +44,9 @@ impl Fixture {
         .unwrap();
         let state = AppState {
             db,
+            developer_sessions: Default::default(),
+            started_at: std::time::Instant::now(),
+            listen_addr: "127.0.0.1:3000".into(),
             sessions: Default::default(),
             password_attempts: Default::default(),
             privacy: Default::default(),

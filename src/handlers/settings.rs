@@ -40,6 +40,8 @@ struct SettingsTemplate {
     recovery_configured: bool,
     passkeys: Vec<PasskeyRow>,
     footer: Arc<crate::site_footer::FooterConfig>,
+    version: String,
+    developer_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +64,7 @@ pub struct SmsTokenFormData {
 pub async fn show(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
+    headers: axum::http::HeaderMap,
 ) -> HandlerResult<Html<String>> {
     let recovery_configured = recovery::Entity::find_by_id(1)
         .one(&state.db)
@@ -94,10 +97,32 @@ pub async fn show(
         recovery_configured,
         passkeys,
         footer: crate::site_footer::current(),
+        version: crate::version::display(),
+        developer_enabled: state.is_developer(&headers),
     }
     .render()
     .map_err(err500)?;
     Ok(Html(html))
+}
+/// 设置页 Konami 序列（上上下下左左右右ABAB）校验通过后开启开发者模式。
+pub async fn enable_developer(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> HandlerResult<axum::Json<serde_json::Value>> {
+    if !state.enable_developer(&headers) {
+        return Err(bad_request("当前会话无效，请重新解锁后再开启开发者模式"));
+    }
+    crate::dev_log::info("开发者模式已在当前会话开启");
+    Ok(axum::Json(serde_json::json!({ "ok": true })))
+}
+
+/// 手动触发 GitHub 更新检查；结果包含是否落后与最新提交信息。
+pub async fn check_updates(
+    State(state): State<AppState>,
+) -> HandlerResult<axum::Json<crate::version::UpdateStatus>> {
+    Ok(axum::Json(
+        crate::version::check_updates(&state.fx_client).await,
+    ))
 }
 
 pub async fn update_footer(

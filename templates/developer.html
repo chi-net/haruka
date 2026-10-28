@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}开发者模式 - Haruka{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-xl font-bold">开发者模式</h1>
+  <a href="/settings" class="text-blue-600 hover:underline text-sm">返回设置</a>
+</div>
+<p class="text-sm text-amber-800 bg-amber-50 border border-amber-300 rounded p-3 mb-5">本页仅供本机排障。直接修改数据库或执行 SQL 可能破坏余额、验证链与加密一致性；操作前请备份数据库文件。</p>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium mb-2">软件信息</h2>
+  <dl class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-sm">
+    <div><dt class="inline text-gray-500">版本：</dt><dd class="inline font-mono">{{ version }}</dd></div>
+    <div><dt class="inline text-gray-500">提交计数：</dt><dd class="inline font-mono">{{ commit_count }}</dd></div>
+    <div class="sm:col-span-2"><dt class="inline text-gray-500">Commit ID：</dt><dd class="inline font-mono break-all">{{ commit_sha }}</dd></div>
+    <div><dt class="inline text-gray-500">监听地址：</dt><dd class="inline font-mono">{{ listen_addr }}</dd></div>
+    <div><dt class="inline text-gray-500">运行平台：</dt><dd class="inline font-mono">{{ os }} / {{ arch }}</dd></div>
+    <div class="sm:col-span-2"><dt class="inline text-gray-500">数据库：</dt><dd class="inline font-mono break-all">{{ database_url }}</dd></div>
+    <div><dt class="inline text-gray-500">本次运行：</dt><dd class="inline font-mono">{{ started_seconds }} 秒</dd></div>
+  </dl>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <div class="flex items-center justify-between mb-2">
+    <h2 class="font-medium">检查更新</h2>
+    <button id="update-check-btn" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">检查更新</button>
+  </div>
+  <p id="update-check-result" class="text-sm text-gray-600">比较本地 commit 与 GitHub 远程 main（结果缓存 1 小时）。</p>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <div class="flex items-center justify-between mb-2">
+    <h2 class="font-medium">内存与 CPU</h2>
+    <button id="metrics-refresh" class="text-blue-600 text-sm hover:underline">刷新</button>
+  </div>
+  <pre id="metrics-output" class="text-xs font-mono bg-gray-50 rounded p-3 whitespace-pre-wrap break-all">加载中…</pre>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <div class="flex items-center justify-between mb-2">
+    <h2 class="font-medium">调用栈</h2>
+    <button id="backtrace-btn" class="bg-gray-700 text-white text-sm px-3 py-1.5 rounded hover:bg-gray-800">捕获当前请求线程调用栈</button>
+  </div>
+  <pre id="backtrace-output" class="text-xs font-mono bg-gray-50 rounded p-3 whitespace-pre-wrap break-all max-h-96 overflow-auto">Rust 无法可移植地枚举其他线程栈；这里捕获处理本次请求的线程。</pre>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <div class="flex items-center justify-between mb-2">
+    <h2 class="font-medium">进程日志（最近 500 条，内存缓冲）</h2>
+    <button id="logs-refresh" class="text-blue-600 text-sm hover:underline">刷新</button>
+  </div>
+  <pre id="logs-output" class="text-xs font-mono bg-gray-50 rounded p-3 whitespace-pre-wrap break-all max-h-96 overflow-auto">加载中…</pre>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium mb-2">数据库表（解密视图与编辑）</h2>
+  <p class="text-xs text-gray-500 mb-3">DEK 加密列显示解密后的明文；独立密钥列（分享快照、请求证明、恢复密钥）不可在此解密。</p>
+  <div class="flex flex-wrap gap-2 text-sm">
+    {% for table in tables %}<a href="/developer/db/{{ table }}" class="font-mono bg-gray-100 hover:bg-blue-100 rounded px-2 py-1">{{ table }}</a>{% endfor %}
+  </div>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <h2 class="font-medium mb-2">SQL 执行器</h2>
+  <p class="text-xs text-gray-500 mb-2">单条语句；SELECT/WITH/EXPLAIN/PRAGMA/VALUES 走查询，其余为写入。查询结果原样显示（密文不解密，请用上方表格视图）。</p>
+  <textarea id="sql-input" rows="4" class="block w-full font-mono text-sm border border-gray-300 rounded px-3 py-2" placeholder="SELECT * FROM bills LIMIT 10;"></textarea>
+  <label class="flex items-center gap-2 text-sm my-2"><input id="sql-confirm" type="checkbox" class="w-4 h-4">我确认执行写入或结构变更语句（可能导致数据损坏）</label>
+  <button id="sql-run" class="bg-red-700 text-white text-sm px-3 py-1.5 rounded hover:bg-red-800">执行 SQL</button>
+  <pre id="sql-result" class="text-xs font-mono bg-gray-50 rounded p-3 whitespace-pre-wrap break-all max-h-96 overflow-auto mt-3" hidden></pre>
+</section>
+
+<script>
+const fmtBytes = value => {
+  if (value === undefined || value === null) return '—';
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let size = value, index = 0;
+  while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1; }
+  return size.toFixed(index === 0 ? 0 : 1) + ' ' + units[index];
+};
+const fmtSeconds = value => {
+  const days = Math.floor(value / 86400), hours = Math.floor(value % 86400 / 3600), minutes = Math.floor(value % 3600 / 60);
+  return `${days}天 ${hours}时 ${minutes}分`;
+};
+async function loadMetrics() {
+  const output = document.getElementById('metrics-output');
+  try {
+    const response = await fetch('/developer/metrics', { cache: 'no-store' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    output.textContent = [
+      `进程：PID ${data.process.pid} · 状态 ${data.process.status} · 已运行 ${fmtSeconds(data.process.run_seconds)}`,
+      `进程内存：RSS ${fmtBytes(data.process.rss_bytes)} · 虚拟 ${fmtBytes(data.process.virtual_bytes)}`,
+      `进程 CPU：${data.process.cpu_percent.toFixed(1)}%`,
+      `系统内存：已用 ${fmtBytes(data.system.used_memory)} / 总计 ${fmtBytes(data.system.total_memory)}（可用 ${fmtBytes(data.system.available_memory)}）`,
+      `系统 CPU：${data.system.cpu_percent.toFixed(1)}% · ${data.system.cores} 核`,
+      `负载（1/5/15 分钟）：${data.system.load_one.toFixed(2)} / ${data.system.load_five.toFixed(2)} / ${data.system.load_fifteen.toFixed(2)}`,
+      `系统运行：${fmtSeconds(data.system.uptime_seconds)} · haruka 本次运行：${fmtSeconds(data.app.started_seconds)}`,
+      `开发者会话数：${data.app.developer_sessions}`,
+    ].join('\n');
+  } catch (error) { output.textContent = '读取失败：' + error; }
+}
+document.getElementById('metrics-refresh').addEventListener('click', loadMetrics);
+loadMetrics();
+
+async function loadLogs() {
+  const output = document.getElementById('logs-output');
+  try {
+    const response = await fetch('/developer/logs', { cache: 'no-store' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    output.textContent = data.entries.length === 0
+      ? '暂无日志'
+      : data.entries.map(entry => `${entry.at} [${entry.level}] ${entry.message}`).join('\n');
+  } catch (error) { output.textContent = '读取失败：' + error; }
+}
+document.getElementById('logs-refresh').addEventListener('click', loadLogs);
+loadLogs();
+
+document.getElementById('backtrace-btn').addEventListener('click', async () => {
+  const output = document.getElementById('backtrace-output');
+  output.textContent = '捕获中…';
+  try {
+    const response = await fetch('/developer/backtrace', { cache: 'no-store' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    output.textContent = data.thread + '\n\n' + data.backtrace;
+  } catch (error) { output.textContent = '捕获失败：' + error; }
+});
+
+document.getElementById('update-check-btn').addEventListener('click', async () => {
+  const result = document.getElementById('update-check-result');
+  result.textContent = '正在检查更新…';
+  try {
+    const response = await fetch('/developer/check-updates', { method: 'POST', cache: 'no-store' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    if (data.error) {
+      result.textContent = `当前版本 ${data.current}；${data.error}`;
+    } else if (data.behind_by === 0) {
+      result.textContent = `当前版本 ${data.current}，已是最新（检查时间 ${data.checked_at}）。`;
+    } else {
+      result.textContent = `发现新版本：当前 ${data.current}，落后远程 main ${data.behind_by} 个提交。最新提交 ${data.latest_sha}：${data.latest_message}。请拉取最新代码并重新构建部署。`;
+    }
+  } catch (error) { result.textContent = '检查更新失败：' + error; }
+});
+
+document.getElementById('sql-run').addEventListener('click', async () => {
+  const output = document.getElementById('sql-result');
+  output.hidden = false;
+  output.textContent = '执行中…';
+  try {
+    const response = await fetch('/developer/sql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sql: document.getElementById('sql-input').value,
+        confirm: document.getElementById('sql-confirm').checked,
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || ('HTTP ' + response.status));
+    if (data.kind === 'execute') {
+      output.textContent = `执行成功，影响行数：${data.affected}`;
+    } else {
+      const lines = [data.columns.join(' | ')];
+      for (const row of data.rows) lines.push(row.join(' | '));
+      if (data.truncated) lines.push('… 结果超过 500 行，已截断');
+      output.textContent = lines.length > 1 ? lines.join('\n') : '查询成功，无结果行';
+    }
+  } catch (error) { output.textContent = String(error.message || error); }
+});
+</script>
+{% endblock %}

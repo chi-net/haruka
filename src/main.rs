@@ -4,6 +4,7 @@ mod credit_statements;
 mod crypto;
 mod currency;
 mod db;
+mod dev_log;
 mod entity;
 mod financial_planning;
 mod handlers;
@@ -14,6 +15,7 @@ mod password_attempts;
 mod privacy;
 mod site_footer;
 mod sms_templates;
+mod version;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -127,6 +129,9 @@ pub struct SessionDek(pub Dek);
 #[derive(Clone)]
 pub struct AppState {
     pub db: DatabaseConnection,
+    pub developer_sessions: Arc<parking_lot::RwLock<std::collections::HashSet<String>>>,
+    pub started_at: Instant,
+    pub listen_addr: String,
     sessions: Arc<RwLock<HashMap<String, Dek>>>,
     pub(crate) password_attempts: Arc<tokio::sync::Mutex<password_attempts::Attempts>>,
     pub(crate) privacy: Arc<tokio::sync::Mutex<privacy::PrivacyState>>,
@@ -178,6 +183,23 @@ impl AppState {
 
     pub fn any_session_dek(&self) -> Option<Dek> {
         self.sessions.read().unwrap().values().next().cloned()
+    }
+    /// 设置页输入正确 Konami 序列后，为当前会话开启开发者模式（仅内存）。
+    pub fn enable_developer(&self, headers: &HeaderMap) -> bool {
+        let Some(token) = Self::session_token(headers) else {
+            return false;
+        };
+        if !self.sessions.read().unwrap().contains_key(token) {
+            return false;
+        }
+        self.developer_sessions.write().insert(token.to_string());
+        true
+    }
+
+    pub fn is_developer(&self, headers: &HeaderMap) -> bool {
+        Self::session_token(headers)
+            .map(|token| self.developer_sessions.read().contains(token))
+            .unwrap_or(false)
     }
 
     pub async fn sms_token_matches(&self, token: &str) -> Result<bool, sea_orm::DbErr> {
@@ -270,6 +292,14 @@ async fn require_unlock(State(state): State<AppState>, mut req: Request, next: N
     Redirect::to(target).into_response()
 }
 
+/// 开发者页与工具仅在当前会话通过设置页 Konami 序列开启开发者模式后可用。
+async fn require_developer(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    if state.is_developer(req.headers()) {
+        return next.run(req).await;
+    }
+    (axum::http::StatusCode::NOT_FOUND, "页面不存在").into_response()
+}
+
 async fn client_time_zone(mut req: Request, next: Next) -> Response {
     let zone = req
         .headers()
@@ -333,13 +363,16 @@ async fn main() {
         .ok()
         .filter(|token| !token.is_empty())
         .unwrap_or_else(|| {
-            eprintln!(
-                "警告：SMS_API_TOKEN 未配置，/api/sms 正在使用兼容令牌；对外部署前请设置随机长令牌"
+            crate::dev_log::warn(
+                "警告：SMS_API_TOKEN 未配置，/api/sms 正在使用兼容令牌；对外部署前请设置随机长令牌",
             );
             "AppleToken".to_string()
         });
     let state = AppState {
         db,
+        developer_sessions: Arc::new(parking_lot::RwLock::new(std::collections::HashSet::new())),
+        started_at: Instant::now(),
+        listen_addr: addr.clone(),
         sessions: Arc::new(RwLock::new(HashMap::new())),
         password_attempts: Arc::new(tokio::sync::Mutex::new(
             password_attempts::Attempts::default(),
@@ -367,6 +400,25 @@ async fn main() {
         passkey_authentications: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         passkey_repairs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     };
+    let developer = Router::new()
+        .route("/developer", get(handlers::developer::page))
+        .route("/developer/metrics", get(handlers::developer::metrics))
+        .route("/developer/logs", get(handlers::developer::logs))
+        .route("/developer/backtrace", get(handlers::developer::backtrace))
+        .route(
+            "/developer/check-updates",
+            post(handlers::developer::check_updates),
+        )
+        .route("/developer/db/{table}", get(handlers::developer::table_view))
+        .route(
+            "/developer/db/{table}/cell",
+            post(handlers::developer::update_cell),
+        )
+        .route("/developer/sql", post(handlers::developer::execute_sql))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_developer,
+        ));
 
     let protected = Router::new()
         .route("/privacy", get(privacy::show))
@@ -628,6 +680,14 @@ async fn main() {
             post(handlers::debt_requests::delete),
         )
         .route("/settings", get(handlers::settings::show))
+        .route(
+            "/settings/developer/enable",
+            post(handlers::settings::enable_developer),
+        )
+        .route(
+            "/settings/check-updates",
+            post(handlers::settings::check_updates),
+        )
         .route("/shares", get(handlers::shares::list))
         .route("/shares/{id}/delete", post(handlers::shares::delete))
         .route(
@@ -678,6 +738,8 @@ async fn main() {
             post(handlers::passkeys::delete),
         )
         .route("/lock", post(handlers::auth::lock))
+        // 先合并开发者路由再统一挂解锁中间件，保证 SessionDek 注入覆盖全部路由。
+        .merge(developer)
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_unlock,
@@ -736,7 +798,7 @@ async fn main() {
             eprintln!("无法监听 {addr}：{error}");
             process::exit(1);
         });
-    println!("haruka 已启动，监听地址: {addr}");
-    println!("Passkey 来源: {passkey_origin}（RP ID: {passkey_rp_id}）");
+    dev_log::info(format!("haruka 已启动，监听地址: {addr}"));
+    dev_log::info(format!("Passkey 来源: {passkey_origin}（RP ID: {passkey_rp_id}）"));
     axum::serve(listener, app).await.expect("服务器运行失败");
 }

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}数据表 {{ table }} - 开发者模式{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-xl font-bold font-mono">{{ table }}</h1>
+  <a href="/developer" class="text-blue-600 hover:underline text-sm">返回开发者模式</a>
+</div>
+<p class="text-sm text-amber-800 bg-amber-50 border border-amber-300 rounded p-3 mb-4">共 {{ total_records }} 行。点击单元格直接编辑，失焦或回车保存；加密列保存时自动用 DEK 重新加密。置 NULL 或复杂修改请使用 SQL 执行器。</p>
+
+<div class="overflow-x-auto bg-white border border-gray-200 rounded-lg">
+<table class="text-xs font-mono w-full">
+  <thead class="bg-gray-50">
+    <tr>{% for column in columns %}<th class="text-left px-2 py-2 border-b whitespace-nowrap">{{ column.label }}</th>{% endfor %}</tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr data-id="{{ row.id }}">
+      {% for cell in row.cells %}
+      <td class="border-b px-1 py-1 align-top">
+        {% if columns[loop.index0].is_pk %}
+        {% else %}
+        <input class="cell-input bg-transparent focus:bg-blue-50 rounded px-1 py-0.5 min-w-24 w-full" data-column="{{ columns[loop.index0].name }}" value="{{ cell }}">
+        {% endif %}
+      </td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if rows.is_empty() %}<p class="text-sm text-gray-500 mt-3">该表暂无数据。</p>{% endif %}
+
+<div class="flex gap-3 items-center text-sm mt-4">
+  {% if page > 1 %}<a href="/developer/db/{{ table }}?page={{ page - 1 }}" class="text-blue-600 hover:underline">上一页</a>{% endif %}
+  <span>第 {{ page }} / {{ total_pages }} 页</span>
+  {% if page < total_pages %}<a href="/developer/db/{{ table }}?page={{ page + 1 }}" class="text-blue-600 hover:underline">下一页</a>{% endif %}
+</div>
+
+<script>
+document.querySelectorAll('.cell-input').forEach(input => {
+  const original = input.value;
+  input.addEventListener('change', async () => {
+    if (input.value === original) return;
+    input.disabled = true;
+    try {
+      const response = await fetch(window.location.pathname + '/cell', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: Number(input.closest('tr').dataset.id),
+          column: input.dataset.column,
+          value: input.value,
+          null: false,
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || ('HTTP ' + response.status));
+      input.classList.add('bg-green-100');
+      setTimeout(() => window.location.reload(), 400);
+    } catch (error) {
+      input.value = original;
+      alert('保存失败：' + (error.message || error));
+      input.disabled = false;
+    }
+  });
+});
+</script>
+{% endblock %}
