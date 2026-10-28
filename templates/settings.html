@@ -130,9 +130,11 @@ document.getElementById('passkey-enroll-form').addEventListener('submit', async 
     <button id="settings-update-btn" type="button" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">检查更新</button>
   </div>
   <p id="settings-update-result" class="text-sm text-gray-600 mt-2"></p>
+  {% if developer_enabled %}
   <form method="post" action="/settings/developer/enable" class="mt-4 border-t border-gray-100 pt-4">
-    <button class="bg-gray-700 text-white text-sm px-3 py-1.5 rounded hover:bg-gray-800">{% if developer_enabled %}进入开发者模式{% else %}开发者模式{% endif %}</button>
+    <button class="bg-gray-700 text-white text-sm px-3 py-1.5 rounded hover:bg-gray-800">开发者模式</button>
   </form>
+  {% endif %}
 </section>
 
 <script>
@@ -152,6 +154,29 @@ document.getElementById('settings-update-btn').addEventListener('click', async (
     }
   } catch (error) { result.textContent = '检查更新失败：' + error; }
 });
+
+{% if !developer_enabled %}
+<script>
+// Konami 隐藏开启：仅在未开启时注册，IIFE + armed 标记避免 htmx 重复执行报错。
+(() => {
+  if (window.harukaKonamiArmed) return;
+  window.harukaKonamiArmed = true;
+  const sequence = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'KeyA', 'KeyB', 'KeyA', 'KeyB'];
+  let index = 0;
+  document.addEventListener('keydown', async event => {
+    index = event.code === sequence[index] ? index + 1 : (event.code === sequence[0] ? 1 : 0);
+    if (index !== sequence.length) return;
+    index = 0;
+    try {
+      const response = await fetch('/settings/developer/enable', { method: 'POST' });
+      if (response.ok) {
+        window.location.assign('/developer');
+      }
+    } catch (_) { /* 网络失败时保持未开启状态，可重新输入 */ }
+  });
+})();
+</script>
+{% endif %}
 
 </script>
 {% endblock %}
