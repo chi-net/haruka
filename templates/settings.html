@@ -171,6 +171,8 @@ document.getElementById('settings-update-btn').addEventListener('click', async (
   };
   let index = 0;
   document.addEventListener('keydown', async event => {
+    // Konami 激活期间方向键一律阻止默认滚动，避免页面滚动干扰序列输入。
+    if (event.code && event.code.startsWith('Arrow')) event.preventDefault();
     if (matches(event, sequence[index])) {
       event.preventDefault();
       index += 1;
