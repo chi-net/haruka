@@ -128,10 +128,11 @@ document.getElementById('passkey-enroll-form').addEventListener('submit', async 
   <p class="text-sm mt-1">版本：<span class="font-mono">{{ version }}</span>（git 提交计数 + commit id）</p>
   <div class="flex flex-wrap items-center gap-2 mt-2">
     <button id="settings-update-btn" type="button" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">检查更新</button>
-    {% if developer_enabled %}<a href="/developer" class="bg-gray-700 text-white text-sm px-3 py-1.5 rounded hover:bg-gray-800">进入开发者模式</a>{% endif %}
   </div>
   <p id="settings-update-result" class="text-sm text-gray-600 mt-2"></p>
-  <p class="text-xs text-gray-400 mt-2">开发者模式：在本页依次按下「上上下下左左右右ABAB」开启，仅当前会话有效，可查看系统指标、日志与解密数据库工具。</p>
+  <form method="post" action="/settings/developer/enable" class="mt-4 border-t border-gray-100 pt-4">
+    <button class="bg-gray-700 text-white text-sm px-3 py-1.5 rounded hover:bg-gray-800">{% if developer_enabled %}进入开发者模式{% else %}开发者模式{% endif %}</button>
+  </form>
 </section>
 
 <script>
@@ -152,24 +153,5 @@ document.getElementById('settings-update-btn').addEventListener('click', async (
   } catch (error) { result.textContent = '检查更新失败：' + error; }
 });
 
-// Konami 序列：上上下下左左右右 A B A B；仅内存开启，重启或重新解锁后需重新输入。
-const konamiSequence = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'KeyA', 'KeyB', 'KeyA', 'KeyB'];
-let konamiIndex = 0;
-document.addEventListener('keydown', async event => {
-  if (event.target.closest('input, textarea, select')) return;
-  konamiIndex = event.code === konamiSequence[konamiIndex]
-    ? konamiIndex + 1
-    : (event.code === konamiSequence[0] ? 1 : 0);
-  if (konamiIndex !== konamiSequence.length) return;
-  konamiIndex = 0;
-  try {
-    const response = await fetch('/settings/developer/enable', { method: 'POST' });
-    if (response.ok) {
-      window.location.assign('/developer');
-    } else {
-      alert('开发者模式开启失败，请重新解锁后再试');
-    }
-  } catch (error) { alert('开发者模式开启失败：' + error); }
-});
 </script>
 {% endblock %}

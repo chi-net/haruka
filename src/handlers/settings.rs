@@ -104,16 +104,17 @@ pub async fn show(
     .map_err(err500)?;
     Ok(Html(html))
 }
-/// 设置页 Konami 序列（上上下下左左右右ABAB）校验通过后开启开发者模式。
+/// 设置页最下方的开发者模式入口：开启当前会话的开发者权限并进入开发者页。
+/// 未经过此入口开启时，直接访问 /developer 及其他渠道一律 404。
 pub async fn enable_developer(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-) -> HandlerResult<axum::Json<serde_json::Value>> {
+) -> HandlerResult<Redirect> {
     if !state.enable_developer(&headers) {
-        return Err(bad_request("当前会话无效，请重新解锁后再开启开发者模式"));
+        return Err(bad_request("当前会话无效，请重新解锁后再进入开发者模式"));
     }
     crate::dev_log::info("开发者模式已在当前会话开启");
-    Ok(axum::Json(serde_json::json!({ "ok": true })))
+    Ok(Redirect::to("/developer"))
 }
 
 /// 手动触发 GitHub 更新检查；结果包含是否落后与最新提交信息。

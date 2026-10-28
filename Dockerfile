@@ -37,6 +37,12 @@ FROM dependencies AS builder
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
 COPY src ./src
+
+# CI 注入的版本信息（镜像内无 .git，build.rs 优先读环境变量）。
+ARG HARUKA_GIT_COUNT=""
+ARG HARUKA_GIT_SHA=""
+ENV HARUKA_GIT_COUNT=$HARUKA_GIT_COUNT \
+    HARUKA_GIT_SHA=$HARUKA_GIT_SHA
 COPY templates ./templates
 COPY --from=web-assets /app/static ./static
 
