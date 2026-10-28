@@ -8,9 +8,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     Json,
 };
-use sea_orm::{
-    ConnectionTrait, DbBackend, QueryResult, Statement, Value,
-};
+use sea_orm::{ConnectionTrait, DbBackend, QueryResult, Statement, Value};
 use serde::Deserialize;
 
 use crate::{crypto, AppState, SessionDek};
@@ -78,13 +76,14 @@ pub async fn metrics(State(state): State<AppState>) -> HandlerResult<Json<serde_
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     system.refresh_cpu_all();
     system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
-    let process = system.process(pid).ok_or_else(|| err500("无法读取当前进程"))?;
+    let process = system
+        .process(pid)
+        .ok_or_else(|| err500("无法读取当前进程"))?;
     let load = sysinfo::System::load_average();
     let cpu_percent = if system.cpus().is_empty() {
         0.0
     } else {
-        system.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>()
-            / system.cpus().len() as f32
+        system.cpus().iter().map(|cpu| cpu.cpu_usage()).sum::<f32>() / system.cpus().len() as f32
     };
     let session_count = state.developer_sessions.read().len();
     Ok(Json(serde_json::json!({
@@ -167,17 +166,17 @@ fn encrypted_column(table: &str, column: &str) -> Option<EncKind> {
         ("investment_sms_events", "raw" | "detail" | "sender" | "parsed") => TEXT,
         ("sms_templates", "name" | "sender" | "bank_tag" | "pattern") => TEXT,
         ("passkeys", "name") => TEXT,
-        ("installment_plans", "annual_rate_bps" | "fee" | "principal" | "refund_reviewed_amount") => {
-            Cents
-        }
+        (
+            "installment_plans",
+            "annual_rate_bps" | "fee" | "principal" | "refund_reviewed_amount",
+        ) => Cents,
         ("installment_items", "principal" | "interest" | "fee" | "total") => Cents,
         ("financial_plans", "payload") => TEXT,
         ("debt_requests", "token" | "label") => TEXT,
         ("debt_requests", "settled_amount") => Cents,
-        (
-            "debt_requests",
-            "snapshot" | "submission" | "repayment_submission" | "settlement",
-        ) => External,
+        ("debt_requests", "snapshot" | "submission" | "repayment_submission" | "settlement") => {
+            External
+        }
         ("recovery", _) => External,
         _ => return None,
     };
@@ -191,7 +190,10 @@ struct ColumnInfo {
     encrypted: Option<EncKind>,
 }
 
-async fn table_columns(db: &sea_orm::DatabaseConnection, table: &str) -> HandlerResult<Vec<ColumnInfo>> {
+async fn table_columns(
+    db: &sea_orm::DatabaseConnection,
+    table: &str,
+) -> HandlerResult<Vec<ColumnInfo>> {
     if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return Err(bad_request("表名不合法"));
     }
@@ -244,7 +246,10 @@ fn read_cell(row: &QueryResult, column: &str) -> String {
                 if bytes.is_empty() {
                     String::new()
                 } else {
-                    format!("0x{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>())
+                    format!(
+                        "0x{}",
+                        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                    )
                 }
             })
             .unwrap_or_else(|| "NULL".into());
@@ -465,7 +470,10 @@ pub async fn update_cell(
             }
         }
     };
-    let sql = format!("UPDATE \"{table}\" SET \"{}\" = ? WHERE \"{pk}\" = ?", form.column);
+    let sql = format!(
+        "UPDATE \"{table}\" SET \"{}\" = ? WHERE \"{pk}\" = ?",
+        form.column
+    );
     let result = state
         .db
         .execute(Statement::from_sql_and_values(
@@ -508,7 +516,10 @@ pub async fn execute_sql(
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    let is_query = matches!(keyword.as_str(), "SELECT" | "WITH" | "EXPLAIN" | "PRAGMA" | "VALUES");
+    let is_query = matches!(
+        keyword.as_str(),
+        "SELECT" | "WITH" | "EXPLAIN" | "PRAGMA" | "VALUES"
+    );
     if !is_query && !form.confirm {
         return Err(bad_request("写入或结构变更语句需要勾选确认后才能执行"));
     }
@@ -530,9 +541,7 @@ pub async fn execute_sql(
             .map(|row| {
                 columns
                     .iter()
-                    .map(|name| {
-                        read_cell(row, name.as_str())
-                    })
+                    .map(|name| read_cell(row, name.as_str()))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();

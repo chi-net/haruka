@@ -1896,10 +1896,7 @@ async fn fully_refunded_installment_supports_hard_delete_of_entire_transaction()
     assert_eq!(
         app.post(
             &format!("/installments/{plan}/delete"),
-            &[
-                ("refunded_cents", "6000".into()),
-                ("hard", "true".into())
-            ],
+            &[("refunded_cents", "6000".into()), ("hard", "true".into())],
             None,
         )
         .await
@@ -1923,10 +1920,7 @@ async fn fully_refunded_installment_supports_hard_delete_of_entire_transaction()
     assert_eq!(
         app.post(
             &format!("/installments/{plan}/delete"),
-            &[
-                ("refunded_cents", "30000".into()),
-                ("hard", "true".into())
-            ],
+            &[("refunded_cents", "30000".into()), ("hard", "true".into())],
             None,
         )
         .await
@@ -1954,10 +1948,7 @@ async fn fully_refunded_installment_supports_hard_delete_of_entire_transaction()
     assert_eq!(
         app.post(
             &format!("/installments/{plan}/delete"),
-            &[
-                ("refunded_cents", "30000".into()),
-                ("hard", "true".into())
-            ],
+            &[("refunded_cents", "30000".into()), ("hard", "true".into())],
             None,
         )
         .await
@@ -2015,10 +2006,7 @@ async fn soft_deleted_fully_refunded_installment_can_be_hard_deleted() {
     assert_eq!(
         app.post(
             &format!("/installments/{plan}/delete"),
-            &[
-                ("refunded_cents", "30000".into()),
-                ("hard", "true".into())
-            ],
+            &[("refunded_cents", "30000".into()), ("hard", "true".into())],
             None,
         )
         .await
@@ -2103,10 +2091,7 @@ async fn hard_delete_rejects_unrefunded_plans_and_refunded_fee_bills() {
     assert_eq!(
         app.post(
             &format!("/installments/{plan}/delete"),
-            &[
-                ("refunded_cents", "30000".into()),
-                ("hard", "true".into())
-            ],
+            &[("refunded_cents", "30000".into()), ("hard", "true".into())],
             None,
         )
         .await

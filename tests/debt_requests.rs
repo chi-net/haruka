@@ -1257,8 +1257,7 @@ async fn forced_settlement_closes_remaining_debt_without_faking_money_or_counter
     assert_eq!(
         crypto::decrypt_cents(
             &app.dek,
-            &app
-                .row(new_loan)
+            &app.row(new_loan)
                 .await
                 .try_get::<String>("", "settled_amount")
                 .unwrap()
@@ -1462,9 +1461,16 @@ async fn forced_settlement_marks_zero_remaining_loan_closed() {
     );
     // 结清后禁止继续对本笔还款
     assert_eq!(
-        app.create("repayment_paid", account, person, "0.01", Some(false), Some(borrowed))
-            .await
-            .status(),
+        app.create(
+            "repayment_paid",
+            account,
+            person,
+            "0.01",
+            Some(false),
+            Some(borrowed)
+        )
+        .await
+        .status(),
         StatusCode::BAD_REQUEST
     );
 

@@ -1,6 +1,5 @@
 //! 构建期嵌入的版本号（git 提交计数 + commit id）与远程更新检查。
 
-
 /// 提交计数，例如 152。
 pub const COMMIT_COUNT: &str = env!("HARUKA_GIT_COUNT");
 /// 完整 commit id。

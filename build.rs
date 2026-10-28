@@ -1,8 +1,5 @@
 fn git(args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .output()
-        .ok()?;
+    let output = std::process::Command::new("git").args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }

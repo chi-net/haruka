@@ -221,7 +221,10 @@ async fn zero_limit_credit_card_spends_overpayment_but_not_beyond() {
                 ("from_account_id", source.to_string()),
                 ("to_account_id", card.to_string()),
                 ("amount", "50.63".into()),
-                ("happened_at", chrono::Utc::now().format("%Y-%m-%dT%H:%M").to_string()),
+                (
+                    "happened_at",
+                    chrono::Utc::now().format("%Y-%m-%dT%H:%M").to_string(),
+                ),
             ],
         )
         .await;
@@ -266,7 +269,10 @@ async fn zero_limit_credit_card_accepts_repayment_overpayment_on_zero_balance() 
                 ("from_account_id", source.to_string()),
                 ("to_account_id", card.to_string()),
                 ("amount", "50.63".into()),
-                ("happened_at", chrono::Utc::now().format("%Y-%m-%dT%H:%M").to_string()),
+                (
+                    "happened_at",
+                    chrono::Utc::now().format("%Y-%m-%dT%H:%M").to_string(),
+                ),
             ],
         )
         .await;

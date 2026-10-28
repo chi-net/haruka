@@ -410,7 +410,10 @@ async fn main() {
             "/developer/check-updates",
             post(handlers::developer::check_updates),
         )
-        .route("/developer/db/{table}", get(handlers::developer::table_view))
+        .route(
+            "/developer/db/{table}",
+            get(handlers::developer::table_view),
+        )
         .route(
             "/developer/db/{table}/cell",
             post(handlers::developer::update_cell),
@@ -766,6 +769,10 @@ async fn main() {
             "/debt-links/requests/{id}/settle",
             post(handlers::federation::settle_request),
         )
+        .route(
+            "/debt-links/requests/{id}/reject",
+            post(handlers::federation::reject_request),
+        )
         .route("/lock", post(handlers::auth::lock))
         // 先合并开发者路由再统一挂解锁中间件，保证 SessionDek 注入覆盖全部路由。
         .merge(developer)
@@ -837,6 +844,8 @@ async fn main() {
             process::exit(1);
         });
     dev_log::info(format!("haruka 已启动，监听地址: {addr}"));
-    dev_log::info(format!("Passkey 来源: {passkey_origin}（RP ID: {passkey_rp_id}）"));
+    dev_log::info(format!(
+        "Passkey 来源: {passkey_origin}（RP ID: {passkey_rp_id}）"
+    ));
     axum::serve(listener, app).await.expect("服务器运行失败");
 }

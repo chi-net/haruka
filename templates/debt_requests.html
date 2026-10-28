@@ -88,14 +88,16 @@
     <article class="border border-gray-200 rounded-lg p-4">
       <div class="flex flex-wrap items-start justify-between gap-2">
         <div><h3 class="text-sm font-medium">{% if request.kind == "borrow" %}我借入{% else %}我借出{% endif %} · {{ request.amount }}</h3><p class="text-xs text-gray-500 mt-1">{{ request.instance_domain }} · {% if request.origin == "local" %}本方创建{% else %}对方创建{% endif %}{% if request.local_debt_request_id.is_some() %} · 已入账{% endif %}</p></div>
-        <span class="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold">{% if request.status == "open" %}待确认{% else if request.status == "confirmed" %}已确认{% else %}已结清{% endif %}</span>
+        <span class="rounded-full {% if request.status == "rejected" %}bg-red-100 text-red-800{% else %}bg-gray-100{% endif %} px-3 py-1 text-xs font-semibold">{% if request.status == "open" %}待确认{% else if request.status == "confirmed" %}已确认{% else if request.status == "rejected" %}对方已否认{% else %}已结清{% endif %}</span>
       </div>
       {% if !request.note.is_empty() %}<p class="text-sm text-gray-600 mt-2 whitespace-pre-wrap">{{ request.note }}</p>{% endif %}
+      {% if request.status == "rejected" %}<p class="text-sm font-semibold text-red-700 bg-red-50 border border-red-200 rounded p-2 mt-2">对方已否认此账单，请与对方核实后再处理。</p>{% endif %}
       <p class="text-xs text-gray-500 mt-2">{% if !request.remote_status.is_empty() %}对方状态：{{ request.remote_status }}（{{ request.remote_status_at }}）{% else %}对方状态未同步{% endif %}{% if !request.last_reminded_at.is_empty() %} · 最近催款：{{ request.last_reminded_at }}{% endif %}</p>
       {% if !request.sync_error.is_empty() %}<p class="text-xs text-red-600 mt-1">同步异常：{{ request.sync_error }}</p>{% endif %}
       <div class="flex flex-wrap gap-2 mt-3 text-sm">
         {% if request.origin == "remote" && request.status == "open" %}
         <button type="button" data-fed-action="confirm" data-fed-id="{{ request.id }}" class="rounded-lg bg-green-700 px-3 py-1.5 text-white">确认收付（可选同时入账）</button>
+        <button type="button" data-fed-action="reject" data-fed-id="{{ request.id }}" class="rounded-lg bg-red-700 px-3 py-1.5 text-white">否认此账单并提醒账主</button>
         {% endif %}
         <button type="button" data-fed-action="status" data-fed-id="{{ request.id }}" class="rounded-lg border border-blue-300 px-3 py-1.5 text-blue-800">查询对方进度</button>
         <button type="button" data-fed-action="remind" data-fed-id="{{ request.id }}" class="rounded-lg border border-amber-400 px-3 py-1.5 text-amber-900">催促对方</button>

@@ -153,9 +153,7 @@ pub async fn pair_start(
         status: Set("pending".into()),
         pairing_key: Set(key.as_slice().to_vec()),
         pairing_code_hash: Set(federation::pairing_code_hash(&code_bytes)),
-        pairing_code_expires_at: Set(Some(
-            (Utc::now() + chrono::Duration::hours(24)).naive_utc(),
-        )),
+        pairing_code_expires_at: Set(Some((Utc::now() + chrono::Duration::hours(24)).naive_utc())),
         paired_at: Set(None),
         created_at: Set(Utc::now()),
         ..Default::default()
@@ -164,7 +162,9 @@ pub async fn pair_start(
     .await
     .map_err(err500)?;
     crate::dev_log::info(format!("已为 {domain} 生成实例配对码"));
-    Ok(Json(json!({ "ok": true, "code": code_text, "domain": domain })))
+    Ok(Json(
+        json!({ "ok": true, "code": code_text, "domain": domain }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -187,7 +187,8 @@ pub async fn pair_join(
     Json(form): Json<PairJoinForm>,
 ) -> HandlerResult<Json<Value>> {
     let domain = federation::normalize_domain(&form.domain).map_err(|error| bad_request(&error))?;
-    let code = federation::decode_code(&form.code).ok_or_else(|| bad_request("配对码格式不正确"))?;
+    let code =
+        federation::decode_code(&form.code).ok_or_else(|| bad_request("配对码格式不正确"))?;
     let key = federation::pairing_key(&code);
     let own_domain = self_domain(&headers);
     let payload = serde_json::to_vec(&JoinPayload {
@@ -584,7 +585,7 @@ pub async fn receive_events(
             Json(json!({ "ok": true })).into_response()
         }
         (Some(request), kind, seq) => {
-            if !matches!(kind, "confirmed" | "settled" | "reminded") {
+            if !matches!(kind, "confirmed" | "settled" | "reminded" | "rejected") {
                 return generic_error("不支持的事件类型");
             }
             let Some(last) = latest_event(&state, &message.federation_id).await else {
@@ -607,7 +608,7 @@ pub async fn receive_events(
             }
             let mut active = request.clone().into_active_model();
             match kind {
-                "confirmed" | "settled" => {
+                "confirmed" | "settled" | "rejected" => {
                     active.status = Set(kind.into());
                 }
                 "reminded" => {
@@ -804,6 +805,57 @@ pub async fn settle_request(
     active.updated_at = Set(Utc::now());
     active.update(&state.db).await.map_err(err500)?;
     Ok(Json(json!({ "ok": true, "sync_error": sync_error })))
+}
+
+/// 对方否认此账单：本地标记 rejected 并推送 rejected 事件提醒账主。
+pub async fn reject_request(
+    State(state): State<AppState>,
+    Extension(SessionDek(_dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+    Json(form): Json<RejectForm>,
+) -> HandlerResult<Json<Value>> {
+    let request = federated_request::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "借还请求不存在".into()))?;
+    if request.origin != "remote" || request.status != "open" {
+        return Err(bad_request("只有对方创建且待处理的请求才能否认"));
+    }
+    let instance = linked_instance::Entity::find_by_id(request.instance_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("配对实例不存在"))?;
+    let reason = form.reason.trim();
+    if reason.chars().count() > 500 {
+        return Err(bad_request("否认原因不能超过 500 个字符"));
+    }
+    let sync_error = match push_event(
+        &state,
+        &instance,
+        &request,
+        "rejected",
+        json!({ "reason": reason }),
+    )
+    .await
+    {
+        Ok(()) => String::new(),
+        Err(error) => error,
+    };
+    let mut active = request.into_active_model();
+    active.status = Set("rejected".into());
+    active.sync_error = Set(sync_error.clone());
+    active.updated_at = Set(Utc::now());
+    active.update(&state.db).await.map_err(err500)?;
+    crate::dev_log::info(format!("已否认实例 {} 的借还请求", instance.domain));
+    Ok(Json(json!({ "ok": true, "sync_error": sync_error })))
+}
+
+#[derive(Deserialize)]
+pub struct RejectForm {
+    #[serde(default)]
+    reason: String,
 }
 
 /// 借还页所需的联邦视图数据。
