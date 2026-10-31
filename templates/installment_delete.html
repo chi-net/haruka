@@ -7,23 +7,23 @@
 {% if deleted %}
 <p class="my-4">此分期已删除，仅保留历史，不会再次退款。</p>
 {% if full_refund %}
-<p class="my-4">该消费已全额退款。可以硬删除整条交易记录：分期计划、全部期次、已还期次的本金转账与费用账单、原消费及全部退款流水将一并物理删除，账户余额按净影响回滚，如同交易从未发生。此操作不可恢复。</p>
+<p class="my-4">该消费已全额退款。可以硬删除整条交易记录，此操作不可恢复。</p>
 <form method="post" action="/installments/{{ plan_id }}/delete">
 <input type="hidden" name="refunded_cents" value="{{ refunded_cents }}">
 <input type="hidden" name="hard" value="true">
-<button class="bg-red-700 text-white px-4 py-2 rounded" hx-confirm="确认硬删除？分期、期次、自动流水、原消费与退款将全部物理删除，不可恢复。">硬删除全部交易记录（不可恢复）</button>
+<button class="bg-red-700 text-white px-4 py-2 rounded" hx-confirm="确认硬删除？">硬删除全部交易记录（不可恢复）</button>
 </form>
 {% endif %}
 {% else %}
-<p class="my-4">删除只取消分期安排，不撤销已还本金转账或费用，不更改已还记录。未退款的消费净额和已还本金将按普通流水计算欠款；删除安排不代表银行取消真实债务。</p>
+<p class="my-4">删除只取消分期安排，不撤销已还本金转账或费用，不更改已还记录。</p>
 {% if has_refund %}
-<p class="my-4">已记录实际退款 {{ refunded_amount }}。删除不会多退钱，账户余额不变；消费未退回金额为 {{ remaining_amount }}，欠款会结合既有已还本金按普通流水重新计算。</p>
+<p class="my-4">已记录实际退款 {{ refunded_amount }}。消费未退回金额为 {{ remaining_amount }}，欠款会结合既有已还本金按普通流水重新计算。</p>
 {% if full_refund %}
-<p class="my-4 font-medium text-red-700">该消费已全额退款，可以选择硬删除：分期计划、全部期次、已还期次的本金转账与费用账单、原消费及全部退款流水将一并物理删除，账户余额按净影响回滚，如同交易从未发生。此操作不可恢复。</p>
+<p class="my-4 font-medium text-red-700">该消费已全额退款，可以选择硬删除，如同交易从未发生。此操作不可恢复。</p>
 <form method="post" action="/installments/{{ plan_id }}/delete" class="my-3">
 <input type="hidden" name="refunded_cents" value="{{ refunded_cents }}">
 <input type="hidden" name="hard" value="true">
-<button class="bg-red-700 text-white px-4 py-2 rounded" hx-confirm="确认硬删除？分期、期次、自动流水、原消费与退款将全部物理删除，不可恢复。">硬删除全部交易记录（不可恢复）</button>
+<button class="bg-red-700 text-white px-4 py-2 rounded" hx-confirm="确认硬删除？所有记录将全部物理删除，不可恢复。">硬删除全部交易记录（此操作不可恢复）</button>
 </form>
 {% endif %}
 <form method="post" action="/installments/{{ plan_id }}/delete">
@@ -32,7 +32,7 @@
 </form>
 {% else %}
 <h2 class="font-bold text-red-700">尚无退款：是否按实际退货处理？</h2>
-<p class="my-4">只有已实际收到全额退款，才可补记退款并删除。将向原账户补记 {{ remaining_amount }} 的实际退款流水（不计收入统计），原账户余额增加同额，信用账户欠款相应减少；不撤销任何已还流水。未实际收到退款，请取消，不会写入任何变更。</p>
+<p class="my-4">只有已实际收到全额退款，才可补记退款并删除。将向原账户补记 {{ remaining_amount }} 的实际退款流水，原账户余额增加同额或信用账户欠款相应减少。</p>
 {% if refund_authorized %}
 <form method="post" action="/installments/{{ plan_id }}/delete">
 <input type="hidden" name="refunded_cents" value="{{ refunded_cents }}">
@@ -40,11 +40,11 @@
 <button class="bg-red-700 text-white px-4 py-2 rounded">确认已实际收到全额退款，补记退款并删除分期</button>
 </form>
 {% else %}
-<p class="text-amber-800 my-4">这是隐私消费，普通会话不能补记隐私退款。请先在隐私模式中完成实际退款，再返回此页删除分期安排。</p>
+<p class="text-amber-800 my-4">这是隐私消费，普通会话不能补记隐私退款。</p>
 <a href="/privacy/bills" class="text-blue-600 underline">进入隐私账本处理退款</a>
 {% endif %}
 {% endif %}
 {% endif %}
-<a href="/installments/{{ plan_id }}" class="block mt-4 text-blue-600 underline">取消，返回详情（不作变更）</a>
+<a href="/installments/{{ plan_id }}" class="block mt-4 text-blue-600 underline">取消并返回详情</a>
 </section>
 {% endblock %}

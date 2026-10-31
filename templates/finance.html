@@ -21,10 +21,8 @@
     <div class="flex gap-3 text-sm"><a href="/investments" class="text-blue-600 hover:underline">管理定投</a><a href="/accounts" class="text-blue-600 hover:underline">管理账户与基金</a></div>
   </header>
   <section class="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
-    <p>理财内容参考 <a href="https://blog.chihuo2104.dev/posts/how-i-do-financial-management/" target="_blank" rel="noopener noreferrer" class="underline">《我怎么开始多多理财》</a> 的预算、应急金与资产配置思路。模板只是可编辑的起点。请注意，这不是投资建议、产品推荐或收益承诺。</p>
-    <p class="mt-2">Haruka 生成的是内部记账定投计划，仅供参考。不会向银行或基金平台下单，生成时不会产生账单或转账；启用后的计划可能在解锁后按交易日自动执行内部记账，请自行核对真实交易。</p>
+    <p>参考 <a href="https://blog.chihuo2104.dev/posts/how-i-do-financial-management/" target="_blank" rel="noopener noreferrer" class="underline">《我怎么开始多多理财》</a> 的预算、应急金与资产配置思路进行设计，一切内容仅供参考。</p>
   </section>
-  <noscript><section class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">理财编辑器需要 JavaScript 才能读取配置、保存和确认生成。请启用 JavaScript 后重新打开本页；也可前往“管理定投”或“管理账户与基金”。下方表单在此状态下不可提交。</section></noscript>
   <p id="finance-status" role="status" aria-live="polite" class="text-sm whitespace-pre-wrap">正在加载理财配置…</p>
   <form id="finance-form" hx-boost="false">
     <fieldset id="finance-editor" disabled class="space-y-5">
@@ -34,10 +32,9 @@
           <div class="flex-1"><label for="finance-preset" class="finance-label">参考模板</label><select id="finance-preset" class="finance-input"><option value="beginner">入门：收入的 10%，两类股票各 50%</option><option value="balanced">均衡参考：收入的 30%，股票 / 债券 / 黄金四份各 25%</option><option value="custom">完全自定义：一项资产，100%</option></select></div>
           <button id="finance-apply-preset" type="button" class="rounded border border-gray-300 px-3 py-1.5 text-sm">应用到草稿</button>
         </div>
-        <p class="finance-help">应用模板会替换下方资产行及投资比例，保留收入、账户、应急金、货币与开始日期设置。不会立即更改定投，仍需保存并确认同步。</p>
         <div class="finance-grid">
           <div><label for="finance-name" class="finance-label">方案名称</label><input id="finance-name" class="finance-input" maxlength="200" required></div>
-          <div><label for="finance-currency" class="finance-label">方案货币（固定）</label><input id="finance-currency" class="finance-input" readonly><p class="finance-help">方案货币不会随默认货币改变；金额按服务器参考汇率换算，不代表银行成交汇率。</p></div>
+          <div><label for="finance-currency" class="finance-label">方案货币</label><input id="finance-currency" class="finance-input" readonly><p class="finance-help">方案货币不会随默认货币改变；金额按服务器参考汇率换算，不代表银行成交汇率。</p></div>
         </div>
       </section>
       <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
@@ -54,7 +51,7 @@
       <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
         <h2 class="font-medium">3. 应急金与账户绑定</h2>
         <div class="finance-grid">
-          <div><label for="finance-emergency-months" class="finance-label">应急金目标（月数）</label><input id="finance-emergency-months" type="number" min="0" max="60" step="1" required class="finance-input"><p class="finance-help">按预览中的月剩余金额估算；0 表示关闭目标。应急金不足仅提示，不会阻止定投，不会自动搬运资金。</p></div>
+          <div><label for="finance-emergency-months" class="finance-label">应急金目标（月）</label><input id="finance-emergency-months" type="number" min="0" max="60" step="1" required class="finance-input"><p class="finance-help">按预览中的月剩余金额估算；0 表示关闭目标。应急金不足仅提示，不会阻止定投，不会自动搬运资金。</p></div>
           <div><label for="finance-from-account" class="finance-label">定投扣款账户</label><select id="finance-from-account" class="finance-input"></select><p class="finance-help">只可选非信用的资金账户。币种不同会换算，每日金额及手续费以扣款账户货币显示。</p></div>
           <div><label for="finance-parent-account" class="finance-label">新建基金归属的投资分组</label><select id="finance-parent-account" class="finance-input"></select><p class="finance-help">未绑定的正比例资产在确认生成时创建零余额基金；选择“新建分组”时才自动创建零余额分组。已绑定基金不迁移分组。</p></div>
           <div><label for="finance-start-date" class="finance-label">新计划开始日期</label><input id="finance-start-date" type="date" required class="finance-input"><p class="finance-help">新计划须不早于今天；已有计划保留原开始日期及下一交易日，不重置历史。</p></div>
@@ -63,7 +60,6 @@
       </section>
       <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-4">
         <div class="flex flex-wrap justify-between items-center gap-3"><h2 class="font-medium">4. 资产配置（占投资预算的比例）</h2><button id="finance-add-row" type="button" class="rounded border border-gray-300 px-3 py-1.5 text-sm">添加资产</button></div>
-        <p class="finance-help">所有资产比例必须精确合计 100.00%，不会自动归一化。零比例可保存，确认同步时暂停对应的已跟踪计划；同一基金不可重复绑定。最多 20 项。</p>
         <p id="finance-share-total" role="status" aria-live="polite" class="text-sm"></p>
         <div id="finance-allocations" class="space-y-4"></div>
       </section>
@@ -71,7 +67,7 @@
     </fieldset>
   </form>
   <section class="bg-white rounded-lg border border-gray-200 p-4 space-y-4" aria-labelledby="finance-preview-heading">
-    <div><h2 id="finance-preview-heading" class="font-medium">服务器预览（已保存配置）</h2><p id="finance-preview-state" class="finance-help">保存只更新预览，不会创建或修改实际定投。</p></div>
+    <div><h2 id="finance-preview-heading" class="font-medium">已保存配置的服务器预览</h2><p id="finance-preview-state" class="finance-help">保存只更新预览，不会创建或修改实际定投。</p></div>
     <ul id="finance-warnings" class="text-sm text-amber-700 space-y-2"></ul>
     <p id="finance-no-preview" class="text-sm text-gray-500"></p>
     <div id="finance-preview" hidden class="space-y-4">
@@ -104,7 +100,6 @@
       <div><label class="finance-label" data-label="index_code">跟踪指数</label><select data-field="index_code" class="finance-input"></select></div>
       <div><label class="finance-label" data-label="moving_average_days">均线周期</label><select data-field="moving_average_days" class="finance-input"></select></div>
     </div>
-    <p data-smart-help hidden class="finance-help">跟踪指数仅用于确定每期记账本金的 0.5–1.5 倍档位，不保证收益；行情缺失或日历不可用等错误由实际定投执行页提示。</p>
     <button type="button" data-remove-row class="text-sm text-red-600 hover:underline">移除此资产</button>
   </fieldset>
 </template>
@@ -292,7 +287,7 @@
     const preview = data.preview;
     byId('finance-preview').hidden = !preview;
     byId('finance-no-preview').hidden = Boolean(preview);
-    byId('finance-no-preview').textContent = '暂无金额预览，请先处理上方收入或账户配置提示后保存。若没有可推算的收入，可手动填写月收入 / 生活费基数；其他配置仍可编辑。';
+    byId('finance-no-preview').textContent = '暂无金额预览。';
     if (preview) {
       byId('finance-preview-source').textContent = `收入依据：${preview.income_source}；方案货币 ${preview.currency}；每日扣款货币 ${preview.from_currency}；股票占投资配置 ${preview.equity_percent}。`;
       const summary = byId('finance-preview-summary');

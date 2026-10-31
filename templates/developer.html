@@ -5,7 +5,6 @@
   <h1 class="text-xl font-bold">开发者模式</h1>
   <a href="/settings" class="text-blue-600 hover:underline text-sm">返回设置</a>
 </div>
-<p class="text-sm text-amber-800 bg-amber-50 border border-amber-300 rounded p-3 mb-5">本页仅供本机排障。直接修改数据库或执行 SQL 可能破坏余额、验证链与加密一致性；操作前请备份数据库文件。</p>
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium mb-2">软件信息</h2>
@@ -25,7 +24,6 @@
     <h2 class="font-medium">检查更新</h2>
     <button id="update-check-btn" class="bg-blue-600 text-white text-sm px-3 py-1.5 rounded hover:bg-blue-700">检查更新</button>
   </div>
-  <p id="update-check-result" class="text-sm text-gray-600">比较本地 commit 与 GitHub 远程 main（结果缓存 1 小时）。</p>
 </section>
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
@@ -46,15 +44,14 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <div class="flex items-center justify-between mb-2">
-    <h2 class="font-medium">进程日志（最近 500 条，内存缓冲）</h2>
+    <h2 class="font-medium">进程日志</h2>
     <button id="logs-refresh" class="text-blue-600 text-sm hover:underline">刷新</button>
   </div>
   <pre id="logs-output" class="text-xs font-mono bg-gray-50 rounded p-3 whitespace-pre-wrap break-all max-h-96 overflow-auto">加载中…</pre>
 </section>
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
-  <h2 class="font-medium mb-2">数据库表（解密视图与编辑）</h2>
-  <p class="text-xs text-gray-500 mb-3">DEK 加密列显示解密后的明文；独立密钥列（分享快照、请求证明、恢复密钥）不可在此解密。</p>
+  <h2 class="font-medium mb-2">数据库表</h2>
   <div class="flex flex-wrap gap-2 text-sm">
     {% for table in tables %}<a href="/developer/db/{{ table }}" class="font-mono bg-gray-100 hover:bg-blue-100 rounded px-2 py-1">{{ table }}</a>{% endfor %}
   </div>
@@ -62,9 +59,8 @@
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium mb-2">SQL 执行器</h2>
-  <p class="text-xs text-gray-500 mb-2">单条语句；SELECT/WITH/EXPLAIN/PRAGMA/VALUES 走查询，其余为写入。查询结果原样显示（密文不解密，请用上方表格视图）。</p>
   <textarea id="sql-input" rows="4" class="block w-full font-mono text-sm border border-gray-300 rounded px-3 py-2" placeholder="SELECT * FROM bills LIMIT 10;"></textarea>
-  <label class="flex items-center gap-2 text-sm my-2"><input id="sql-confirm" type="checkbox" class="w-4 h-4">我确认执行写入或结构变更语句（可能导致数据损坏）</label>
+  <label class="flex items-center gap-2 text-sm my-2"><input id="sql-confirm" type="checkbox" class="w-4 h-4">我确认执行写入或结构变更语句可能会导致数据损坏</label>
   <button id="sql-run" class="bg-red-700 text-white text-sm px-3 py-1.5 rounded hover:bg-red-800">执行 SQL</button>
   <pre id="sql-result" class="text-xs font-mono bg-gray-50 rounded p-3 whitespace-pre-wrap break-all max-h-96 overflow-auto mt-3" hidden></pre>
 </section>
