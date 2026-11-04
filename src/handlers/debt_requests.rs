@@ -143,7 +143,8 @@ struct RequestView {
 #[derive(Template)]
 #[template(path = "debt_requests.html")]
 struct DebtRequestsTemplate {
-    requests: Vec<RequestView>,
+    pending_requests: Vec<RequestView>,
+    completed_requests: Vec<RequestView>,
     repayment_accounts: Vec<RepaymentAccountOption>,
     default_repayment_at: String,
     linked_instances: Vec<super::federation::InstanceView>,
@@ -1484,7 +1485,8 @@ pub async fn list(
         .iter()
         .map(|account| (account.id, account.name.clone()))
         .collect::<HashMap<_, _>>();
-    let mut views = Vec::new();
+    let mut pending_requests = Vec::new();
+    let mut completed_requests = Vec::new();
     let requests = debt_request::Entity::find()
         .order_by_desc(debt_request::Column::CreatedAt)
         .all(&state.db)
@@ -1534,7 +1536,13 @@ pub async fn list(
         let submitted = submission.unwrap_or_default();
         let has_repayment = repayment.is_some();
         let repayment = repayment.unwrap_or_default();
-        views.push(RequestView {
+        let pending = !settled
+            && !(origin_settled && request.confirmed_debt_record_id.is_none())
+            && matches!(
+                request.status.as_str(),
+                "open" | "submitted" | "repayment_submitted"
+            );
+        let view = RequestView {
             id: request.id,
             path: format!("/r/{token}"),
             label: crypto::decrypt_string(&dek, &request.label),
@@ -1608,12 +1616,18 @@ pub async fn list(
             requires_confirmation: request.requires_confirmation,
             incoming: incoming(&request.kind),
             origin_debt_record_id: request.origin_debt_record_id.unwrap_or_default(),
-        });
+        };
+        if pending {
+            pending_requests.push(view);
+        } else {
+            completed_requests.push(view);
+        }
     }
     let (linked_instances, federated) = super::federation::load_views(&state).await?;
     Ok(Html(
         DebtRequestsTemplate {
-            requests: views,
+            pending_requests,
+            completed_requests,
             repayment_accounts,
             default_repayment_at: Utc::now().format(TIME_FMT).to_string(),
             linked_instances,
