@@ -7,13 +7,16 @@ use axum::{
 };
 use chrono::{Datelike, Duration};
 use rust_decimal::{prelude::ToPrimitive, Decimal};
-use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
+};
 use serde::Deserialize;
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{
+    category_limits::{self, CountStatus},
     crypto, currency,
-    entity::{account, bill, budget},
+    entity::{account, bill, budget, category},
     AppState, SessionDek,
 };
 
@@ -49,6 +52,15 @@ pub(crate) struct BudgetStatus {
     pub(crate) near_limit: bool,
 }
 
+struct CategoryLimitRow {
+    id: i64,
+    name: String,
+    is_food: bool,
+    limit: String,
+    period: String,
+    status: Option<CountStatus>,
+}
+
 #[derive(Template)]
 #[template(path = "budgets.html")]
 struct BudgetsTemplate {
@@ -57,6 +69,8 @@ struct BudgetsTemplate {
     monthly_amount: String,
     statuses: Vec<BudgetStatus>,
     default_currency: String,
+    category_limits: Vec<CategoryLimitRow>,
+    category_alert_count: usize,
 }
 
 fn parse_budget(value: &str, label: &str) -> HandlerResult<Option<i64>> {
@@ -231,6 +245,72 @@ pub(crate) async fn current_statuses(
     Ok(statuses)
 }
 
+async fn category_limit_rows(
+    state: &AppState,
+    dek: &crypto::Dek,
+    time_zone: super::ClientTimeZone,
+) -> HandlerResult<(Vec<CategoryLimitRow>, usize)> {
+    let categories = category::Entity::find()
+        .order_by_asc(category::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let has_limits = categories
+        .iter()
+        .any(|category| category.kind == "expense" && !category.count_limit.is_empty());
+    let bills = if has_limits {
+        bill::Entity::find()
+            .filter(bill::Column::IsPrivate.eq(false))
+            .all(&state.db)
+            .await
+            .map_err(err500)?
+    } else {
+        Vec::new()
+    };
+    let mut statuses: HashMap<_, _> =
+        category_limits::statuses(dek, time_zone, time_zone.today(), &categories, bills.iter())
+            .map_err(err500)?
+            .into_iter()
+            .map(|status| (status.id, status))
+            .collect();
+    let mut rows = Vec::new();
+    let mut alert_count = 0;
+    for category in categories
+        .into_iter()
+        .filter(|category| category.kind == "expense")
+    {
+        let mut status = statuses.remove(&category.id);
+        let name = match status.as_mut() {
+            Some(status) => std::mem::take(&mut status.name),
+            None => crypto::decrypt_string(dek, &category.name),
+        };
+        let limit = status
+            .as_ref()
+            .map(|status| status.limit.to_string())
+            .unwrap_or_default();
+        if status.as_ref().is_some_and(|status| status.near_limit) {
+            alert_count += 1;
+        }
+        let period = if matches!(
+            category.count_limit_period.as_str(),
+            "day" | "week" | "month"
+        ) {
+            category.count_limit_period.clone()
+        } else {
+            "month".into()
+        };
+        rows.push(CategoryLimitRow {
+            id: category.id,
+            name,
+            is_food: category.is_food,
+            limit,
+            period,
+            status,
+        });
+    }
+    Ok((rows, alert_count))
+}
+
 pub async fn show(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
@@ -249,12 +329,16 @@ pub async fn show(
     let monthly_amount = config
         .as_ref()
         .and_then(|item| decrypt_optional(&dek, &item.monthly_amount));
+    let (category_limits, category_alert_count) =
+        category_limit_rows(&state, &dek, time_zone).await?;
     let html = BudgetsTemplate {
         daily_amount: input_amount(daily_amount),
         weekly_amount: input_amount(weekly_amount),
         monthly_amount: input_amount(monthly_amount),
         statuses: current_statuses(&state, &dek, time_zone).await?,
         default_currency: currency::default_currency(&state).await.map_err(err500)?,
+        category_limits,
+        category_alert_count,
     }
     .render()
     .map_err(err500)?;
@@ -293,4 +377,41 @@ pub async fn update(
         .map_err(err500)?;
     }
     Ok(Redirect::to("/budgets"))
+}
+
+#[derive(Deserialize)]
+pub struct CategoryLimitFormData {
+    category_id: i64,
+    #[serde(default)]
+    count_limit: String,
+    #[serde(default = "default_period")]
+    count_limit_period: String,
+}
+
+fn default_period() -> String {
+    "month".into()
+}
+
+pub async fn update_category_limit(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Form(form): Form<CategoryLimitFormData>,
+) -> HandlerResult<Redirect> {
+    let limit =
+        category_limits::parse_limit("expense", &form.count_limit_period, &form.count_limit)
+            .map_err(bad_request)?;
+    let _balance_guard = state.balance_writes.lock().await;
+    let category = category::Entity::find_by_id(form.category_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("分类不存在"))?;
+    if category.kind != "expense" {
+        return Err(bad_request("收入分类不设置笔数上限"));
+    }
+    let mut active = category.into_active_model();
+    active.count_limit = Set(category_limits::encrypt_limit(&dek, limit));
+    active.count_limit_period = Set(form.count_limit_period);
+    active.update(&state.db).await.map_err(err500)?;
+    Ok(Redirect::to("/budgets#category-limits"))
 }

@@ -588,63 +588,6 @@ async fn apply_calibration(
     tx.commit().await.map_err(err500)?;
     Ok(saved)
 }
-#[derive(Default, Deserialize)]
-pub struct RemindersQuery {
-    #[serde(default)]
-    page: usize,
-    #[serde(default)]
-    per_page: usize,
-}
-struct ReminderRow {
-    parent_id: i64,
-    name: String,
-    parent_name: String,
-    value: String,
-    days_since: i64,
-}
-#[derive(Template)]
-#[template(path = "fund_reminders.html")]
-struct RemindersTemplate {
-    reminders: Vec<ReminderRow>,
-    per_page: usize,
-    pagination: super::PaginationView,
-}
-pub async fn reminders(
-    State(state): State<AppState>,
-    Extension(SessionDek(dek)): Extension<SessionDek>,
-    Query(query): Query<RemindersQuery>,
-) -> HandlerResult<Html<String>> {
-    let reminders = investment_funds::due_valuations(&state, &dek).await?;
-    let count = reminders.len();
-    let pagination = super::pagination(count, query.page, query.per_page);
-    let reminders = reminders
-        .into_iter()
-        .skip(pagination.start)
-        .take(pagination.per_page)
-        .map(|r| ReminderRow {
-            parent_id: r.parent_id,
-            name: r.name,
-            parent_name: r.parent_name,
-            value: currency::format(r.amount, &r.currency),
-            days_since: r.days_since,
-        })
-        .collect();
-    Ok(Html(
-        RemindersTemplate {
-            reminders,
-            per_page: pagination.per_page,
-            pagination: super::pagination_view(
-                &pagination,
-                count,
-                "/funds/valuation-reminders",
-                "只基金",
-                std::iter::empty::<(String, String)>(),
-            ),
-        }
-        .render()
-        .map_err(err500)?,
-    ))
-}
 
 #[cfg(test)]
 mod tests {

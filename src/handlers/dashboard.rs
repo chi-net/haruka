@@ -12,7 +12,7 @@ use crate::{
     credit_statements::{self, Ledger},
     crypto, currency,
     entity::{
-        account, account_detail, balance_adjustment, bill, category, debt_record, installment_item,
+        account, account_detail, balance_adjustment, bill, debt_record, installment_item,
         installment_plan, subscription, transfer,
     },
     AppState, SessionDek,
@@ -311,7 +311,6 @@ struct DashboardTemplate {
     subscription_reminder_count: usize,
     installment_reminder_count: usize,
     budget_statuses: Vec<super::budgets::BudgetStatus>,
-    category_count_statuses: Vec<crate::category_limits::CountStatus>,
     valuation_reminders: Vec<FundValuationReminder>,
     valuation_reminder_count: usize,
 }
@@ -515,7 +514,6 @@ pub async fn show(
     let valuation_reminder_count = due_valuations.len();
     let valuation_reminders = due_valuations
         .into_iter()
-        .take(10)
         .map(|fund| FundValuationReminder {
             parent_id: fund.parent_id,
             name: fund.name,
@@ -823,29 +821,6 @@ pub async fn show(
     }
     let installment_reminder_count = all_installment_reminders.len();
     let installment_reminders = all_installment_reminders.into_iter().take(10).collect();
-    let category_models = category::Entity::find()
-        .order_by_asc(category::Column::Id)
-        .all(&state.db)
-        .await
-        .map_err(err500)?;
-    let mut category_count_statuses = crate::category_limits::statuses(
-        &dek,
-        time_zone,
-        today,
-        &category_models,
-        bills.iter().filter(|bill| !bill.is_private),
-    )
-    .map_err(err500)?;
-    category_count_statuses.retain(|status| status.near_limit);
-    category_count_statuses.sort_by_key(|status| {
-        (
-            !status.over_limit,
-            !status.at_limit,
-            status.remaining,
-            status.id,
-        )
-    });
-
     let mut receivable = 0i64;
     let mut payable = 0i64;
     for (remaining_receivable, remaining_payable) in super::debts::outstanding_balances(
@@ -907,7 +882,6 @@ pub async fn show(
         valuation_reminders,
         valuation_reminder_count,
         budget_statuses,
-        category_count_statuses,
     }
     .render()
     .map_err(err500)?;

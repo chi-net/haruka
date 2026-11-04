@@ -1,6 +1,6 @@
 use crate::{
     crypto,
-    entity::{account, account_detail, balance_adjustment, investment_sms_event},
+    entity::{account, balance_adjustment, investment_sms_event},
     handlers::accounts,
     AppState,
 };
@@ -216,48 +216,6 @@ pub(crate) struct FundReminder {
     pub(crate) currency: String,
     pub(crate) amount: i64,
     pub(crate) days_since: i64,
-}
-
-pub(crate) async fn due_valuations(
-    state: &AppState,
-    dek: &crypto::Dek,
-) -> HandlerResult<Vec<FundReminder>> {
-    let all = account::Entity::find()
-        .all(&state.db)
-        .await
-        .map_err(err500)?;
-    let now = chrono::Utc::now();
-    let mut balances = HashMap::new();
-    for fund in all.iter().filter(|a| a.kind == "investment_fund") {
-        if (now - fund.last_calibrated_at.unwrap_or(fund.created_at)).num_days() >= 30 {
-            balances.insert(
-                fund.id,
-                accounts::current_balance(state, dek, fund.id).await?,
-            );
-        }
-    }
-    let mut reminders = valuation_reminders(dek, &all, &balances, now)?;
-    if !reminders.is_empty() {
-        let details = account_detail::Entity::find()
-            .all(&state.db)
-            .await
-            .map_err(err500)?
-            .into_iter()
-            .map(|detail| (detail.account_id, detail))
-            .collect();
-        let names = crate::handlers::bills::account_display_names(dek, &all, &details);
-        let by_id: HashMap<_, _> = all.iter().map(|account| (account.id, account)).collect();
-        for reminder in &mut reminders {
-            if let Some(parent_name) = names.get(&reminder.parent_id) {
-                reminder.parent_name.clone_from(parent_name);
-            }
-            if let Some(fund) = by_id.get(&reminder.id) {
-                reminder.name =
-                    crate::handlers::bills::account_display_name(dek, fund, details.get(&fund.id));
-            }
-        }
-    }
-    Ok(reminders)
 }
 
 pub(crate) fn valuation_reminders(

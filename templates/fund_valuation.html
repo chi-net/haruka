@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ heading }} - haruka{% endblock %}
 {% block content %}
-<div class="flex flex-wrap justify-between gap-3 mb-4"><h1 class="text-xl font-bold">{{ heading }}</h1><div class="flex gap-3 text-sm">{% if !all_groups %}<a href="/funds/valuation" class="text-blue-600">全部基金校准</a>{% endif %}<a href="/funds/valuation-reminders" class="text-blue-600">估值提醒</a><a href="{{ back }}" class="text-gray-600">返回{% if all_groups %}账户{% else %}基金{% endif %}</a></div></div>
+<div class="flex flex-wrap justify-between gap-3 mb-4"><h1 class="text-xl font-bold">{{ heading }}</h1><div class="flex gap-3 text-sm">{% if !all_groups %}<a href="/funds/valuation" class="text-blue-600">全部基金校准</a>{% endif %}<a href="{{ back }}" class="text-gray-600">返回{% if all_groups %}账户{% else %}基金{% endif %}</a></div></div>
 {% if let Some(count) = saved %}<p role="status" class="rounded border border-green-200 bg-green-50 text-green-800 p-3 mb-4">本批次已保存 {{ count }} 只基金的校准与审计；未修改且未勾选的行未写入。</p>{% endif %}
 <form method="post" action="{{ action }}" hx-confirm="确认保存已修改或已核对基金的价值和审计？" class="space-y-4">
 {% if groups.is_empty() %}<p class="text-gray-500">尚无投资分组，请先添加投资分组和基金。</p>{% endif %}

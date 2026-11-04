@@ -54,6 +54,12 @@ pub(crate) fn parse_limit(kind: &str, period: &str, raw: &str) -> Result<Option<
         .ok_or_else(|| "次数限制必须在 1 到 4294967295 之间".into())
 }
 
+pub(crate) fn encrypt_limit(dek: &crypto::Dek, limit: Option<u32>) -> String {
+    limit
+        .map(|count| crypto::encrypt(dek, count.to_string().as_bytes()))
+        .unwrap_or_default()
+}
+
 pub(crate) fn decrypt_limit(
     dek: &crypto::Dek,
     category: &category::Model,

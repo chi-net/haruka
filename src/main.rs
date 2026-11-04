@@ -481,12 +481,12 @@ async fn main() {
         )
         .route("/funds/{id}/delete", post(handlers::funds::delete))
         .route(
-            "/funds/valuation-reminders",
-            get(handlers::funds::reminders),
-        )
-        .route(
             "/budgets",
             get(handlers::budgets::show).post(handlers::budgets::update),
+        )
+        .route(
+            "/budgets/category-limits",
+            post(handlers::budgets::update_category_limit),
         )
         .route(
             "/bills",

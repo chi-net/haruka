@@ -4,6 +4,13 @@
 <h1 class="text-xl font-bold mb-4">设置</h1>
 
 <section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
+  <div class="flex flex-wrap items-start justify-between gap-3">
+    <div><h2 class="font-medium">分类管理</h2><p class="text-sm text-gray-500 mt-1">新增、编辑或删除收入与支出分类，并设置食品标记；分类笔数限制与提醒已移到预算页。</p></div>
+    <a href="/categories" class="shrink-0 rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">打开分类管理</a>
+  </div>
+</section>
+
+<section class="bg-white rounded-lg border border-gray-200 p-4 mb-5">
   <h2 class="font-medium">默认货币</h2>
   <form method="post" action="/settings/currency" class="flex flex-wrap gap-2">
     <select name="default_currency" class="flex-1 min-w-48 border border-gray-300 rounded px-3 py-1.5 text-sm bg-white">

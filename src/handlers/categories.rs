@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use askama::Template;
 use axum::{
     extract::{Extension, Path, State},
@@ -7,19 +5,10 @@ use axum::{
     response::{Html, Redirect},
     Form,
 };
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set,
-};
+use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, QueryOrder, Set};
 use serde::Deserialize;
 
-use crate::{
-    category_limits::{self, CountStatus},
-    crypto,
-    entity::{bill, category},
-    AppState, SessionDek,
-};
-
-use super::ClientTimeZone;
+use crate::{crypto, entity::category, AppState, SessionDek};
 
 type HandlerResult<T> = Result<T, (StatusCode, String)>;
 
@@ -35,7 +24,6 @@ struct CategoryRow {
     id: i64,
     name: String,
     is_food: bool,
-    status: Option<CountStatus>,
 }
 
 #[derive(Template)]
@@ -43,7 +31,6 @@ struct CategoryRow {
 struct CategoriesTemplate {
     income_categories: Vec<CategoryRow>,
     expense_categories: Vec<CategoryRow>,
-    time_zone: String,
 }
 
 #[derive(Template)]
@@ -53,9 +40,6 @@ struct CategoryFormTemplate {
     name: String,
     kind: String,
     is_food: bool,
-    count_limit: String,
-    count_limit_period: String,
-    time_zone: String,
 }
 
 fn default_period() -> String {
@@ -68,27 +52,16 @@ pub struct CategoryFormData {
     kind: String,
     #[serde(default)]
     is_food: bool,
-    #[serde(default)]
-    count_limit: String,
-    #[serde(default = "default_period")]
-    count_limit_period: String,
 }
 
-fn validate_form(form: &CategoryFormData) -> HandlerResult<Option<u32>> {
+fn validate_form(form: &CategoryFormData) -> HandlerResult<()> {
     if form.name.trim().is_empty() {
         return Err(bad_request("分类名称不能为空"));
     }
     if form.kind != "income" && form.kind != "expense" {
         return Err(bad_request("分类类型无效"));
     }
-    category_limits::parse_limit(&form.kind, &form.count_limit_period, &form.count_limit)
-        .map_err(bad_request)
-}
-
-fn encrypt_limit(dek: &crypto::Dek, limit: Option<u32>) -> String {
-    limit
-        .map(|count| crypto::encrypt(dek, count.to_string().as_bytes()))
-        .unwrap_or_default()
+    Ok(())
 }
 
 async fn ensure_unique_name(
@@ -115,49 +88,19 @@ async fn ensure_unique_name(
 pub async fn show(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
-    Extension(time_zone): Extension<ClientTimeZone>,
 ) -> HandlerResult<Html<String>> {
     let categories = category::Entity::find()
         .order_by_asc(category::Column::Id)
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let bills = if categories
-        .iter()
-        .any(|category| category.kind == "expense" && !category.count_limit.is_empty())
-    {
-        bill::Entity::find()
-            .filter(bill::Column::IsPrivate.eq(false))
-            .all(&state.db)
-            .await
-            .map_err(err500)?
-    } else {
-        Vec::new()
-    };
-    let mut statuses: HashMap<_, _> = category_limits::statuses(
-        &dek,
-        time_zone,
-        time_zone.today(),
-        &categories,
-        bills.iter(),
-    )
-    .map_err(err500)?
-    .into_iter()
-    .map(|status| (status.id, status))
-    .collect();
     let mut income_categories = Vec::new();
     let mut expense_categories = Vec::new();
     for category in categories {
-        let mut status = statuses.remove(&category.id);
-        let name = match status.as_mut() {
-            Some(status) => std::mem::take(&mut status.name),
-            None => crypto::decrypt_string(&dek, &category.name),
-        };
         let row = CategoryRow {
             id: category.id,
-            name,
+            name: crypto::decrypt_string(&dek, &category.name),
             is_food: category.is_food,
-            status,
         };
         if category.kind == "income" {
             income_categories.push(row);
@@ -168,7 +111,6 @@ pub async fn show(
     let html = CategoriesTemplate {
         income_categories,
         expense_categories,
-        time_zone: time_zone.0.name().into(),
     }
     .render()
     .map_err(err500)?;
@@ -180,7 +122,7 @@ pub async fn create(
     Extension(SessionDek(dek)): Extension<SessionDek>,
     Form(form): Form<CategoryFormData>,
 ) -> HandlerResult<Redirect> {
-    let limit = validate_form(&form)?;
+    validate_form(&form)?;
     let _balance_guard = state.balance_writes.lock().await;
     let name = form.name.trim();
     ensure_unique_name(&state, &dek, &form.kind, name, None).await?;
@@ -189,12 +131,8 @@ pub async fn create(
         kind: Set(form.kind),
         name: Set(crypto::encrypt(&dek, name.as_bytes())),
         is_food: Set(expense && form.is_food),
-        count_limit: Set(encrypt_limit(&dek, limit)),
-        count_limit_period: Set(if expense {
-            form.count_limit_period
-        } else {
-            default_period()
-        }),
+        count_limit: Set(String::new()),
+        count_limit_period: Set(default_period()),
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
     }
@@ -207,7 +145,6 @@ pub async fn create(
 pub async fn edit_form(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
-    Extension(time_zone): Extension<ClientTimeZone>,
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
     let category = category::Entity::find_by_id(id)
@@ -215,20 +152,12 @@ pub async fn edit_form(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "分类不存在".into()))?;
-    let limit = category_limits::decrypt_limit(&dek, &category).map_err(err500)?;
     let expense = category.kind == "expense";
     let html = CategoryFormTemplate {
         action: format!("/categories/{id}/edit"),
         name: crypto::decrypt_string(&dek, &category.name),
         kind: category.kind,
         is_food: expense && category.is_food,
-        count_limit: limit.map(|count| count.to_string()).unwrap_or_default(),
-        count_limit_period: if expense {
-            category.count_limit_period
-        } else {
-            default_period()
-        },
-        time_zone: time_zone.0.name().into(),
     }
     .render()
     .map_err(err500)?;
@@ -241,7 +170,7 @@ pub async fn update(
     Path(id): Path<i64>,
     Form(form): Form<CategoryFormData>,
 ) -> HandlerResult<Redirect> {
-    let limit = validate_form(&form)?;
+    validate_form(&form)?;
     let _balance_guard = state.balance_writes.lock().await;
     let category = category::Entity::find_by_id(id)
         .one(&state.db)
@@ -255,12 +184,10 @@ pub async fn update(
     active.kind = Set(form.kind);
     active.name = Set(crypto::encrypt(&dek, name.as_bytes()));
     active.is_food = Set(expense && form.is_food);
-    active.count_limit = Set(encrypt_limit(&dek, limit));
-    active.count_limit_period = Set(if expense {
-        form.count_limit_period
-    } else {
-        default_period()
-    });
+    if !expense {
+        active.count_limit = Set(String::new());
+        active.count_limit_period = Set(default_period());
+    }
     active.update(&state.db).await.map_err(err500)?;
     Ok(Redirect::to("/categories"))
 }

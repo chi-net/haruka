@@ -33,4 +33,55 @@
   </div>
 </section>
 {% endif %}
+
+<section id="category-limits" class="mt-5">
+  <div class="flex flex-wrap items-start justify-between gap-3 mb-3">
+    <div><h2 class="font-medium">分类笔数限制</h2><p class="text-sm text-gray-500 mt-1">软提醒：已用达到 80% 或剩余不超过 1 次时高亮，达到或超过上限仍可正常记账。只统计当前周期截至今天的普通支出，每笔计 1 次，不含收入、转账、隐私分类和未来日期。</p></div>
+    <a href="/categories" class="shrink-0 text-sm text-blue-600 hover:underline">管理分类</a>
+  </div>
+  {% if category_alert_count > 0 %}<p class="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{{ category_alert_count }} 个分类接近或超过笔数上限，已在下方标出。</p>{% endif %}
+  {% if category_limits.is_empty() %}
+  <div class="rounded-lg border border-dashed border-gray-300 bg-white p-6 text-center"><p class="text-sm text-gray-500">还没有支出分类，先到 <a href="/categories" class="text-blue-600 hover:underline">分类管理</a> 新增。</p></div>
+  {% else %}
+  <div class="space-y-3">
+    {% for row in category_limits %}
+    <article data-category-id="{{ row.id }}" class="rounded-lg border border-gray-200 bg-white p-4">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <h3 class="text-sm font-medium">{{ row.name }}</h3>
+            {% if row.is_food %}<span class="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700">食品类</span>{% endif %}
+            {% if let Some(status) = row.status %}
+              {% if status.over_limit %}<span class="rounded-full bg-red-600 px-2 py-0.5 text-xs font-medium text-white">已超过上限</span>
+              {% else if status.at_limit %}<span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800">已达到上限</span>
+              {% else if status.near_limit %}<span class="rounded-full bg-amber-200 px-2 py-0.5 text-xs font-medium text-amber-900">接近上限</span>
+              {% else %}<span class="rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-700">正常</span>{% endif %}
+            {% endif %}
+          </div>
+          {% if let Some(status) = row.status %}
+          <p class="mt-1 text-xs text-gray-500">{{ status.period_label }} · {{ status.period_range }} · 已用 {{ status.used }} / {{ status.limit }} 次 · {% if status.over_limit %}超出 {{ status.over_by }} 次{% else %}剩余 {{ status.remaining }} 次{% endif %}</p>
+          {% else %}
+          <p class="mt-1 text-xs text-gray-500">未启用笔数上限</p>
+          {% endif %}
+        </div>
+        <form method="post" action="/budgets/category-limits" class="flex flex-wrap items-end gap-2">
+          <input type="hidden" name="category_id" value="{{ row.id }}">
+          <label class="text-xs text-gray-500">周期<select name="count_limit_period" class="mt-1 block rounded border border-gray-300 bg-white px-2 py-1.5 text-sm">
+            <option value="day" {% if row.period == "day" %}selected{% endif %}>每日</option>
+            <option value="week" {% if row.period == "week" %}selected{% endif %}>每周（周一至周日）</option>
+            <option value="month" {% if row.period == "month" %}selected{% endif %}>每月</option>
+          </select></label>
+          <label class="text-xs text-gray-500">最多次数<input name="count_limit" value="{{ row.limit }}" inputmode="numeric" pattern="[0-9]*[1-9][0-9]*" title="请输入正整数；留空停用" placeholder="留空停用" class="mt-1 block w-28 rounded border border-gray-300 px-2 py-1.5 text-sm"></label>
+          <button class="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700">保存</button>
+        </form>
+      </div>
+      {% if let Some(status) = row.status %}
+      <div class="mt-3 h-2 overflow-hidden rounded-full bg-gray-200" role="progressbar" aria-label="支出次数使用比例" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ status.bar_percent }}"><div class="h-full rounded-full {% if status.over_limit || status.at_limit %}bg-red-500{% else if status.near_limit %}bg-amber-500{% else %}bg-blue-500{% endif %}" style="width: {{ status.bar_percent }}%"></div></div>
+      <p class="mt-1 text-xs text-gray-500">已用 {{ status.percent }}%{% if status.at_limit || status.over_limit %} · 仍可正常记账{% endif %}</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
 {% endblock %}
