@@ -25,10 +25,224 @@ fn err500(e: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
 
+struct FundPreview {
+    name: String,
+    value: String,
+    profit: String,
+    profit_percent: String,
+    has_profit: bool,
+    positive: bool,
+    negative: bool,
+}
+
 struct AccountSummary {
     name: String,
     kind: String,
     balance: String,
+    is_investment: bool,
+    funds: Vec<FundPreview>,
+    fund_count: usize,
+    profit: String,
+    profit_percent: String,
+    has_profit: bool,
+    positive: bool,
+    negative: bool,
+    excluded_fund_count: usize,
+}
+
+struct AccountGroup {
+    label: String,
+    count: usize,
+    subtotal: String,
+    is_investment: bool,
+    accounts: Vec<AccountSummary>,
+}
+
+struct InvestmentSummary {
+    funds: Vec<FundPreview>,
+    profit: String,
+    profit_percent: String,
+    has_profit: bool,
+    positive: bool,
+    negative: bool,
+    excluded_fund_count: usize,
+}
+
+const ACCOUNT_GROUP_ORDER: &[&str] = &[
+    "payment",
+    "bank",
+    "stored_value",
+    "investment",
+    "other",
+    "credit_card",
+    "credit_service",
+];
+
+fn account_group_key(kind: &str) -> &'static str {
+    match kind {
+        "payment" => "payment",
+        "bank" => "bank",
+        "stored_value" => "stored_value",
+        "investment" => "investment",
+        "credit_card" => "credit_card",
+        "credit_service" => "credit_service",
+        _ => "other",
+    }
+}
+
+fn account_group_label(kind: &str) -> &'static str {
+    match kind {
+        "payment" => "支付账户",
+        "bank" => "银行账户",
+        "stored_value" => "储值卡账户",
+        "investment" => "投资分类",
+        "credit_card" => "信用卡",
+        "credit_service" => "信贷服务",
+        _ => "其他账户",
+    }
+}
+
+fn add_net_invested(
+    net_invested: &mut HashMap<i64, i64>,
+    account_id: i64,
+    delta: i64,
+) -> HandlerResult<()> {
+    let current = net_invested.get(&account_id).copied().unwrap_or_default();
+    net_invested.insert(
+        account_id,
+        current
+            .checked_add(delta)
+            .ok_or_else(|| err500("投入本金超出范围"))?,
+    );
+    Ok(())
+}
+
+fn push_account_summary(
+    grouped: &mut HashMap<&'static str, Vec<AccountSummary>>,
+    subtotals: &mut HashMap<&'static str, i64>,
+    kind: &str,
+    summary: AccountSummary,
+    converted_balance: i64,
+) -> HandlerResult<()> {
+    let key = account_group_key(kind);
+    grouped.entry(key).or_default().push(summary);
+    let subtotal = subtotals.entry(key).or_insert(0);
+    *subtotal = subtotal
+        .checked_add(converted_balance)
+        .ok_or_else(|| err500("账户小计超出范围"))?;
+    Ok(())
+}
+
+fn signed_money(cents: i64, currency: &str) -> HandlerResult<String> {
+    if cents > 0 {
+        Ok(format!("+{}", currency::format(cents, currency)))
+    } else if cents < 0 {
+        let absolute = cents.checked_neg().ok_or_else(|| err500("金额超出范围"))?;
+        Ok(format!("-{}", currency::format(absolute, currency)))
+    } else {
+        Ok(currency::format(0, currency))
+    }
+}
+
+fn profit_percent(profit: i64, invested: i64) -> String {
+    if invested <= 0 {
+        return String::new();
+    }
+    let percent = (rust_decimal::Decimal::from(profit) * rust_decimal::Decimal::from(100)
+        / rust_decimal::Decimal::from(invested))
+    .round_dp(1);
+    let text = percent.normalize().to_string();
+    if percent > rust_decimal::Decimal::ZERO {
+        format!("+{text}%")
+    } else {
+        format!("{text}%")
+    }
+}
+
+fn profit_texts(
+    has_profit: bool,
+    profit: i64,
+    invested: i64,
+    currency: &str,
+) -> HandlerResult<(String, String, bool, bool)> {
+    if !has_profit {
+        return Ok(("—".into(), String::new(), false, false));
+    }
+    Ok((
+        signed_money(profit, currency)?,
+        profit_percent(profit, invested),
+        profit > 0,
+        profit < 0,
+    ))
+}
+
+/// P/L preview: current fund value minus cumulative net transfer principal.
+/// Funds without net principal keep "—" instead of inventing a cost basis.
+fn investment_summary(
+    dek: &crypto::Dek,
+    root: &account::Model,
+    funds: &[&account::Model],
+    details: &HashMap<i64, account_detail::Model>,
+    balances: &HashMap<i64, i64>,
+    net_invested: &HashMap<i64, i64>,
+) -> HandlerResult<InvestmentSummary> {
+    let mut rows = Vec::with_capacity(funds.len());
+    let mut basis_total = 0i64;
+    let mut value_with_basis = 0i64;
+    let mut excluded_fund_count = 0usize;
+    for fund in funds {
+        let value = *balances
+            .get(&fund.id)
+            .ok_or_else(|| err500("基金余额缺失"))?;
+        let invested = net_invested.get(&fund.id).copied().unwrap_or_default();
+        let has_profit = invested > 0;
+        let profit = if has_profit {
+            basis_total = basis_total
+                .checked_add(invested)
+                .ok_or_else(|| err500("投入本金超出范围"))?;
+            value_with_basis = value_with_basis
+                .checked_add(value)
+                .ok_or_else(|| err500("持仓价值超出范围"))?;
+            value
+                .checked_sub(invested)
+                .ok_or_else(|| err500("盈亏超出范围"))?
+        } else {
+            if value != 0 {
+                excluded_fund_count += 1;
+            }
+            0
+        };
+        let (text, percent, positive, negative) =
+            profit_texts(has_profit, profit, invested, &root.currency)?;
+        rows.push(FundPreview {
+            name: super::bills::account_display_name(dek, fund, details.get(&fund.id)),
+            value: currency::format(value, &root.currency),
+            profit: text,
+            profit_percent: percent,
+            has_profit,
+            positive,
+            negative,
+        });
+    }
+    let has_profit = basis_total > 0;
+    let profit = if has_profit {
+        value_with_basis
+            .checked_sub(basis_total)
+            .ok_or_else(|| err500("盈亏超出范围"))?
+    } else {
+        0
+    };
+    let (text, percent, positive, negative) =
+        profit_texts(has_profit, profit, basis_total, &root.currency)?;
+    Ok(InvestmentSummary {
+        funds: rows,
+        profit: text,
+        profit_percent: percent,
+        has_profit,
+        positive,
+        negative,
+        excluded_fund_count,
+    })
 }
 
 struct CreditDueSummary {
@@ -42,14 +256,12 @@ struct CreditDueSummary {
 struct CreditAccountSummary {
     name: String,
     kind: String,
-    balance: String,
     used: String,
     available: String,
     limit: String,
     unbilled: String,
     due: Vec<CreditDueSummary>,
     due_total: String,
-    follows_billing_day: bool,
     installment_principal: String,
     next_installment: Option<CreditDueSummary>,
     has_adjustments: bool,
@@ -86,7 +298,7 @@ struct FundValuationReminder {
 #[derive(Template)]
 #[template(path = "dashboard.html")]
 struct DashboardTemplate {
-    account_summaries: Vec<AccountSummary>,
+    account_groups: Vec<AccountGroup>,
     credit_accounts: Vec<CreditAccountSummary>,
     auto_debit_warnings: Vec<AutoDebitWarning>,
     net_assets: String,
@@ -94,7 +306,6 @@ struct DashboardTemplate {
     total_expense: String,
     receivable: String,
     payable: String,
-    time_zone: String,
     subscription_reminders: Vec<ReminderRow>,
     installment_reminders: Vec<ReminderRow>,
     subscription_reminder_count: usize,
@@ -274,6 +485,27 @@ pub async fn show(
     let reminder_bills: HashMap<i64, &bill::Model> =
         bills.iter().map(|bill| (bill.id, bill)).collect();
     let account_names = super::bills::account_display_names(&dek, &accounts, &details);
+    let mut funds_by_parent: HashMap<i64, Vec<&account::Model>> = HashMap::new();
+    for fund in accounts
+        .iter()
+        .filter(|account| account.kind == "investment_fund")
+    {
+        let parent = fund.parent_id.ok_or_else(|| err500("基金缺少投资分组"))?;
+        funds_by_parent.entry(parent).or_default().push(fund);
+    }
+    let mut net_invested: HashMap<i64, i64> = HashMap::new();
+    for transfer in &transfers {
+        let outgoing = crypto::decrypt_cents(&dek, &transfer.amount);
+        let incoming = super::transfer_to_cents(&dek, transfer);
+        add_net_invested(
+            &mut net_invested,
+            transfer.from_account_id,
+            outgoing
+                .checked_neg()
+                .ok_or_else(|| err500("投入本金超出范围"))?,
+        )?;
+        add_net_invested(&mut net_invested, transfer.to_account_id, incoming)?;
+    }
     let due_valuations = crate::investment_funds::valuation_reminders(
         &dek,
         &accounts,
@@ -293,7 +525,8 @@ pub async fn show(
         })
         .collect();
     let mut net_assets = 0i64;
-    let mut account_summaries = Vec::with_capacity(accounts.len());
+    let mut grouped_accounts: HashMap<&'static str, Vec<AccountSummary>> = HashMap::new();
+    let mut group_subtotals: HashMap<&'static str, i64> = HashMap::new();
     let mut credit_accounts = Vec::new();
     for account in accounts
         .iter()
@@ -302,23 +535,39 @@ pub async fn show(
         let balance = *account_balances
             .get(&account.id)
             .ok_or_else(|| err500("账户余额缺失"))?;
+        let converted = rates.convert(balance, &account.currency).map_err(err500)?;
         net_assets = net_assets
-            .checked_add(rates.convert(balance, &account.currency).map_err(err500)?)
+            .checked_add(converted)
             .ok_or_else(|| err500("资产金额超出范围"))?;
+        let name = account_names.get(&account.id).cloned().unwrap_or_default();
         if matches!(account.kind.as_str(), "credit_card" | "credit_service") {
             if balance == 0 {
                 continue;
             }
-            let detail = details.get(&account.id);
             let (limit, statement) = statements
                 .remove(&account.id)
                 .ok_or_else(|| err500("信用账户账单估算缺失"))?;
             if account.kind == "credit_card" && limit == 0 {
-                account_summaries.push(AccountSummary {
-                    name: account_names.get(&account.id).cloned().unwrap_or_default(),
-                    kind: account_kind_label(&account.kind).into(),
-                    balance: currency::format(balance, &account.currency),
-                });
+                push_account_summary(
+                    &mut grouped_accounts,
+                    &mut group_subtotals,
+                    &account.kind,
+                    AccountSummary {
+                        name,
+                        kind: account_kind_label(&account.kind).into(),
+                        balance: currency::format(balance, &account.currency),
+                        is_investment: false,
+                        funds: Vec::new(),
+                        fund_count: 0,
+                        profit: String::new(),
+                        profit_percent: String::new(),
+                        has_profit: false,
+                        positive: false,
+                        negative: false,
+                        excluded_fund_count: 0,
+                    },
+                    converted,
+                )?;
                 continue;
             }
             let statement = statement.ok_or_else(|| err500("信用账户账单估算缺失"))?;
@@ -328,11 +577,9 @@ pub async fn show(
                     .checked_add(due.total)
                     .ok_or_else(|| err500("已出账应还金额超出范围"))
             })?;
-            let configured_repayment_day = detail.map(|detail| detail.repayment_day).unwrap_or(0);
             credit_accounts.push(CreditAccountSummary {
-                name: account_names.get(&account.id).cloned().unwrap_or_default(),
+                name,
                 kind: account_kind_label(&account.kind).into(),
-                balance: currency::format(balance, &account.currency),
                 used: currency::format(amounts.used, &account.currency),
                 available: currency::format(amounts.available, &account.currency),
                 limit: currency::format(limit, &account.currency),
@@ -352,18 +599,81 @@ pub async fn show(
                     .map(|due| credit_due_summary(due, &account.currency, today)),
                 has_adjustments: statement.has_adjustments,
                 has_future_entries: statement.has_future_entries,
-                follows_billing_day: configured_repayment_day == 0,
                 usage_percent: amounts.usage_percent,
                 danger: amounts.danger,
             });
+        } else if account.kind == "investment" {
+            let summary = investment_summary(
+                &dek,
+                account,
+                funds_by_parent
+                    .get(&account.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+                &details,
+                &account_balances,
+                &net_invested,
+            )?;
+            let fund_count = summary.funds.len();
+            push_account_summary(
+                &mut grouped_accounts,
+                &mut group_subtotals,
+                &account.kind,
+                AccountSummary {
+                    name,
+                    kind: account_kind_label(&account.kind).into(),
+                    balance: currency::format(balance, &account.currency),
+                    is_investment: true,
+                    funds: summary.funds,
+                    fund_count,
+                    profit: summary.profit,
+                    profit_percent: summary.profit_percent,
+                    has_profit: summary.has_profit,
+                    positive: summary.positive,
+                    negative: summary.negative,
+                    excluded_fund_count: summary.excluded_fund_count,
+                },
+                converted,
+            )?;
         } else {
-            account_summaries.push(AccountSummary {
-                name: account_names.get(&account.id).cloned().unwrap_or_default(),
-                kind: account_kind_label(&account.kind).into(),
-                balance: currency::format(balance, &account.currency),
-            });
+            push_account_summary(
+                &mut grouped_accounts,
+                &mut group_subtotals,
+                &account.kind,
+                AccountSummary {
+                    name,
+                    kind: account_kind_label(&account.kind).into(),
+                    balance: currency::format(balance, &account.currency),
+                    is_investment: false,
+                    funds: Vec::new(),
+                    fund_count: 0,
+                    profit: String::new(),
+                    profit_percent: String::new(),
+                    has_profit: false,
+                    positive: false,
+                    negative: false,
+                    excluded_fund_count: 0,
+                },
+                converted,
+            )?;
         }
     }
+    let account_groups = ACCOUNT_GROUP_ORDER
+        .iter()
+        .filter_map(|key| {
+            let accounts = grouped_accounts.remove(key)?;
+            Some(AccountGroup {
+                label: account_group_label(key).into(),
+                count: accounts.len(),
+                subtotal: currency::format(
+                    group_subtotals.get(key).copied().unwrap_or_default(),
+                    &default_currency,
+                ),
+                is_investment: *key == "investment",
+                accounts,
+            })
+        })
+        .collect::<Vec<_>>();
     let now = chrono::Utc::now().naive_utc();
     let reminder_deadline = now + Duration::days(7);
     let subscriptions = subscription::Entity::find()
@@ -582,7 +892,7 @@ pub async fn show(
     }
     let budget_statuses = super::budgets::current_statuses(&state, &dek, time_zone).await?;
     let html = DashboardTemplate {
-        account_summaries,
+        account_groups,
         credit_accounts,
         auto_debit_warnings,
         net_assets: currency::format(net_assets, &default_currency),
@@ -590,7 +900,6 @@ pub async fn show(
         total_expense: currency::format(total_expense, &default_currency),
         receivable: currency::format(receivable, &default_currency),
         payable: currency::format(payable, &default_currency),
-        time_zone: time_zone.0.name().into(),
         subscription_reminders,
         installment_reminders,
         subscription_reminder_count,
@@ -646,5 +955,97 @@ mod tests {
             assert_eq!(amounts.usage_percent, 100);
             assert!(amounts.danger);
         }
+    }
+
+    fn model(dek: &crypto::Dek, id: i64, kind: &str, parent_id: Option<i64>) -> account::Model {
+        account::Model {
+            id,
+            name: crypto::encrypt(dek, format!("账户{id}").as_bytes()),
+            kind: kind.into(),
+            currency: "CNY".into(),
+            balance_offset: crypto::encrypt_cents(dek, 0),
+            note: crypto::encrypt(dek, b""),
+            created_at: chrono::Utc::now(),
+            parent_id,
+            last_calibrated_at: None,
+            sms_names: crypto::encrypt(dek, b"[]"),
+            transfer_fee_rate_bps: crypto::encrypt_cents(dek, 0),
+        }
+    }
+
+    #[test]
+    fn signed_money_and_percent_keep_direction_and_rounding() {
+        assert_eq!(signed_money(12_345, "CNY").unwrap(), "+CNY 123.45");
+        assert_eq!(signed_money(-12_345, "CNY").unwrap(), "-CNY 123.45");
+        assert_eq!(signed_money(0, "CNY").unwrap(), "CNY 0.00");
+        assert_eq!(profit_percent(20_000, 100_000), "+20%");
+        assert_eq!(profit_percent(-5_000, 100_000), "-5%");
+        assert_eq!(profit_percent(0, 100_000), "0%");
+        assert_eq!(profit_percent(1, 3), "+33.3%");
+        assert_eq!(profit_percent(1_000, 0), "");
+    }
+
+    #[test]
+    fn investment_summary_uses_net_transfer_principal_and_skips_unknown_cost() {
+        let dek = crypto::Dek::new([7; crypto::DEK_LEN]);
+        let root = model(&dek, 1, "investment", None);
+        let invested_fund = model(&dek, 2, "investment_fund", Some(1));
+        let initial_fund = model(&dek, 3, "investment_fund", Some(1));
+        let details = HashMap::new();
+
+        let summary = investment_summary(
+            &dek,
+            &root,
+            &[&invested_fund],
+            &details,
+            &HashMap::from([(2, 120_000)]),
+            &HashMap::from([(2, 100_000)]),
+        )
+        .unwrap();
+        assert!(summary.has_profit);
+        assert_eq!(summary.profit, "+CNY 200.00");
+        assert_eq!(summary.profit_percent, "+20%");
+        assert_eq!(summary.excluded_fund_count, 0);
+
+        let loss = investment_summary(
+            &dek,
+            &root,
+            &[&invested_fund],
+            &details,
+            &HashMap::from([(2, 90_000)]),
+            &HashMap::from([(2, 100_000)]),
+        )
+        .unwrap();
+        assert!(loss.has_profit);
+        assert!(loss.negative);
+        assert_eq!(loss.profit, "-CNY 100.00");
+        assert_eq!(loss.profit_percent, "-10%");
+
+        let mixed = investment_summary(
+            &dek,
+            &root,
+            &[&invested_fund, &initial_fund],
+            &details,
+            &HashMap::from([(2, 120_000), (3, 50_000)]),
+            &HashMap::from([(2, 100_000)]),
+        )
+        .unwrap();
+        assert!(mixed.has_profit);
+        assert_eq!(mixed.profit, "+CNY 200.00");
+        assert_eq!(mixed.excluded_fund_count, 1);
+        assert!(!mixed.funds[1].has_profit);
+        assert_eq!(mixed.funds[1].profit, "—");
+
+        let unknown = investment_summary(
+            &dek,
+            &root,
+            &[&initial_fund],
+            &details,
+            &HashMap::from([(3, 50_000)]),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(!unknown.has_profit);
+        assert_eq!(unknown.profit, "—");
     }
 }

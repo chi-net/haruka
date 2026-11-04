@@ -140,11 +140,52 @@
   </div>
 </section>
 
-{% if !account_summaries.is_empty() %}<section class="mb-5">
+{% if !account_groups.is_empty() %}<section class="mb-5">
   <div class="flex items-center justify-between mb-3"><h2 class="font-medium">账户概览</h2><a href="/accounts" class="text-sm text-blue-600 hover:underline">管理账户</a></div>
-  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-    {% for a in account_summaries %}
-    <div class="bg-white rounded-lg border border-gray-200 p-3"><div class="text-xs text-gray-500">{{ a.kind }}</div><div class="text-sm truncate mt-0.5" title="{{ a.name }}">{{ a.name }}</div><div class="font-mono text-lg mt-2">{{ a.balance }}</div></div>
+  <div class="space-y-3">
+    {% for group in account_groups %}
+    <details open class="rounded-lg border border-gray-200 bg-white">
+      <summary class="cursor-pointer px-4 py-3">
+        <span class="flex flex-wrap items-center justify-between gap-2">
+          <span class="flex flex-wrap items-baseline gap-2"><span class="font-medium">{{ group.label }}</span><span class="text-xs text-gray-500">{{ group.count }} 个账户</span></span>
+          <span class="font-mono text-sm text-gray-600">折合 {{ group.subtotal }}</span>
+        </span>
+      </summary>
+      <div class="border-t border-gray-200 p-3">
+        {% if group.is_investment %}<p class="mb-3 text-xs text-gray-500">盈亏（估算）= 当前价值 − 累计净转入本金；无净投入的基金不计入盈亏，仅供预览，不代表实际收益。</p>{% endif %}
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {% for a in group.accounts %}
+          <div class="min-w-0 rounded-lg border border-gray-200 bg-white p-3">
+            <div class="text-xs text-gray-500">{{ a.kind }}</div>
+            <div class="text-sm truncate mt-0.5" title="{{ a.name }}">{{ a.name }}</div>
+            <div class="font-mono text-lg mt-2 break-all">{{ a.balance }}</div>
+            {% if a.is_investment %}
+            <div class="mt-1 text-xs">
+              <span class="text-gray-500">盈亏（估算）</span>
+              {% if a.has_profit %}<span class="ml-1 font-mono font-semibold {% if a.positive %}text-green-700{% else if a.negative %}text-red-700{% else %}text-gray-600{% endif %}">{{ a.profit }}</span><span class="ml-1 font-mono {% if a.positive %}text-green-700{% else if a.negative %}text-red-700{% else %}text-gray-600{% endif %}">{{ a.profit_percent }}</span>{% if a.excluded_fund_count > 0 %}<span class="ml-1 text-gray-500">· {{ a.excluded_fund_count }} 只未计入</span>{% endif %}{% else %}<span class="ml-1 font-mono text-gray-500">—</span>{% endif %}
+            </div>
+            {% endif %}
+            {% if a.is_investment && a.fund_count > 0 %}
+            <details class="mt-2">
+              <summary class="cursor-pointer text-xs text-blue-600">{{ a.fund_count }} 只基金明细</summary>
+              <ul class="mt-2 space-y-2">
+                {% for fund in a.funds %}
+                <li class="flex items-start justify-between gap-2 text-xs">
+                  <span class="min-w-0 break-words text-gray-700">{{ fund.name }}</span>
+                  <span class="shrink-0 text-right">
+                    <span class="block font-mono">{{ fund.value }}</span>
+                    {% if fund.has_profit %}<span class="block font-mono {% if fund.positive %}text-green-700{% else if fund.negative %}text-red-700{% else %}text-gray-600{% endif %}">{{ fund.profit }} · {{ fund.profit_percent }}</span>{% else %}<span class="block text-gray-500">盈亏 —</span>{% endif %}
+                  </span>
+                </li>
+                {% endfor %}
+              </ul>
+            </details>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </details>
     {% endfor %}
   </div>
 </section>{% endif %}
