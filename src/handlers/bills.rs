@@ -101,7 +101,6 @@ struct BillsTemplate {
     keyword: String,
     has_filters: bool,
     search_categories: Vec<CategoryOption>,
-    default_currency: String,
     per_page: usize,
     total_records: usize,
     pagination: super::PaginationView,
@@ -120,7 +119,6 @@ struct QuickEntryPageTemplate {
     quick_entry_heading: String,
     quick_redirect_to: String,
     first_due_date: String,
-    time_zone: String,
 }
 
 #[derive(Template)]
@@ -1234,7 +1232,6 @@ async fn render_list(
         keyword: query.keyword.clone(),
         has_filters,
         search_categories,
-        default_currency,
         per_page: pagination.per_page,
         total_records,
         pagination: super::pagination_view(
@@ -1309,7 +1306,6 @@ pub async fn new_form(
         happened_at: chrono::Utc::now().naive_utc().format(TIME_FMT).to_string(),
         quick_entry_heading: "记一笔".into(),
         quick_redirect_to: "/bills/new".into(),
-        time_zone: time_zone.0.name().into(),
         first_due_date: (time_zone.today() + chrono::Months::new(1))
             .format("%Y-%m-%d")
             .to_string(),

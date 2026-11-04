@@ -57,7 +57,6 @@ struct BudgetsTemplate {
     monthly_amount: String,
     statuses: Vec<BudgetStatus>,
     default_currency: String,
-    time_zone: String,
 }
 
 fn parse_budget(value: &str, label: &str) -> HandlerResult<Option<i64>> {
@@ -256,7 +255,6 @@ pub async fn show(
         monthly_amount: input_amount(monthly_amount),
         statuses: current_statuses(&state, &dek, time_zone).await?,
         default_currency: currency::default_currency(&state).await.map_err(err500)?,
-        time_zone: time_zone.0.name().into(),
     }
     .render()
     .map_err(err500)?;

@@ -102,7 +102,6 @@ struct StatisticsTemplate {
     trend_label: String,
     charts_json: String,
     default_currency: String,
-    time_zone: String,
 }
 
 #[derive(Serialize)]
@@ -583,7 +582,6 @@ pub async fn show(
         trend_label,
         charts_json,
         default_currency,
-        time_zone: time_zone.0.name().into(),
     }
     .render()
     .map_err(err500)?;

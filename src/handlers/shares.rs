@@ -75,7 +75,6 @@ struct SharesTemplate {
 #[template(path = "shared_bill.html")]
 struct SharedBillTemplate {
     bill: SharedBillSnapshot,
-    expires_at: String,
 }
 
 #[derive(Template)]
@@ -83,7 +82,6 @@ struct SharedBillTemplate {
 struct SharedBillUnlockTemplate {
     token: String,
     error: String,
-    expires_at: String,
 }
 
 #[derive(Template)]
@@ -427,16 +425,8 @@ pub async fn delete(
     }
 }
 
-fn password_prompt(
-    share: &bill_share::Model,
-    token: String,
-    error: String,
-) -> HandlerResult<Response> {
-    render_public(SharedBillUnlockTemplate {
-        token,
-        error,
-        expires_at: share.expires_at.format(TIME_FMT).to_string(),
-    })
+fn password_prompt(token: String, error: String) -> HandlerResult<Response> {
+    render_public(SharedBillUnlockTemplate { token, error })
 }
 
 fn decrypted_share(
@@ -458,15 +448,12 @@ pub async fn open(
         return unavailable_response();
     };
     if share.has_password {
-        return password_prompt(&share, token, String::new());
+        return password_prompt(token, String::new());
     }
     let Some(bill) = decrypted_share(&share, token_bytes.as_slice(), "") else {
         return unavailable_response();
     };
-    render_public(SharedBillTemplate {
-        bill,
-        expires_at: share.expires_at.format(TIME_FMT).to_string(),
-    })
+    render_public(SharedBillTemplate { bill })
 }
 
 pub async fn unlock(
@@ -478,7 +465,7 @@ pub async fn unlock(
         return unavailable_response();
     };
     if form.password.len() > 256 {
-        return password_prompt(&share, token, "分享密码不正确".into());
+        return password_prompt(token, "分享密码不正确".into());
     }
     let password = Zeroizing::new(form.password);
     let Some(bill) = decrypted_share(
@@ -490,10 +477,7 @@ pub async fn unlock(
             ""
         },
     ) else {
-        return password_prompt(&share, token, "分享密码不正确".into());
+        return password_prompt(token, "分享密码不正确".into());
     };
-    render_public(SharedBillTemplate {
-        bill,
-        expires_at: share.expires_at.format(TIME_FMT).to_string(),
-    })
+    render_public(SharedBillTemplate { bill })
 }

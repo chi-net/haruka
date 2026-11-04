@@ -849,7 +849,6 @@ pub struct RejectForm {
 
 /// 借还页所需的联邦视图数据。
 pub struct InstanceView {
-    pub id: i64,
     pub domain: String,
     pub role: String,
     pub status: String,
@@ -860,7 +859,6 @@ pub struct FedRequestView {
     pub id: i64,
     pub kind: String,
     pub amount: String,
-    pub currency: String,
     pub note: String,
     pub status: String,
     pub origin: String,
@@ -883,7 +881,6 @@ pub async fn load_views(
     let mut instance_views = Vec::new();
     for instance in &instances {
         instance_views.push(InstanceView {
-            id: instance.id,
             domain: instance.domain.clone(),
             role: instance.role.clone(),
             status: instance.status.clone(),
@@ -909,7 +906,6 @@ pub async fn load_views(
             id: request.id,
             kind: request.kind,
             amount: crate::currency::format(amount, &request.currency),
-            currency: request.currency,
             note: crypto::decrypt_string(&key, &request.note),
             status: request.status,
             origin: request.origin,

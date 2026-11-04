@@ -205,11 +205,6 @@ impl Snapshot {
                 } else {
                     super::fmt_cents(remaining)
                 },
-                can_cancel: plan.bill_id.is_none()
-                    && !self
-                        .items
-                        .iter()
-                        .any(|item| item.plan_id == plan.id && item.paid_at.is_some()),
             });
         }
         plans.sort_unstable_by_key(|plan| plan.id);
@@ -239,8 +234,6 @@ pub struct PlanOption {
     next_amount: String,
     remaining_cents: String,
     remaining_amount: String,
-    #[serde(skip)]
-    can_cancel: bool,
 }
 #[derive(Serialize)]
 pub struct OptionsResponse {

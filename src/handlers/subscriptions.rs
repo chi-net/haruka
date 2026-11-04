@@ -89,7 +89,6 @@ struct SubscriptionsTemplate {
     currencies: &'static [currency::CurrencyOption],
     per_page: usize,
     pagination: super::PaginationView,
-    time_zone: String,
 }
 
 #[derive(Template)]
@@ -577,7 +576,6 @@ async fn render_list(
         categories: expense_categories(state, dek).await?,
         currencies: currency::CURRENCIES,
         per_page: pagination.per_page,
-        time_zone: time_zone.0.name().into(),
         pagination: super::pagination_view(
             &pagination,
             total_records,

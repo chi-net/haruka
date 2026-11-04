@@ -284,7 +284,6 @@ struct TableTemplate {
     table: String,
     columns: Vec<ColumnView>,
     rows: Vec<RowView>,
-    pk: String,
     page: usize,
     total_pages: usize,
     total_records: usize,
@@ -293,7 +292,6 @@ struct TableTemplate {
 struct ColumnView {
     name: String,
     label: String,
-    encrypted: bool,
     is_pk: bool,
 }
 
@@ -373,12 +371,10 @@ pub async fn table_view(
                             None => "",
                         }
                     ),
-                    encrypted: column.encrypted.is_some(),
                     is_pk: column.name == pk,
                 })
                 .collect(),
             rows: views,
-            pk,
             page,
             total_pages,
             total_records: total,
