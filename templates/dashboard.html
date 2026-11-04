@@ -144,12 +144,14 @@
   <div class="flex items-center justify-between mb-3"><h2 class="font-medium">账户概览</h2><a href="/accounts" class="text-sm text-blue-600 hover:underline">管理账户</a></div>
   <div class="space-y-3">
     {% for group in account_groups %}
-    <details open class="rounded-lg border border-gray-200 bg-white">
-      <summary class="cursor-pointer px-4 py-3">
-        <span class="flex flex-wrap items-center justify-between gap-2">
-          <span class="flex flex-wrap items-baseline gap-2"><span class="font-medium">{{ group.label }}</span><span class="text-xs text-gray-500">{{ group.count }} 个账户</span></span>
-          <span class="font-mono text-sm text-gray-600">折合 {{ group.subtotal }}</span>
+    <details open class="group rounded-lg border border-gray-200 bg-white">
+      <summary class="flex cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 [&::-webkit-details-marker]:hidden">
+        <span class="flex min-w-0 flex-wrap items-center gap-2">
+          <span aria-hidden="true" class="shrink-0 text-xs leading-none text-gray-500 transition-transform group-open:rotate-90">▸</span>
+          <span class="font-medium">{{ group.label }}</span>
+          <span class="text-xs text-gray-500">{{ group.count }} 个账户</span>
         </span>
+        <span class="shrink-0 font-mono text-sm text-gray-600">折合 {{ group.subtotal }}</span>
       </summary>
       <div class="border-t border-gray-200 p-3">
         {% if group.is_investment %}<p class="mb-3 text-xs text-gray-500">盈亏（估算）= 当前价值 − 累计净转入本金；无净投入的基金不计入盈亏，仅供预览，不代表实际收益。</p>{% endif %}
