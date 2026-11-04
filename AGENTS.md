@@ -16,6 +16,7 @@
 - 运行：`cargo run`，默认监听 `127.0.0.1:3000`；命令行支持 `--listen <地址:端口>` 或 `--port <端口>`，环境变量支持 `LISTEN_ADDR` 或 `PORT`，优先级为命令行 > `LISTEN_ADDR` > `PORT` > 默认值；`--port`/`PORT` 监听 `0.0.0.0`
 - 前端依赖：`npm install`；完整构建：`npm run web:build`（Tailwind + 锁定的浏览器静态资源）；仅构建样式：`npm run css:build`；开发监听：`npm run css:watch`
 - 数据库：默认 `sqlite://haruka.db?mode=rwc`（可用 `DATABASE_URL` 覆盖），启动时用 sea-orm `Schema` 自动 `CREATE TABLE IF NOT EXISTS`，并由 `db::ensure_column` 用轻量 `ALTER TABLE` 补齐构建阶段新增字段；新增字段时必须同步登记，不能再要求用户手动删除数据库
+- 进程安装 SIGTERM/SIGINT 处理并使用 `axum::serve(...).with_graceful_shutdown(...)`：收到信号后停止接收新连接、等待在途请求完成，再关闭数据库连接后退出。容器内 haruka 作为 PID 1 运行，没有该处理会忽略 SIGTERM 直到被外部 SIGKILL；`tests/shutdown.rs` 验证 SIGTERM 后以退出码 0 结束
 
 ## 加密（envelope）
 

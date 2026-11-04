@@ -383,7 +383,7 @@ curl --include --max-time 15 \
 
 镜像默认监听容器内的 `0.0.0.0:3000`，默认把 SQLite 数据库放在 `/data/haruka.db`。下面使用 Docker 命名卷保存整个数据库目录，并只把服务发布到宿主机回环地址，适合在 Caddy、Nginx 等 HTTPS 反向代理后运行：
 
-如需先在本机从当前源码构建镜像，可执行 `docker build --tag haruka:local .`；多阶段 Dockerfile 会在构建阶段重新生成 Tailwind CSS 和 release 二进制，最终镜像不包含 Node.js、Rust 工具链或源码。
+如需先在本机从当前源码构建镜像，可执行 `docker build --tag haruka:local .`；多阶段 Dockerfile 会在构建阶段重新生成 Tailwind CSS 和 release 二进制，最终镜像不包含 Node.js、Rust 工具链或源码。容器内 haruka 直接作为 PID 1 运行，进程已安装 SIGTERM/SIGINT 处理：`docker stop` 会停止接收新请求、等待在途请求完成并关闭数据库连接后正常退出，不会一直拖到超时后由 Docker 发送 SIGKILL。
 
 ```sh
 export HARUKA_IMAGE='ghcr.io/YOUR_GITHUB_OWNER/haruka:latest'

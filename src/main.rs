@@ -369,6 +369,7 @@ async fn main() {
             );
             "AppleToken".to_string()
         });
+    let shutdown_db = db.clone();
     let state = AppState {
         db,
         developer_sessions: Arc::new(parking_lot::RwLock::new(std::collections::HashSet::new())),
@@ -843,5 +844,41 @@ async fn main() {
     dev_log::info(format!(
         "Passkey 来源: {passkey_origin}（RP ID: {passkey_rp_id}）"
     ));
-    axum::serve(listener, app).await.expect("服务器运行失败");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("服务器运行失败");
+    if let Err(error) = shutdown_db.close().await {
+        dev_log::warn(format!("关闭数据库连接失败：{error}"));
+    }
+    dev_log::info("haruka 已优雅停止");
+}
+
+/// 容器内 haruka 通常是 PID 1，未安装处理函数时 SIGTERM/SIGINT 不会按默认动作终止进程。
+async fn shutdown_signal() {
+    let interrupt = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            dev_log::warn(format!("监听 SIGINT 失败：{error}"));
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                dev_log::warn(format!("监听 SIGTERM 失败：{error}"));
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        _ = interrupt => {}
+        _ = terminate => {}
+    }
+    dev_log::info("收到退出信号，开始优雅关闭");
 }
