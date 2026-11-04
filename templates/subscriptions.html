@@ -12,7 +12,7 @@
   <div class="flex flex-wrap items-end gap-3">
     <div class="flex-1 min-w-48"><label class="block text-xs text-gray-500 mb-1">关键词</label><input name="keyword" value="{{ keyword }}" placeholder="服务名、分类、备注或货币" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"></div>
     {% if advanced_search %}
-    <div><label class="block text-xs text-gray-500 mb-1">状态</label><select name="status" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option><option value="active" {% if status == "active" %}selected{% endif %}>有效</option><option value="due_soon" {% if status == "due_soon" %}selected{% endif %}>7 天内到期</option><option value="expired" {% if status == "expired" %}selected{% endif %}>已到期</option></select></div>
+    <div><label class="block text-xs text-gray-500 mb-1">状态</label><select name="status" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option><option value="active" {% if status == "active" %}selected{% endif %}>有效</option><option value="due_soon" {% if status == "due_soon" %}selected{% endif %}>7 天内到期</option><option value="expired" {% if status == "expired" %}selected{% endif %}>已到期</option><option value="paused" {% if status == "paused" %}selected{% endif %}>已暂停</option></select></div>
     <div><label class="block text-xs text-gray-500 mb-1">周期</label><select name="period" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option><option value="day" {% if period == "day" %}selected{% endif %}>日</option><option value="week" {% if period == "week" %}selected{% endif %}>周</option><option value="month" {% if period == "month" %}selected{% endif %}>月</option><option value="quarter" {% if period == "quarter" %}selected{% endif %}>季</option><option value="year" {% if period == "year" %}selected{% endif %}>年</option></select></div>
     <div><label class="block text-xs text-gray-500 mb-1">货币</label><select name="currency" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option>{% for c in currencies %}<option value="{{ c.code }}" {% if currency == c.code %}selected{% endif %}>{{ c.code }}</option>{% endfor %}</select></div>
     <div><label class="block text-xs text-gray-500 mb-1">分类</label><select name="category" class="border border-gray-300 rounded px-2 py-1.5 text-sm bg-white"><option value="">全部</option>{% for c in categories %}<option value="{{ c.name }}" {% if category == c.name %}selected{% endif %}>{{ c.name }}</option>{% endfor %}</select></div>
@@ -66,28 +66,54 @@
 {% else %}
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
   {% for s in subscriptions %}
-  <section class="min-w-0 bg-white rounded-lg border {% if s.expired %}border-red-200{% else if s.due_soon %}border-amber-200{% else %}border-gray-200{% endif %} p-4">
+  <section class="min-w-0 bg-white rounded-lg border {% if s.paused %}border-blue-200{% else if s.expired %}border-red-200{% else if s.due_soon %}border-amber-200{% else %}border-gray-200{% endif %} p-4">
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0 break-words">
         <h2 class="font-medium">{{ s.name }}</h2>
         <p class="text-xs text-gray-500 mt-1">{{ s.category }} · {{ s.period_label }}</p>
       </div>
-      <span class="shrink-0 text-xs rounded-full px-2 py-0.5 {% if s.expired %}bg-red-100 text-red-700{% else if s.due_soon %}bg-amber-100 text-amber-700{% else %}bg-green-100 text-green-700{% endif %}">{{ s.status }}</span>
+      <span class="shrink-0 text-xs rounded-full px-2 py-0.5 {% if s.paused %}bg-blue-100 text-blue-700{% else if s.expired %}bg-red-100 text-red-700{% else if s.due_soon %}bg-amber-100 text-amber-700{% else %}bg-green-100 text-green-700{% endif %}">{{ s.status }}</span>
     </div>
     <div class="mt-4 flex flex-wrap items-end justify-between gap-3">
       <div class="min-w-0 max-w-full">
         <div class="text-2xl font-mono break-all">{{ s.amount }}</div>
         <div class="text-sm text-gray-600 mt-1 break-all">全年费用估算：<span class="font-mono">{{ s.annual_amount }}</span></div>
-        <div class="text-xs text-gray-500 mt-1">下次到期：<time data-utc-time="{{ s.expires_at }}">{{ s.expires_at }}</time></div>
+        <div class="text-xs text-gray-500 mt-1">{% if s.paused %}暂停时原定：{% else %}下次到期：{% endif %}<time data-utc-time="{{ s.expires_at }}">{{ s.expires_at }}</time></div>
       </div>
       <div class="text-sm whitespace-nowrap">
         <a href="/subscriptions/{{ s.id }}/edit" class="text-blue-600 hover:underline mr-2">编辑</a>
+        {% if !s.paused %}<form method="post" action="/subscriptions/{{ s.id }}/pause" class="inline mr-2" hx-confirm="暂停后不会自动扣款，也不会出现在仪表板到期提醒中；随时可以继续。确认暂停？"><button class="text-amber-700 hover:underline">暂停</button></form>{% endif %}
         <form method="post" action="/subscriptions/{{ s.id }}/delete" class="inline" hx-confirm="确认删除该订阅？已经生成的支出不会删除。"><button class="text-red-600 hover:underline">删除</button></form>
       </div>
     </div>
+    {% if s.paused %}<div class="mt-3 rounded border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">暂停中：不会自动扣款，也不会进入仪表板到期或余额提醒。</div>{% endif %}
     {% if s.auto_debit %}<div class="mt-3 rounded border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-800">{{ s.auto_debit_label }}</div>{% endif %}
     {% if !s.note.is_empty() %}<p class="text-sm text-gray-500 mt-3">{{ s.note }}</p>{% endif %}
-    {% if !accounts.is_empty() %}
+    {% if s.paused %}
+    <div class="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-3">
+      <h3 class="text-sm font-semibold text-blue-900">继续订阅</h3>
+      <p class="mt-1 text-xs text-blue-800">继续时可以现在扣一笔，或先不扣款并指定下一次扣款日期。现在扣款会立即生成支出并顺延一个周期。</p>
+      {% if accounts.is_empty() %}
+      <p class="mt-2 text-sm text-amber-800">请先创建账户才能立即扣款；也可以先只保存下次扣款日期。</p>
+      {% else %}
+      <form method="post" action="/subscriptions/{{ s.id }}/resume" class="mt-3 flex flex-wrap items-end gap-2">
+        <input type="hidden" name="mode" value="charge_now">
+        <label class="min-w-0 flex-1 text-xs text-blue-900">扣款账户<select name="account_id" required class="mt-1 w-full rounded border border-blue-200 bg-white px-2 py-1.5 text-sm">{% for a in accounts %}<option value="{{ a.id }}" {% if a.id == s.auto_debit_account_id %}selected{% endif %}>{{ a.name }}</option>{% endfor %}</select></label>
+        <button type="submit" class="shrink-0 rounded bg-blue-700 px-3 py-1.5 text-sm font-semibold text-white" hx-confirm="立即从所选账户生成一笔订阅支出，并顺延一个周期？">现在扣一笔</button>
+      </form>
+      {% endif %}
+      <form method="post" action="/subscriptions/{{ s.id }}/resume" class="mt-3 flex flex-wrap items-end gap-2">
+        <input type="hidden" name="mode" value="schedule">
+        <div class="min-w-0 flex-1" data-utc-field>
+          <label class="block text-xs text-blue-900 mb-1">先不扣款，下次扣款日期（当地时间）</label>
+          <input data-utc-picker data-utc-value="{{ s.resume_default_expires }}" type="datetime-local" required class="w-full rounded border border-blue-200 px-2 py-1.5 text-sm">
+          <input data-utc-target type="hidden" name="expires_at" value="{{ s.resume_default_expires }}">
+        </div>
+        <button type="submit" class="shrink-0 rounded border border-blue-400 bg-white px-3 py-1.5 text-sm font-semibold text-blue-900">先不扣，保存日期</button>
+      </form>
+    </div>
+    {% endif %}
+    {% if !accounts.is_empty() && !s.paused %}
     <form method="post" action="/subscriptions/{{ s.id }}/expense" class="mt-4 pt-4 border-t border-gray-100 flex gap-2">
       <select name="account_id" required aria-label="付款账户" class="min-w-0 flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
         {% for a in accounts %}<option value="{{ a.id }}">{{ a.name }}</option>{% endfor %}

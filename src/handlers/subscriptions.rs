@@ -53,14 +53,17 @@ struct SubscriptionRow {
     category: String,
     period_label: String,
     expires_at: String,
+    resume_default_expires: String,
     note: String,
     expired: bool,
     due_soon: bool,
+    paused: bool,
     status: String,
     period: String,
     currency: String,
     expires_at_value: NaiveDateTime,
     auto_debit: bool,
+    auto_debit_account_id: i64,
     auto_debit_label: String,
 }
 
@@ -131,6 +134,15 @@ pub struct SubscriptionFormData {
 #[derive(Deserialize)]
 pub struct CreateExpenseFormData {
     account_id: i64,
+}
+
+#[derive(Deserialize)]
+pub struct ResumeSubscriptionFormData {
+    mode: String,
+    #[serde(default)]
+    account_id: i64,
+    #[serde(default)]
+    expires_at: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -393,7 +405,10 @@ async fn render_list(
         return Err(bad_request("开始日期不能晚于结束日期"));
     }
     if !query.status.is_empty()
-        && !matches!(query.status.as_str(), "active" | "due_soon" | "expired")
+        && !matches!(
+            query.status.as_str(),
+            "active" | "due_soon" | "expired" | "paused"
+        )
     {
         query.status.clear();
     }
@@ -428,9 +443,12 @@ async fn render_list(
         .map_err(err500)?
         .into_iter()
         .map(|subscription| {
-            let expired = subscription.expires_at < now;
-            let due_soon = !expired && subscription.expires_at <= soon;
-            let status = if expired {
+            let paused = subscription.paused;
+            let expired = !paused && subscription.expires_at < now;
+            let due_soon = !paused && !expired && subscription.expires_at <= soon;
+            let status = if paused {
+                "已暂停"
+            } else if expired {
                 "已到期"
             } else if due_soon {
                 "7 天内到期"
@@ -440,6 +458,11 @@ async fn render_list(
             let category = crypto::decrypt_string(dek, &subscription.category);
             let amount = crypto::decrypt_cents(dek, &subscription.amount);
             let annual_cents = annual_estimate_cents(amount, &subscription.period)?;
+            let resume_default = if paused && subscription.expires_at <= now {
+                renewed_expiry(subscription.expires_at, &subscription.period, now)?
+            } else {
+                subscription.expires_at
+            };
             Ok(SubscriptionRow {
                 id: subscription.id,
                 name: crypto::decrypt_string(dek, &subscription.name),
@@ -449,14 +472,17 @@ async fn render_list(
                 category,
                 period_label: period_label(&subscription.period).into(),
                 expires_at: subscription.expires_at.format(TIME_FMT).to_string(),
+                resume_default_expires: resume_default.format(TIME_FMT).to_string(),
                 note: crypto::decrypt_string(dek, &subscription.note),
                 expired,
                 due_soon,
+                paused,
                 status: status.into(),
                 period: subscription.period,
                 currency: subscription.currency,
                 expires_at_value: subscription.expires_at,
                 auto_debit: subscription.auto_debit_account_id.is_some(),
+                auto_debit_account_id: subscription.auto_debit_account_id.unwrap_or_default(),
                 auto_debit_label: subscription
                     .auto_debit_account_id
                     .and_then(|id| account_names.get(&id))
@@ -492,7 +518,8 @@ async fn render_list(
                 conditions.push(match query.status.as_str() {
                     "expired" => row.expired,
                     "due_soon" => row.due_soon,
-                    "active" => !row.expired && !row.due_soon,
+                    "paused" => row.paused,
+                    "active" => !row.paused && !row.expired && !row.due_soon,
                     _ => true,
                 });
             }
@@ -645,6 +672,7 @@ pub async fn create(
         expires_at: Set(parsed.expires_at),
         auto_debit_account_id: Set(parsed.auto_debit_account_id),
         balance_check_days: Set(parsed.balance_check_days),
+        paused: Set(false),
         note: Set(crypto::encrypt(&dek, parsed.note.as_bytes())),
         created_at: Set(chrono::Utc::now()),
         ..Default::default()
@@ -715,6 +743,59 @@ pub async fn update(
     Ok(Redirect::to("/subscriptions"))
 }
 
+pub async fn pause(State(state): State<AppState>, Path(id): Path<i64>) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
+    let subscription = subscription::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "订阅不存在".into()))?;
+    if !subscription.paused {
+        let mut active = subscription.into_active_model();
+        active.paused = Set(true);
+        active.update(&state.db).await.map_err(err500)?;
+    }
+    Ok(Redirect::to("/subscriptions"))
+}
+
+pub async fn resume(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+    Form(form): Form<ResumeSubscriptionFormData>,
+) -> HandlerResult<Redirect> {
+    let _balance_guard = state.balance_writes.lock().await;
+    let subscription = subscription::Entity::find_by_id(id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "订阅不存在".into()))?;
+    if !subscription.paused {
+        return Err(bad_request("订阅未暂停，无需继续"));
+    }
+    match form.mode.as_str() {
+        "charge_now" => {
+            if form.account_id <= 0 {
+                return Err(bad_request("请选择扣款账户"));
+            }
+            execute_expense(&state, &dek, subscription, form.account_id, false).await?;
+        }
+        "schedule" => {
+            let expires_at = NaiveDateTime::parse_from_str(form.expires_at.trim(), TIME_FMT)
+                .map_err(|_| bad_request("下次扣款时间格式不正确"))?;
+            if expires_at <= chrono::Utc::now().naive_utc() {
+                return Err(bad_request("下次扣款时间必须晚于现在"));
+            }
+            let mut active = subscription.into_active_model();
+            active.paused = Set(false);
+            active.expires_at = Set(expires_at);
+            active.update(&state.db).await.map_err(err500)?;
+        }
+        _ => return Err(bad_request("继续方式无效")),
+    }
+    Ok(Redirect::to("/subscriptions"))
+}
+
 pub async fn create_expense(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
@@ -727,6 +808,9 @@ pub async fn create_expense(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "订阅不存在".into()))?;
+    if subscription.paused {
+        return Err(bad_request("订阅已暂停，请先继续订阅"));
+    }
     execute_expense(&state, &dek, subscription, form.account_id, false).await?;
     Ok(Redirect::to("/subscriptions"))
 }
@@ -804,6 +888,7 @@ async fn execute_expense(
     .map_err(err500)?;
     let mut active = subscription.into_active_model();
     active.expires_at = Set(next_expiry);
+    active.paused = Set(false);
     active.update(&transaction).await.map_err(err500)?;
     transaction.commit().await.map_err(err500)?;
     Ok(())
@@ -817,6 +902,7 @@ pub async fn run_due(
     let now = chrono::Utc::now().naive_utc();
     let due = subscription::Entity::find()
         .filter(subscription::Column::AutoDebitAccountId.is_not_null())
+        .filter(subscription::Column::Paused.eq(false))
         .filter(subscription::Column::ExpiresAt.lte(now))
         .order_by_asc(subscription::Column::ExpiresAt)
         .all(&state.db)

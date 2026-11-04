@@ -17,6 +17,8 @@ pub struct Model {
     pub auto_debit_account_id: Option<i64>,
     /// 到期前多少个自然日开始检查自动扣款余额，范围 0..=30。
     pub balance_check_days: i32,
+    /// 暂停后不自动扣款，也不出现在仪表板到期/余额提醒中。
+    pub paused: bool,
     pub note: String,
     pub created_at: DateTimeUtc,
 }

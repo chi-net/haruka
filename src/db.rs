@@ -503,6 +503,7 @@ pub async fn init() -> DatabaseConnection {
         "INTEGER NOT NULL DEFAULT 3",
     )
     .await;
+    ensure_column(&db, "subscriptions", "paused", "BOOLEAN NOT NULL DEFAULT 0").await;
 
     db
 }

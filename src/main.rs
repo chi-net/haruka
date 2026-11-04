@@ -531,6 +531,14 @@ async fn main() {
             post(handlers::subscriptions::create_expense),
         )
         .route(
+            "/subscriptions/{id}/pause",
+            post(handlers::subscriptions::pause),
+        )
+        .route(
+            "/subscriptions/{id}/resume",
+            post(handlers::subscriptions::resume),
+        )
+        .route(
             "/subscriptions/{id}/delete",
             post(handlers::subscriptions::delete),
         )

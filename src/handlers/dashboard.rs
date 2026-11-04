@@ -682,6 +682,9 @@ pub async fn show(
     let mut all_subscription_reminders = Vec::new();
     let mut auto_debit_warnings = Vec::new();
     for item in &subscriptions {
+        if item.paused {
+            continue;
+        }
         let name = crypto::decrypt_string(&dek, &item.name);
         let amount = crypto::decrypt_cents(&dek, &item.amount);
         if item.expires_at <= reminder_deadline {
