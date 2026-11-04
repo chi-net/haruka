@@ -47,6 +47,15 @@ window.harukaApplyChartTheme = function(chart) {
 window.harukaColorScheme.addEventListener('change', () => {
   if (typeof Chart !== 'undefined') Object.values(Chart.instances).forEach(window.harukaApplyChartTheme);
 });
+// htmx 换入含图表的页面后，等布局稳定再让 Chart.js 重新测量容器，避免首屏只画出部分宽度。
+const harukaResizeCharts = () => {
+  if (typeof Chart === 'undefined') return;
+  Object.values(Chart.instances).forEach(chart => {
+    if (chart.canvas && chart.canvas.isConnected) chart.resize();
+  });
+};
+window.addEventListener('load', harukaResizeCharts);
+document.addEventListener('htmx:afterSettle', harukaResizeCharts);
 document.addEventListener('htmx:beforeCleanupElement', event => {
   const element = event.detail.elt;
   if (element instanceof HTMLCanvasElement && typeof Chart !== 'undefined') Chart.getChart(element)?.destroy();

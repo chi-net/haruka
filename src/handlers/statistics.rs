@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::Html,
 };
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate, Timelike};
 use rust_decimal::Decimal;
 use sea_orm::EntityTrait;
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,7 @@ struct RankingRow {
     share: String,
 }
 
-struct ExpenseOrderRow {
+struct OrderRow {
     rank: usize,
     detail_url: String,
     amount: String,
@@ -53,7 +53,7 @@ struct ExpenseOrderRow {
     share: String,
 }
 
-struct ExpenseOrderValue {
+struct OrderValue {
     id: i64,
     amount: i64,
     native_amount: i64,
@@ -78,13 +78,21 @@ struct StatisticsTemplate {
     income_count: usize,
     expense_count: usize,
     average_income: String,
+    median_income: String,
+    largest_income: String,
     average_expense: String,
     median_expense: String,
     largest_expense: String,
+    daily_income: String,
     daily_expense: String,
     active_day_expense: String,
     expense_active_days: usize,
+    active_income_days: usize,
     calendar_days: i64,
+    previous_period_label: String,
+    income_change: String,
+    expense_change: String,
+    net_change: String,
     food_expense: String,
     engel_coefficient: String,
     surplus_rate: String,
@@ -95,7 +103,8 @@ struct StatisticsTemplate {
     expense_account_rankings: Vec<RankingRow>,
     expense_day_rankings: Vec<RankingRow>,
     expense_weekday_rankings: Vec<RankingRow>,
-    largest_expenses: Vec<ExpenseOrderRow>,
+    largest_expenses: Vec<OrderRow>,
+    largest_incomes: Vec<OrderRow>,
     has_cashflow: bool,
     has_income: bool,
     has_expense: bool,
@@ -119,6 +128,7 @@ struct StatisticsCharts {
     expense_accounts: ChartSeries,
     food_expenses: ChartSeries,
     expense_weekdays: ChartSeries,
+    expense_hours: ChartSeries,
     trend: TrendSeries,
 }
 
@@ -201,6 +211,78 @@ fn percentage(part: i64, total: i64) -> String {
     (Decimal::from(part) * Decimal::from(100) / Decimal::from(total))
         .round_dp(1)
         .to_string()
+}
+
+fn signed_money(cents: i64, currency: &str) -> String {
+    if cents > 0 {
+        format!("+{}", currency::format(cents, currency))
+    } else if cents < 0 {
+        format!(
+            "-{}",
+            currency::format(cents.checked_neg().unwrap_or(i64::MAX), currency)
+        )
+    } else {
+        currency::format(0, currency)
+    }
+}
+
+fn change_text(current: i64, previous: i64, currency: &str) -> String {
+    let delta = current.saturating_sub(previous);
+    if previous == 0 {
+        return if delta == 0 {
+            "较上一区间持平".into()
+        } else {
+            format!("较上一区间 {}（上期为 0）", signed_money(delta, currency))
+        };
+    }
+    let percent =
+        (Decimal::from(delta) * Decimal::from(100) / Decimal::from(previous.abs())).round_dp(1);
+    let percent_text = if percent > Decimal::ZERO {
+        format!("+{percent}%")
+    } else {
+        format!("{percent}%")
+    };
+    format!(
+        "较上一区间 {}（{}）",
+        signed_money(delta, currency),
+        percent_text
+    )
+}
+
+fn order_rows(
+    mut orders: Vec<OrderValue>,
+    total: i64,
+    limit: usize,
+    default_currency: &str,
+) -> Vec<OrderRow> {
+    orders.sort_by(|left, right| {
+        right
+            .amount
+            .cmp(&left.amount)
+            .then_with(|| right.happened_at.cmp(&left.happened_at))
+            .then_with(|| right.id.cmp(&left.id))
+    });
+    orders
+        .into_iter()
+        .take(limit)
+        .enumerate()
+        .map(|(index, item)| OrderRow {
+            rank: index + 1,
+            detail_url: if item.is_private {
+                String::new()
+            } else {
+                format!("/bills/{}/edit", item.id)
+            },
+            amount: currency::format(item.amount, default_currency),
+            original_amount: currency::format(item.native_amount, &item.currency),
+            converted: item.currency != default_currency,
+            category: item.category,
+            account: item.account,
+            note: item.note,
+            happened_at: item.happened_at.format("%Y-%m-%dT%H:%M").to_string(),
+            share: percentage(item.amount, total),
+        })
+        .collect()
 }
 
 fn financial_ratio(part: i64, total: i64) -> String {
@@ -364,19 +446,23 @@ pub async fn show(
     let mut expense_accounts: HashMap<String, (i64, usize)> = HashMap::new();
     let mut expense_days: HashMap<String, (i64, usize)> = HashMap::new();
     let mut expense_weekdays: HashMap<String, (i64, usize)> = HashMap::new();
+    let mut expense_hours: HashMap<String, (i64, usize)> = HashMap::new();
     let mut daily_cashflow: HashMap<NaiveDate, (i64, i64)> = HashMap::new();
     let mut expense_active_dates = HashSet::new();
+    let mut income_active_dates = HashSet::new();
+    let mut income_amounts = Vec::new();
     let mut expense_amounts = Vec::new();
+    let mut income_orders = Vec::new();
     let mut expense_orders = Vec::new();
     let mut food_expense = 0i64;
     let bills = bill::Entity::find().all(&state.db).await.map_err(err500)?;
     let refunds = super::refunds::RefundTotals::new(&dek, &bills);
-    for bill in bills {
+    for bill in &bills {
         let date = time_zone.date(bill.happened_at);
         if date < start_date || date > end_date {
             continue;
         }
-        let native_amount = refunds.amount(&dek, &bill);
+        let native_amount = refunds.amount(&dek, bill);
         if native_amount == 0 {
             continue;
         }
@@ -401,13 +487,30 @@ pub async fn show(
                 .checked_add(amount)
                 .ok_or_else(|| err500("统计金额超出范围"))?;
             income_count += 1;
-            add_ranking_value(&mut income_categories, category_name, amount)?;
-            add_ranking_value(&mut income_accounts, account_name, amount)?;
+            add_ranking_value(&mut income_categories, category_name.clone(), amount)?;
+            add_ranking_value(&mut income_accounts, account_name.clone(), amount)?;
             let daily = daily_cashflow.entry(date).or_default();
             daily.0 = daily
                 .0
                 .checked_add(amount)
                 .ok_or_else(|| err500("统计金额超出范围"))?;
+            income_active_dates.insert(date);
+            income_amounts.push(amount);
+            income_orders.push(OrderValue {
+                id: bill.id,
+                amount,
+                native_amount,
+                currency: bill_currency.to_string(),
+                category: category_name,
+                account: account_name,
+                note: if bill.is_private {
+                    String::new()
+                } else {
+                    crypto::decrypt_string(&dek, &bill.note)
+                },
+                happened_at: bill.happened_at,
+                is_private: bill.is_private,
+            });
         } else if bill.kind == "expense" {
             total_expense = total_expense
                 .checked_add(amount)
@@ -430,6 +533,8 @@ pub async fn show(
                 chrono::Weekday::Sun => "星期日",
             };
             add_ranking_value(&mut expense_weekdays, weekday.into(), amount)?;
+            let hour = time_zone.local_datetime(bill.happened_at).hour();
+            add_ranking_value(&mut expense_hours, format!("{hour:02}:00"), amount)?;
             let daily = daily_cashflow.entry(date).or_default();
             daily.1 = daily
                 .1
@@ -442,7 +547,7 @@ pub async fn show(
                     .checked_add(amount)
                     .ok_or_else(|| err500("统计金额超出范围"))?;
             }
-            expense_orders.push(ExpenseOrderValue {
+            expense_orders.push(OrderValue {
                 id: bill.id,
                 amount,
                 native_amount,
@@ -479,36 +584,63 @@ pub async fn show(
     } else {
         total_expense / expense_active_dates.len() as i64
     };
+    let median_income = median(&mut income_amounts)?;
+    let largest_income = income_amounts.iter().copied().max().unwrap_or_default();
     let median_expense = median(&mut expense_amounts)?;
     let largest_expense = expense_amounts.iter().copied().max().unwrap_or_default();
-    expense_orders.sort_by(|left, right| {
-        right
-            .amount
-            .cmp(&left.amount)
-            .then_with(|| right.happened_at.cmp(&left.happened_at))
-            .then_with(|| right.id.cmp(&left.id))
-    });
-    let largest_expenses = expense_orders
-        .into_iter()
-        .take(20)
-        .enumerate()
-        .map(|(index, item)| ExpenseOrderRow {
-            rank: index + 1,
-            detail_url: if item.is_private {
-                String::new()
-            } else {
-                format!("/bills/{}/edit", item.id)
-            },
-            amount: currency::format(item.amount, &default_currency),
-            original_amount: currency::format(item.native_amount, &item.currency),
-            converted: item.currency != default_currency,
-            category: item.category,
-            account: item.account,
-            note: item.note,
-            happened_at: item.happened_at.format("%Y-%m-%dT%H:%M").to_string(),
-            share: percentage(item.amount, total_expense),
+    let daily_income = total_income / calendar_days.max(1);
+    let active_income_days = income_active_dates.len();
+    let largest_expenses = order_rows(expense_orders, total_expense, 20, &default_currency);
+    let largest_incomes = order_rows(income_orders, total_income, 10, &default_currency);
+
+    let previous_range = start_date
+        .checked_sub_signed(Duration::days(calendar_days))
+        .zip(start_date.pred_opt());
+    let mut previous_income = 0i64;
+    let mut previous_expense = 0i64;
+    if let Some((previous_start, previous_end)) = previous_range {
+        for bill in &bills {
+            let date = time_zone.date(bill.happened_at);
+            if date < previous_start || date > previous_end {
+                continue;
+            }
+            let native_amount = refunds.amount(&dek, bill);
+            if native_amount == 0 {
+                continue;
+            }
+            let bill_currency = account_currencies
+                .get(&bill.account_id)
+                .map(String::as_str)
+                .unwrap_or(&default_currency);
+            let amount = rates
+                .convert(native_amount, bill_currency)
+                .map_err(err500)?;
+            if bill.kind == "income" {
+                previous_income = previous_income
+                    .checked_add(amount)
+                    .ok_or_else(|| err500("统计金额超出范围"))?;
+            } else if bill.kind == "expense" {
+                previous_expense = previous_expense
+                    .checked_add(amount)
+                    .ok_or_else(|| err500("统计金额超出范围"))?;
+            }
+        }
+    }
+    let previous_net = previous_income
+        .checked_sub(previous_expense)
+        .ok_or_else(|| err500("统计金额超出范围"))?;
+    let previous_period_label = previous_range
+        .map(|(previous_start, previous_end)| {
+            format!(
+                "{} 至 {}",
+                previous_start.format("%Y-%m-%d"),
+                previous_end.format("%Y-%m-%d")
+            )
         })
-        .collect();
+        .unwrap_or_else(|| "无可比区间".into());
+    let income_change = change_text(total_income, previous_income, &default_currency);
+    let expense_change = change_text(total_expense, previous_expense, &default_currency);
+    let net_change = change_text(net, previous_net, &default_currency);
     let weekday_labels = [
         "星期一",
         "星期二",
@@ -522,6 +654,10 @@ pub async fn show(
         weekday_labels.iter().map(|label| (*label).to_string()),
         &expense_weekdays,
     );
+    let hour_labels = (0..24)
+        .map(|hour| format!("{hour:02}:00"))
+        .collect::<Vec<_>>();
+    let expense_hour_chart = ordered_chart_series(hour_labels, &expense_hours);
     let (trend_label, trend) = trend_series(start_date, end_date, &daily_cashflow);
     let charts_json = serde_json::to_string(&StatisticsCharts {
         cashflow: ChartSeries {
@@ -537,6 +673,7 @@ pub async fn show(
             values: vec![food_expense, total_expense - food_expense],
         },
         expense_weekdays: expense_weekday_chart,
+        expense_hours: expense_hour_chart,
         trend,
     })
     .map_err(err500)?
@@ -548,18 +685,26 @@ pub async fn show(
         start_date: start_date.format("%Y-%m-%d").to_string(),
         end_date: end_date.format("%Y-%m-%d").to_string(),
         period_label,
+        previous_period_label,
+        income_change,
+        expense_change,
+        net_change,
         total_income: currency::format(total_income, &default_currency),
         total_expense: currency::format(total_expense, &default_currency),
         net: currency::format(net, &default_currency),
         income_count,
         expense_count,
         average_income: currency::format(average_income, &default_currency),
+        median_income: currency::format(median_income, &default_currency),
+        largest_income: currency::format(largest_income, &default_currency),
         average_expense: currency::format(average_expense, &default_currency),
         median_expense: currency::format(median_expense, &default_currency),
         largest_expense: currency::format(largest_expense, &default_currency),
+        daily_income: currency::format(daily_income, &default_currency),
         daily_expense: currency::format(daily_expense, &default_currency),
         active_day_expense: currency::format(active_day_expense, &default_currency),
         expense_active_days: expense_active_dates.len(),
+        active_income_days,
         calendar_days,
         food_expense: currency::format(food_expense, &default_currency),
         engel_coefficient: financial_ratio(food_expense, total_expense),
@@ -576,6 +721,7 @@ pub async fn show(
         expense_day_rankings: ranking_rows(expense_days, total_expense, &default_currency),
         expense_weekday_rankings: ranking_rows(expense_weekdays, total_expense, &default_currency),
         largest_expenses,
+        largest_incomes,
         has_cashflow: total_income > 0 || total_expense > 0,
         has_income: total_income > 0,
         has_expense: total_expense > 0,
@@ -590,7 +736,7 @@ pub async fn show(
 
 #[cfg(test)]
 mod tests {
-    use super::financial_ratio;
+    use super::{change_text, financial_ratio};
 
     #[test]
     fn financial_ratios_distinguish_missing_basis_and_preserve_deficits() {
@@ -600,5 +746,20 @@ mod tests {
         assert_eq!(financial_ratio(-100, 100), "-100%");
         assert_eq!(financial_ratio(200, 100), "200%");
         assert_eq!(financial_ratio(1, 3), "33.3%");
+    }
+
+    #[test]
+    fn period_comparison_handles_growth_loss_and_missing_basis() {
+        assert_eq!(change_text(0, 0, "CNY"), "较上一区间持平");
+        assert_eq!(
+            change_text(100, 0, "CNY"),
+            "较上一区间 +CNY 1.00（上期为 0）"
+        );
+        assert_eq!(change_text(150, 100, "CNY"), "较上一区间 +CNY 0.50（+50%）");
+        assert_eq!(change_text(50, 100, "CNY"), "较上一区间 -CNY 0.50（-50%）");
+        assert_eq!(
+            change_text(100, -100, "CNY"),
+            "较上一区间 +CNY 2.00（+200%）"
+        );
     }
 }
