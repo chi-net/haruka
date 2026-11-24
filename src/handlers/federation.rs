@@ -336,6 +336,7 @@ async fn book_locally(
         requires_confirmation: Some(false),
         origin_debt_record_id: None,
         paid_at: paid_at.into(),
+        interest_cents: 0,
     };
     let response = super::debt_requests::create(
         State(state.clone()),

@@ -426,6 +426,13 @@ pub async fn init() -> DatabaseConnection {
         "TEXT NOT NULL DEFAULT ''",
     )
     .await;
+    ensure_column(
+        &db,
+        "debt_requests",
+        "interest_amount",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
     ensure_column(&db, "debt_requests", "repayment_submitted_at", "TIMESTAMP").await;
     ensure_column(&db, "debt_requests", "verified_at", "TIMESTAMP").await;
     ensure_column(&db, "debt_requests", "repayment_debt_record_id", "INTEGER").await;

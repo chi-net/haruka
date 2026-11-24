@@ -47,6 +47,9 @@ pub struct Model {
     pub repayment_account_id: Option<i64>,
     /// 借款人登记的还款信息，使用公开请求令牌派生密钥加密。
     pub repayment_submission: String,
+    /// 本笔还款中的利息部分，使用 DEK 加密；用于区分本金与利息。
+    #[sea_orm(default_value = "")]
+    pub interest_amount: String,
     /// 强制平账不改变资金流水；金额使用 DEK 加密，供债务汇总使用。
     #[sea_orm(default_value = "")]
     pub settled_amount: String,

@@ -14,7 +14,11 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, str::FromStr};
+use std::{
+    collections::HashMap,
+    str::FromStr,
+    time::{Duration as StdDuration, Instant},
+};
 use zeroize::Zeroizing;
 
 use crate::{
@@ -27,6 +31,19 @@ type HandlerResult<T> = Result<T, (StatusCode, String)>;
 pub(crate) const TIME_FMT: &str = "%Y-%m-%dT%H:%M";
 const REQUEST_KEY_CONTEXT: &[u8] = b"haruka debt request key v1\0";
 const DIGEST_CONTEXT: &[u8] = b"haruka debt request verification chain v1\0";
+const LPR_URL: &str =
+    "https://www.chinamoney.com.cn/r/cms/www/chinamoney/data/currency/bk-lpr.json";
+const LPR_TTL: StdDuration = StdDuration::from_secs(60 * 60);
+
+#[derive(Clone)]
+struct LprSnapshot {
+    one_year: String,
+    five_year: String,
+    date: String,
+    fetched_at: Instant,
+}
+
+static LPR_CACHE: tokio::sync::Mutex<Option<LprSnapshot>> = tokio::sync::Mutex::const_new(None);
 
 fn err500(error: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
@@ -106,6 +123,7 @@ struct RequestView {
     path: String,
     label: String,
     account_name: String,
+    principal_value: String,
     note: String,
     status_label: String,
     expires_at: String,
@@ -234,6 +252,9 @@ pub struct CreateRequestForm {
     pub(crate) origin_debt_record_id: Option<i64>,
     #[serde(default)]
     pub(crate) paid_at: String,
+    /// 还款金额中的利息部分，仅用于放行本息合计超过原本金的还款请求。
+    #[serde(default)]
+    pub(crate) interest_cents: i64,
 }
 
 #[derive(Deserialize)]
@@ -259,6 +280,21 @@ pub struct SubmitRepaymentForm {
     amount: String,
     #[serde(default)]
     requires_confirmation: Option<bool>,
+    #[serde(default)]
+    interest_principal: String,
+    #[serde(default)]
+    interest_rate_bps: String,
+    #[serde(default)]
+    interest_months: String,
+}
+
+#[derive(Serialize)]
+pub struct LprResponse {
+    ok: bool,
+    one_year: String,
+    five_year: String,
+    date: String,
+    stale: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -765,6 +801,119 @@ pub(crate) fn parse_amount(value: &str) -> HandlerResult<i64> {
         .ok_or_else(|| bad_request("金额超出范围"))
 }
 
+fn monthly_interest_cents(principal_cents: i64, rate_bps: i64, months: i64) -> HandlerResult<i64> {
+    if principal_cents <= 0 {
+        return Err(bad_request("计息本金必须大于 0"));
+    }
+    if !(0..=10_000).contains(&rate_bps) {
+        return Err(bad_request("年利率必须在 0% 到 100% 之间"));
+    }
+    if !(1..=1_200).contains(&months) {
+        return Err(bad_request("计息月数必须在 1 到 1200 之间"));
+    }
+    let numerator = i128::from(principal_cents) * i128::from(rate_bps) * i128::from(months);
+    let interest = (numerator + 60_000) / 120_000;
+    i64::try_from(interest).map_err(|_| bad_request("利息金额超出范围"))
+}
+
+fn format_rate_bps(rate_bps: i64) -> String {
+    format!("{}.{:02}", rate_bps / 100, rate_bps % 100)
+}
+
+fn parse_lpr_rate(value: &str) -> HandlerResult<String> {
+    let rate = Decimal::from_str(value.trim()).map_err(|_| err500("LPR 数据格式异常"))?;
+    if rate < Decimal::ZERO || rate > Decimal::from(100) {
+        return Err(err500("LPR 数据超出合理范围"));
+    }
+    Ok(value.trim().to_string())
+}
+
+async fn fetch_lpr(state: &AppState) -> HandlerResult<LprSnapshot> {
+    let response = state
+        .fx_client
+        .get(LPR_URL)
+        .send()
+        .await
+        .map_err(|error| err500(format!("获取 LPR 失败：{error}")))?;
+    if !response.status().is_success() {
+        return Err(err500(format!("获取 LPR 失败：HTTP {}", response.status())));
+    }
+    let payload: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| err500(format!("解析 LPR 失败：{error}")))?;
+    let records = payload
+        .get("records")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| err500("LPR 数据缺少 records"))?;
+    let mut one_year = None;
+    let mut five_year = None;
+    for record in records {
+        let term = record
+            .get("termCode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let rate = record
+            .get("shibor")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        if rate.is_empty() {
+            continue;
+        }
+        match term {
+            "1Y" if one_year.is_none() => one_year = Some(parse_lpr_rate(rate)?),
+            "5Y" if five_year.is_none() => five_year = Some(parse_lpr_rate(rate)?),
+            _ => {}
+        }
+    }
+    let one_year = one_year.ok_or_else(|| err500("LPR 数据缺少 1 年期利率"))?;
+    let five_year = five_year.ok_or_else(|| err500("LPR 数据缺少 5 年期以上利率"))?;
+    let date = payload
+        .pointer("/data/showDateCN")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    Ok(LprSnapshot {
+        one_year,
+        five_year,
+        date,
+        fetched_at: Instant::now(),
+    })
+}
+
+fn lpr_response(snapshot: &LprSnapshot, stale: bool) -> LprResponse {
+    LprResponse {
+        ok: true,
+        one_year: snapshot.one_year.clone(),
+        five_year: snapshot.five_year.clone(),
+        date: snapshot.date.clone(),
+        stale,
+    }
+}
+
+pub async fn lpr(State(state): State<AppState>) -> HandlerResult<Json<LprResponse>> {
+    let mut cache = LPR_CACHE.lock().await;
+    if let Some(snapshot) = cache.as_ref() {
+        if snapshot.fetched_at.elapsed() < LPR_TTL {
+            return Ok(Json(lpr_response(snapshot, false)));
+        }
+    }
+    match fetch_lpr(&state).await {
+        Ok(snapshot) => {
+            let response = lpr_response(&snapshot, false);
+            *cache = Some(snapshot);
+            Ok(Json(response))
+        }
+        Err(error) => {
+            if let Some(snapshot) = cache.as_ref() {
+                Ok(Json(lpr_response(snapshot, true)))
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
 fn valid_kind(kind: &str) -> bool {
     matches!(
         kind,
@@ -1019,16 +1168,45 @@ async fn repayment_capacity(
             repayment_amounts.insert(record.id, amount);
         }
     }
+    let requests = debt_request::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let mut interest_by_record = HashMap::new();
+    for request in &requests {
+        if request.interest_amount.is_empty() {
+            continue;
+        }
+        let interest = crypto::decrypt_cents(dek, &request.interest_amount);
+        if interest <= 0 {
+            continue;
+        }
+        for id in [
+            request.confirmed_debt_record_id,
+            request.repayment_debt_record_id,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if repayment_amounts
+                .get(&id)
+                .is_some_and(|amount| interest <= *amount)
+            {
+                interest_by_record.insert(id, interest);
+            }
+        }
+    }
+    for interest in interest_by_record.values() {
+        outstanding = outstanding
+            .checked_add(*interest)
+            .ok_or_else(|| bad_request("还款金额超出范围"))?;
+    }
     let Some(origin) = origin else {
         return Ok(outstanding.max(0));
     };
     let mut allocated = 0_i64;
     let mut counted = std::collections::HashSet::new();
-    for request in debt_request::Entity::find()
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-    {
+    for request in &requests {
         let relevant = request
             .confirmed_debt_record_id
             .map(|id| id == origin.id || repayment_amounts.contains_key(&id))
@@ -1038,7 +1216,7 @@ async fn repayment_capacity(
                 .map(|id| repayment_amounts.contains_key(&id))
                 .unwrap_or(false)
             || request.origin_debt_record_id == Some(origin.id);
-        if relevant && !verify_chain(&request) {
+        if relevant && !verify_chain(request) {
             return Err(bad_request("关联请求验证链异常，不能继续还款"));
         }
         let record_id = if request.origin_debt_record_id == Some(origin.id) {
@@ -1051,8 +1229,16 @@ async fn repayment_capacity(
         if let Some(id) = record_id {
             if let Some(amount) = repayment_amounts.get(&id) {
                 if counted.insert(id) {
+                    let interest = if request.interest_amount.is_empty() {
+                        0
+                    } else {
+                        crypto::decrypt_cents(dek, &request.interest_amount)
+                    };
+                    if interest < 0 || interest > *amount {
+                        return Err(bad_request("还款利息金额异常"));
+                    }
                     allocated = allocated
-                        .checked_add(*amount)
+                        .checked_add(amount - interest)
                         .ok_or_else(|| bad_request("还款金额超出范围"))?;
                 }
             }
@@ -1269,8 +1455,15 @@ pub async fn create(
     if form.note.chars().count() > 1000 {
         return Err(bad_request("说明不能超过 1000 个字符"));
     }
+    if form.interest_cents < 0 || form.interest_cents >= amount_cents {
+        return Err(bad_request("还款利息金额无效"));
+    }
+    if form.interest_cents > 0 && !is_repayment(&form.kind) {
+        return Err(bad_request("只有还款请求可以包含利息"));
+    }
+    let principal_cents = amount_cents - form.interest_cents;
     if is_repayment(&form.kind)
-        && amount_cents
+        && principal_cents
             > repayment_capacity(
                 &state,
                 &dek,
@@ -1281,7 +1474,7 @@ pub async fn create(
             )
             .await?
     {
-        return Err(bad_request("还款金额超过原借款或该对象同币种尚欠金额"));
+        return Err(bad_request("计息本金超过原借款或该对象同币种尚欠金额"));
     }
     let paid_at = if !requires_confirmation {
         Some(
@@ -1428,6 +1621,11 @@ pub async fn create(
         repayment_debt_record_id: Set(None),
         repayment_account_id: Set(None),
         repayment_submission: Set(String::new()),
+        interest_amount: Set(if form.interest_cents > 0 {
+            crypto::encrypt_cents(&dek, form.interest_cents)
+        } else {
+            String::new()
+        }),
         created_at: Set(created_at),
         ..Default::default()
     }
@@ -1542,11 +1740,13 @@ pub async fn list(
                 request.status.as_str(),
                 "open" | "submitted" | "repayment_submitted"
             );
+        let principal_value = super::fmt_cents(snapshot.amount_cents);
         let view = RequestView {
             id: request.id,
             path: format!("/r/{token}"),
             label: crypto::decrypt_string(&dek, &request.label),
             account_name: snapshot.account_name,
+            principal_value,
             note: snapshot.note,
             status_label: status_label.into(),
             expires_at: request.expires_at.format(TIME_FMT).to_string(),
@@ -1818,20 +2018,69 @@ pub async fn submit_repayment(
     } else {
         "repayment_received"
     };
-    let amount = if form.amount.trim().is_empty() {
-        super::fmt_cents(
-            repayment_capacity(
-                &state,
-                &dek,
-                kind,
-                original.person_id,
-                &original_account.currency,
-                Some(original.id),
-            )
-            .await?,
-        )
+    let capacity = repayment_capacity(
+        &state,
+        &dek,
+        kind,
+        original.person_id,
+        &original_account.currency,
+        Some(original.id),
+    )
+    .await?;
+    let has_interest = !form.interest_principal.trim().is_empty()
+        || !form.interest_rate_bps.trim().is_empty()
+        || !form.interest_months.trim().is_empty();
+    let (amount, note, interest_cents) = if has_interest {
+        if form.interest_principal.trim().is_empty()
+            || form.interest_rate_bps.trim().is_empty()
+            || form.interest_months.trim().is_empty()
+        {
+            return Err(bad_request("计息参数不完整"));
+        }
+        let principal_cents = parse_amount(&form.interest_principal)?;
+        if principal_cents > capacity {
+            return Err(bad_request("计息本金超过当前可还本金"));
+        }
+        let rate_bps = form
+            .interest_rate_bps
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| bad_request("年利率格式不正确"))?;
+        let months = form
+            .interest_months
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| bad_request("计息月数格式不正确"))?;
+        let interest_cents = monthly_interest_cents(principal_cents, rate_bps, months)?;
+        let total = principal_cents
+            .checked_add(interest_cents)
+            .ok_or_else(|| bad_request("还款金额超出范围"))?;
+        if !form.amount.trim().is_empty() && parse_amount(&form.amount)? != total {
+            return Err(bad_request("还款金额与按月计息结果不一致，请重新填入"));
+        }
+        let mut note = form.note.trim().to_string();
+        if !note.is_empty() {
+            note.push('\n');
+        }
+        note.push_str(&format!(
+            "计息还款：本金 {}，年利率 {}%，计息 {} 个月，利息 {}，本息合计 {}。",
+            super::fmt_cents(principal_cents),
+            format_rate_bps(rate_bps),
+            months,
+            super::fmt_cents(interest_cents),
+            super::fmt_cents(total),
+        ));
+        if note.chars().count() > 1000 {
+            return Err(bad_request("说明与计息信息合计不能超过 1000 个字符"));
+        }
+        (super::fmt_cents(total), note, interest_cents)
     } else {
-        form.amount
+        let amount = if form.amount.trim().is_empty() {
+            super::fmt_cents(capacity)
+        } else {
+            form.amount
+        };
+        (amount, form.note, 0)
     };
     let create_form = CreateRequestForm {
         kind: kind.into(),
@@ -1839,13 +2088,14 @@ pub async fn submit_repayment(
         account_id: form.account_id,
         amount,
         recipient_name: submission.payer_name,
-        note: form.note,
+        note,
         expires_at: (Utc::now() + Duration::days(7))
             .format(TIME_FMT)
             .to_string(),
         requires_confirmation: form.requires_confirmation,
         origin_debt_record_id: Some(original.id),
         paid_at: form.repaid_at,
+        interest_cents,
     };
     drop(guard);
     create(State(state), Extension(SessionDek(dek)), Form(create_form)).await
@@ -2025,7 +2275,19 @@ pub async fn confirm(
         let person_id = request
             .person_id
             .ok_or_else(|| bad_request("还款请求没有关联借贷对象"))?;
-        if submission.amount_cents
+        let interest = if request.interest_amount.is_empty() {
+            0
+        } else {
+            crypto::decrypt_cents(&dek, &request.interest_amount)
+        };
+        let principal = submission
+            .amount_cents
+            .checked_sub(interest)
+            .ok_or_else(|| bad_request("实际还款金额小于利息金额"))?;
+        if interest < 0 || principal <= 0 {
+            return Err(bad_request("实际还款金额中的本金或利息无效"));
+        }
+        if principal
             > repayment_capacity(
                 &state,
                 &dek,
@@ -2036,7 +2298,7 @@ pub async fn confirm(
             )
             .await?
         {
-            return Err(bad_request("实际还款超过原借款或该对象同币种尚欠金额"));
+            return Err(bad_request("实际还款本金超过原借款或该对象同币种尚欠金额"));
         }
     }
     super::accounts::ensure_balance_delta(
@@ -2140,4 +2402,39 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> Handl
         .await
         .map_err(err500)?;
     Ok(Redirect::to("/debt-requests"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_rate_bps, monthly_interest_cents};
+
+    #[test]
+    fn monthly_interest_uses_annual_rate_twelfths() {
+        assert_eq!(monthly_interest_cents(100_000, 300, 1).unwrap(), 250);
+        assert_eq!(monthly_interest_cents(100_000, 350, 2).unwrap(), 583);
+        assert_eq!(monthly_interest_cents(100_000, 0, 12).unwrap(), 0);
+    }
+
+    #[test]
+    fn monthly_interest_rounds_half_up_to_cents() {
+        assert_eq!(monthly_interest_cents(1_000, 300, 1).unwrap(), 3);
+        assert_eq!(monthly_interest_cents(1_000, 350, 1).unwrap(), 3);
+    }
+
+    #[test]
+    fn monthly_interest_rejects_invalid_inputs() {
+        assert!(monthly_interest_cents(0, 300, 1).is_err());
+        assert!(monthly_interest_cents(100_000, -1, 1).is_err());
+        assert!(monthly_interest_cents(100_000, 10_001, 1).is_err());
+        assert!(monthly_interest_cents(100_000, 300, 0).is_err());
+        assert!(monthly_interest_cents(100_000, 300, 1_201).is_err());
+        assert!(monthly_interest_cents(i64::MAX, 10_000, 1_200).is_err());
+    }
+
+    #[test]
+    fn rate_display_keeps_two_decimals() {
+        assert_eq!(format_rate_bps(300), "3.00");
+        assert_eq!(format_rate_bps(355), "3.55");
+        assert_eq!(format_rate_bps(0), "0.00");
+    }
 }

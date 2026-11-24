@@ -5,7 +5,70 @@
   {% endif %}
   {% if request.settled %}<div class="mt-3 rounded border border-amber-300 bg-amber-50 p-3"><h3 class="text-sm font-semibold text-amber-950">已强制平账 · {{ request.settlement_amount }}</h3>{% if !request.settlement_note.is_empty() %}<p class="mt-1.5 whitespace-pre-wrap text-sm">{{ request.settlement_note }}</p>{% endif %}<p class="mt-1.5 text-xs text-gray-500">平账时间：<time data-utc-time="{{ request.settled_at }}">{{ request.settled_at }}</time></p></div>{% endif %}
   {% if request.origin_settled && request.confirmed_debt_record_id == 0 %}<p class="mt-2 text-sm font-semibold text-amber-900">原借款已强制平账；这笔尚未入账的还款请求不能再提交或确认，可撤销或删除。</p>{% endif %}
-  {% if request.can_submit_repayment %}<form method="post" action="/debt-requests/{{ request.id }}/repayment" class="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3"><h3 class="text-sm font-semibold text-amber-950">为本笔借款登记还款请求</h3><p class="mt-1 text-xs text-amber-800">支持部分还款。将创建关联本笔原借款的新证明；需要对方确认时，先发送新链接，对方提交后账主再核实入账。</p><div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2"><div><label class="mb-1 block text-xs font-medium">我的资金账户</label><select name="account_id" required class="w-full rounded border bg-white px-2 py-1.5 text-sm">{% for account in repayment_accounts %}<option value="{{ account.id }}">{{ account.name }} · {{ account.currency }}</option>{% endfor %}</select></div><div><label class="mb-1 block text-xs font-medium">还款金额（留空为当前可还全部）</label><input name="amount" type="number" min="0.01" step="0.01" class="w-full rounded border px-2 py-1.5 text-sm"></div><div data-utc-field><label class="mb-1 block text-xs font-medium">实际还款时间（单方记录时采用）</label><input data-utc-picker data-utc-value="{{ default_repayment_at }}" type="datetime-local" required class="w-full rounded border bg-white px-2 py-1.5 text-sm"><input data-utc-target type="hidden" name="repaid_at" value="{{ default_repayment_at }}"></div><div><label class="mb-1 block text-xs font-medium">确认策略</label><select name="requires_confirmation" class="w-full rounded border bg-white px-2 py-1.5 text-sm"><option value="true">需要对方确认，暂不入账</option><option value="false">单方记录，已实际收付并立即入账</option></select></div><div><label class="mb-1 block text-xs font-medium">说明</label><input name="note" maxlength="1000" class="w-full rounded border px-2 py-1.5 text-sm"></div></div><button class="mt-2 rounded bg-amber-700 px-3 py-1.5 text-sm font-bold text-white">创建关联还款请求</button></form>{% endif %}
+  {% if request.can_submit_repayment %}
+  <form method="post" action="/debt-requests/{{ request.id }}/repayment" class="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3" data-lpr-form>
+    <h3 class="text-sm font-semibold text-amber-950">为本笔借款登记还款请求</h3>
+    <p class="mt-1 text-xs text-amber-800">支持部分还款。将创建关联本笔原借款的新证明；需要对方确认时，先发送新链接，对方提交后账主再核实入账。</p>
+    <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+      <div>
+        <label class="mb-1 block text-xs font-medium">我的资金账户</label>
+        <select name="account_id" required class="w-full rounded border bg-white px-2 py-1.5 text-sm">{% for account in repayment_accounts %}<option value="{{ account.id }}">{{ account.name }} · {{ account.currency }}</option>{% endfor %}</select>
+      </div>
+      <div>
+        <label class="mb-1 block text-xs font-medium">还款金额（留空为当前可还全部）</label>
+        <input name="amount" data-lpr-amount type="number" min="0.01" step="0.01" class="w-full rounded border px-2 py-1.5 text-sm">
+      </div>
+      <div data-utc-field>
+        <label class="mb-1 block text-xs font-medium">实际还款时间（单方记录时采用）</label>
+        <input data-utc-picker data-utc-value="{{ default_repayment_at }}" type="datetime-local" required class="w-full rounded border bg-white px-2 py-1.5 text-sm">
+        <input data-utc-target type="hidden" name="repaid_at" value="{{ default_repayment_at }}">
+      </div>
+      <div>
+        <label class="mb-1 block text-xs font-medium">确认策略</label>
+        <select name="requires_confirmation" class="w-full rounded border bg-white px-2 py-1.5 text-sm">
+          <option value="true">需要对方确认，暂不入账</option>
+          <option value="false">单方记录，已实际收付并立即入账</option>
+        </select>
+      </div>
+      <div>
+        <label class="mb-1 block text-xs font-medium">说明</label>
+        <input name="note" maxlength="1000" class="w-full rounded border px-2 py-1.5 text-sm">
+      </div>
+      <details class="mt-1 rounded border border-amber-200 bg-white p-2 sm:col-span-2">
+        <summary class="cursor-pointer text-xs font-semibold text-amber-900">按 LPR 计算利息（可选，按月计息）</summary>
+        <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div>
+            <label class="mb-1 block text-xs text-gray-600">计息本金（默认原借款金额）</label>
+            <input data-lpr-principal type="number" min="0.01" step="0.01" value="{{ request.principal_value }}" class="w-full rounded border px-2 py-1.5 text-sm font-mono">
+            <p class="mt-1 text-[11px] text-gray-500">部分还款后请改为当前剩余本金。</p>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-gray-600">计息月数</label>
+            <input data-lpr-months type="number" min="1" max="1200" step="1" value="1" class="w-full rounded border px-2 py-1.5 text-sm font-mono">
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-gray-600">年利率（%）</label>
+            <input data-lpr-rate type="number" min="0" max="100" step="0.01" placeholder="可手填，例如 3.00" class="w-full rounded border px-2 py-1.5 text-sm font-mono">
+          </div>
+          <div>
+            <label class="mb-1 block text-xs text-gray-600">加减基点（bp，可为负）</label>
+            <input data-lpr-spread type="number" step="1" value="0" class="w-full rounded border px-2 py-1.5 text-sm font-mono">
+          </div>
+        </div>
+        <div class="mt-2 flex flex-wrap gap-2">
+          <button type="button" data-lpr-fetch="1y" class="rounded border border-amber-400 bg-white px-2 py-1 text-xs font-medium text-amber-900 disabled:opacity-50">获取 1Y LPR</button>
+          <button type="button" data-lpr-fetch="5y" class="rounded border border-amber-400 bg-white px-2 py-1 text-xs font-medium text-amber-900 disabled:opacity-50">获取 5Y LPR</button>
+        </div>
+        <p data-lpr-source class="mt-1 text-xs text-gray-500">可手填年利率，或获取 LPR 后加减基点；按月计息=本金×年利率÷12×月数，输入变化会自动填入还款金额。</p>
+        <p data-lpr-preview class="mt-1 text-xs font-medium text-amber-900"></p>
+        <input type="hidden" name="interest_principal" data-lpr-hidden-principal>
+        <input type="hidden" name="interest_rate_bps" data-lpr-hidden-rate>
+        <input type="hidden" name="interest_months" data-lpr-hidden-months>
+      </details>
+    </div>
+    <button class="mt-2 rounded bg-amber-700 px-3 py-1.5 text-sm font-bold text-white">创建关联还款请求</button>
+  </form>
+  {% endif %}
   {% if request.repayment_pending || request.repaid %}<div class="mt-3 rounded border {% if request.repaid %}border-green-200 bg-green-50{% else %}border-amber-200 bg-amber-50{% endif %} p-3"><h3 class="text-sm font-semibold {% if request.repaid %}text-green-900{% else %}text-amber-950{% endif %}">{% if request.repaid %}还款已由对方确认{% else %}已登记还款，等待对方确认{% endif %}</h3><dl class="mt-1.5 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2"><div><dt class="text-xs text-gray-500">还款账户</dt><dd>{{ request.repayment_account_name }}</dd></div><div><dt class="text-xs text-gray-500">还款时间</dt><dd><time data-utc-time="{{ request.repayment_at }}">{{ request.repayment_at }}</time></dd></div>{% if !request.repayment_note.is_empty() %}<div class="sm:col-span-2"><dt class="text-xs text-gray-500">说明</dt><dd class="whitespace-pre-wrap">{{ request.repayment_note }}</dd></div>{% endif %}</dl></div>{% endif %}
   <details class="mt-3 text-xs">
     <summary class="cursor-pointer {% if request.verification_ok %}text-green-700{% else %}text-red-700{% endif %}">{% if request.verification_ok %}验证链完整{% else %}验证链异常，请勿确认{% endif %}（点开查看指纹）</summary>

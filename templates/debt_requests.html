@@ -159,5 +159,130 @@ document.querySelectorAll('[data-fed-action]').forEach(button => {
   });
 });
 </script>
+<script>
+(() => {
+  const parseCents = value => {
+    const text = String(value ?? '').trim();
+    if (!/^\d+(\.\d{0,2})?$/.test(text)) return null;
+    const [whole, frac = ''] = text.split('.');
+    const cents = BigInt(whole) * 100n + BigInt((frac + '00').slice(0, 2));
+    return cents > 0n ? cents : null;
+  };
+  const formatCents = cents => {
+    const whole = cents / 100n;
+    const frac = (cents % 100n).toString().padStart(2, '0');
+    return `${whole}.${frac}`;
+  };
+  const parseRateBps = value => {
+    const text = String(value ?? '').trim();
+    if (!/^\d+(\.\d{0,2})?$/.test(text)) return null;
+    const [whole, frac = ''] = text.split('.');
+    const bps = Number(whole) * 100 + Number((frac + '00').slice(0, 2));
+    return Number.isInteger(bps) ? bps : null;
+  };
+  const parseWhole = (value, min, max) => {
+    const text = String(value ?? '').trim();
+    if (!/^\d+$/.test(text)) return null;
+    const number = Number(text);
+    return number >= min && number <= max ? number : null;
+  };
+  let lprCache = null;
+  const loadLpr = async () => {
+    if (lprCache) return lprCache;
+    const response = await fetch('/debt-requests/lpr', { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '获取 LPR 失败');
+    lprCache = data;
+    return data;
+  };
+  document.querySelectorAll('[data-lpr-form]').forEach(form => {
+    const amount = form.querySelector('[data-lpr-amount]');
+    const principalInput = form.querySelector('[data-lpr-principal]');
+    const monthsInput = form.querySelector('[data-lpr-months]');
+    const rateInput = form.querySelector('[data-lpr-rate]');
+    const spreadInput = form.querySelector('[data-lpr-spread]');
+    const source = form.querySelector('[data-lpr-source]');
+    const preview = form.querySelector('[data-lpr-preview]');
+    const hiddenPrincipal = form.querySelector('[data-lpr-hidden-principal]');
+    const hiddenRate = form.querySelector('[data-lpr-hidden-rate]');
+    const hiddenMonths = form.querySelector('[data-lpr-hidden-months]');
+    if (!amount || !principalInput || !monthsInput || !rateInput || !spreadInput || !preview) return;
+    let lastAuto = '';
+    const clearInterest = () => {
+      hiddenPrincipal.value = '';
+      hiddenRate.value = '';
+      hiddenMonths.value = '';
+    };
+    const update = () => {
+      if (!rateInput.value.trim()) {
+        clearInterest();
+        preview.textContent = '';
+        if (amount.value === lastAuto) {
+          amount.value = '';
+          lastAuto = '';
+        }
+        return;
+      }
+      const principal = parseCents(principalInput.value);
+      const rate = parseRateBps(rateInput.value);
+      const spread = spreadInput.value.trim() === '' ? 0 : Number.parseInt(spreadInput.value.trim(), 10);
+      const months = parseWhole(monthsInput.value, 1, 1200);
+      let error = '';
+      if (!principal) error = '计息本金必须大于 0';
+      else if (rate === null) error = '年利率格式不正确';
+      else if (!Number.isInteger(spread) || Math.abs(spread) > 10000) error = '加减基点格式不正确';
+      else if (rate + spread < 0 || rate + spread > 10000) error = '计息年利率必须在 0% 到 100% 之间';
+      else if (!months) error = '计息月数必须在 1 到 1200 之间';
+      if (error) {
+        clearInterest();
+        preview.textContent = error;
+        preview.className = 'mt-1 text-xs font-medium text-red-700';
+        if (amount.value === lastAuto) {
+          amount.value = '';
+          lastAuto = '';
+        }
+        return;
+      }
+      const bps = rate + spread;
+      const interest = (principal * BigInt(bps) * BigInt(months) * 2n + 120000n) / 240000n;
+      const total = principal + interest;
+      amount.value = formatCents(total);
+      lastAuto = formatCents(total);
+      hiddenPrincipal.value = formatCents(principal);
+      hiddenRate.value = String(bps);
+      hiddenMonths.value = String(months);
+      preview.textContent = `本金 ${formatCents(principal)} + 利息 ${formatCents(interest)} = ${formatCents(total)}（年利率 ${(bps / 100).toFixed(2)}%，${months} 个月）`;
+      preview.className = 'mt-1 text-xs font-medium text-amber-900';
+    };
+    for (const input of [principalInput, monthsInput, rateInput, spreadInput]) {
+      input.addEventListener('input', update);
+      input.addEventListener('change', update);
+    }
+    amount.addEventListener('input', () => {
+      if (amount.value !== lastAuto) {
+        clearInterest();
+        preview.textContent = '已手动修改还款金额；如需计息，请重新调整上方参数。';
+        preview.className = 'mt-1 text-xs font-medium text-gray-600';
+      }
+    });
+    form.querySelectorAll('[data-lpr-fetch]').forEach(button => {
+      button.addEventListener('click', async () => {
+        button.disabled = true;
+        try {
+          const data = await loadLpr();
+          rateInput.value = button.dataset.lprFetch === '5y' ? data.five_year : data.one_year;
+          source.textContent = `1Y ${data.one_year}% · 5Y ${data.five_year}% · ${data.date}${data.stale ? '（缓存）' : ''}`;
+          update();
+        } catch (error) {
+          preview.textContent = String(error.message || error);
+          preview.className = 'mt-1 text-xs font-medium text-red-700';
+        } finally {
+          button.disabled = false;
+        }
+      });
+    });
+  });
+})();
+</script>
 {% include "share_copy_script.html" %}
 {% endblock %}

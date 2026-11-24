@@ -672,6 +672,7 @@ async fn main() {
             get(handlers::debt_requests::list).post(handlers::debt_requests::create),
         )
         .route("/debt-requests/new", get(handlers::debt_requests::new_form))
+        .route("/debt-requests/lpr", get(handlers::debt_requests::lpr))
         .route(
             "/debt-requests/{id}/confirm",
             post(handlers::debt_requests::confirm),
