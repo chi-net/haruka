@@ -15,8 +15,9 @@
         <select name="account_id" required class="w-full rounded border bg-white px-2 py-1.5 text-sm">{% for account in repayment_accounts %}<option value="{{ account.id }}">{{ account.name }} · {{ account.currency }}</option>{% endfor %}</select>
       </div>
       <div>
-        <label class="mb-1 block text-xs font-medium">还款金额（留空为当前可还全部）</label>
-        <input name="amount" data-lpr-amount type="number" min="0.01" step="0.01" class="w-full rounded border px-2 py-1.5 text-sm">
+        <label class="mb-1 block text-xs font-medium">实还金额（留空为当前可还全部）</label>
+        <input name="amount" data-lpr-amount type="number" min="0" step="0.01" class="w-full rounded border px-2 py-1.5 text-sm">
+        <p class="mt-1 text-[11px] text-gray-500">LPR 只作为建议；可手改实还金额。0 元将直接结清本笔借款，不产生账单或资金流水。</p>
       </div>
       <div data-utc-field>
         <label class="mb-1 block text-xs font-medium">实际还款时间（单方记录时采用）</label>
@@ -59,7 +60,7 @@
           <button type="button" data-lpr-fetch="1y" class="rounded border border-amber-400 bg-white px-2 py-1 text-xs font-medium text-amber-900 disabled:opacity-50">获取 1Y LPR</button>
           <button type="button" data-lpr-fetch="5y" class="rounded border border-amber-400 bg-white px-2 py-1 text-xs font-medium text-amber-900 disabled:opacity-50">获取 5Y LPR</button>
         </div>
-        <p data-lpr-source class="mt-1 text-xs text-gray-500">可手填年利率，或获取 LPR 后加减基点；按月计息=本金×年利率÷12×月数，输入变化会自动填入还款金额。</p>
+        <p data-lpr-source class="mt-1 text-xs text-gray-500">可手填年利率，或获取 LPR 后加减基点；按月计息=本金×年利率÷12×月数，输入变化会把建议金额填入实还金额。</p>
         <p data-lpr-preview class="mt-1 text-xs font-medium text-amber-900"></p>
         <input type="hidden" name="interest_principal" data-lpr-hidden-principal>
         <input type="hidden" name="interest_rate_bps" data-lpr-hidden-rate>

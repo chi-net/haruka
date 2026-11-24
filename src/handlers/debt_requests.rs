@@ -801,6 +801,18 @@ pub(crate) fn parse_amount(value: &str) -> HandlerResult<i64> {
         .ok_or_else(|| bad_request("金额超出范围"))
 }
 
+fn parse_repayment_amount(value: &str) -> HandlerResult<i64> {
+    let decimal = Decimal::from_str(value.trim())
+        .map_err(|_| bad_request("实还金额格式不正确"))?
+        .round_dp(2);
+    if decimal < Decimal::ZERO {
+        return Err(bad_request("实还金额不能为负数"));
+    }
+    (decimal * Decimal::from(100))
+        .to_i64()
+        .ok_or_else(|| bad_request("实还金额超出范围"))
+}
+
 fn monthly_interest_cents(principal_cents: i64, rate_bps: i64, months: i64) -> HandlerResult<i64> {
     if principal_cents <= 0 {
         return Err(bad_request("计息本金必须大于 0"));
@@ -2030,7 +2042,7 @@ pub async fn submit_repayment(
     let has_interest = !form.interest_principal.trim().is_empty()
         || !form.interest_rate_bps.trim().is_empty()
         || !form.interest_months.trim().is_empty();
-    let (amount, note, interest_cents) = if has_interest {
+    let suggestion = if has_interest {
         if form.interest_principal.trim().is_empty()
             || form.interest_rate_bps.trim().is_empty()
             || form.interest_months.trim().is_empty()
@@ -2038,9 +2050,6 @@ pub async fn submit_repayment(
             return Err(bad_request("计息参数不完整"));
         }
         let principal_cents = parse_amount(&form.interest_principal)?;
-        if principal_cents > capacity {
-            return Err(bad_request("计息本金超过当前可还本金"));
-        }
         let rate_bps = form
             .interest_rate_bps
             .trim()
@@ -2052,36 +2061,116 @@ pub async fn submit_repayment(
             .parse::<i64>()
             .map_err(|_| bad_request("计息月数格式不正确"))?;
         let interest_cents = monthly_interest_cents(principal_cents, rate_bps, months)?;
-        let total = principal_cents
+        let total_cents = principal_cents
             .checked_add(interest_cents)
             .ok_or_else(|| bad_request("还款金额超出范围"))?;
-        if !form.amount.trim().is_empty() && parse_amount(&form.amount)? != total {
-            return Err(bad_request("还款金额与按月计息结果不一致，请重新填入"));
+        Some((
+            principal_cents,
+            rate_bps,
+            months,
+            interest_cents,
+            total_cents,
+        ))
+    } else {
+        None
+    };
+    let actual_cents = if form.amount.trim().is_empty() {
+        capacity
+    } else {
+        parse_repayment_amount(&form.amount)?
+    };
+
+    // 实还为 0 表示无需还款：按强制平账处理，不生成资金流水或账单。
+    if actual_cents == 0 {
+        let mut note = form.note.trim().to_string();
+        if let Some((principal, rate_bps, months, interest, total)) = suggestion {
+            if !note.is_empty() {
+                note.push('\n');
+            }
+            note.push_str(&format!(
+                "计息建议：本金 {}，年利率 {}%，计息 {} 个月，利息 {}，本息合计 {}。",
+                super::fmt_cents(principal),
+                format_rate_bps(rate_bps),
+                months,
+                super::fmt_cents(interest),
+                super::fmt_cents(total),
+            ));
         }
+        if !note.is_empty() {
+            note.push('\n');
+        }
+        note.push_str("实还 0 元，无需还款。");
+        if note.chars().count() > 1000 {
+            return Err(bad_request("说明与实还信息合计不能超过 1000 个字符"));
+        }
+        drop(guard);
+        return settle(
+            State(state),
+            Extension(SessionDek(dek)),
+            Path(request.id),
+            Form(SettleForm { note }),
+        )
+        .await;
+    }
+
+    let (interest_cents, note) = if let Some((
+        suggested_principal,
+        rate_bps,
+        months,
+        interest,
+        total,
+    )) = suggestion
+    {
+        let principal_cents = suggested_principal.min(actual_cents).min(capacity);
+        if principal_cents == 0 {
+            return Err(bad_request("本笔借款已无剩余本金，不能登记实还"));
+        }
+        let interest_cents = actual_cents - principal_cents;
         let mut note = form.note.trim().to_string();
         if !note.is_empty() {
             note.push('\n');
         }
         note.push_str(&format!(
-            "计息还款：本金 {}，年利率 {}%，计息 {} 个月，利息 {}，本息合计 {}。",
-            super::fmt_cents(principal_cents),
-            format_rate_bps(rate_bps),
-            months,
-            super::fmt_cents(interest_cents),
-            super::fmt_cents(total),
-        ));
+                "计息建议：本金 {}，年利率 {}%，计息 {} 个月，利息 {}，本息合计 {}；实还 {}（本金 {}，利息 {}）。",
+                super::fmt_cents(suggested_principal),
+                format_rate_bps(rate_bps),
+                months,
+                super::fmt_cents(interest),
+                super::fmt_cents(total),
+                super::fmt_cents(actual_cents),
+                super::fmt_cents(principal_cents),
+                super::fmt_cents(interest_cents),
+            ));
         if note.chars().count() > 1000 {
             return Err(bad_request("说明与计息信息合计不能超过 1000 个字符"));
         }
-        (super::fmt_cents(total), note, interest_cents)
+        (interest_cents, note)
     } else {
-        let amount = if form.amount.trim().is_empty() {
-            super::fmt_cents(capacity)
-        } else {
-            form.amount
-        };
-        (amount, form.note, 0)
+        let principal_cents = actual_cents.min(capacity);
+        if principal_cents == 0 {
+            return Err(bad_request("本笔借款已无剩余本金，不能登记实还"));
+        }
+        let interest_cents = actual_cents - principal_cents;
+        let mut note = form.note;
+        if interest_cents > 0 {
+            if !note.trim().is_empty() {
+                note = format!("{}\n", note.trim());
+            } else {
+                note.clear();
+            }
+            note.push_str(&format!(
+                "实还 {}，其中本金 {}，超出剩余本金的 {} 计为利息。",
+                super::fmt_cents(actual_cents),
+                super::fmt_cents(principal_cents),
+                super::fmt_cents(interest_cents),
+            ));
+            if note.chars().count() > 1000 {
+                return Err(bad_request("说明与实还信息合计不能超过 1000 个字符"));
+            }
+        }
+        (interest_cents, note)
     };
+    let amount = super::fmt_cents(actual_cents);
     let create_form = CreateRequestForm {
         kind: kind.into(),
         person_id: original.person_id,
@@ -2406,7 +2495,7 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<i64>) -> Handl
 
 #[cfg(test)]
 mod tests {
-    use super::{format_rate_bps, monthly_interest_cents};
+    use super::{format_rate_bps, monthly_interest_cents, parse_repayment_amount};
 
     #[test]
     fn monthly_interest_uses_annual_rate_twelfths() {
@@ -2429,6 +2518,15 @@ mod tests {
         assert!(monthly_interest_cents(100_000, 300, 0).is_err());
         assert!(monthly_interest_cents(100_000, 300, 1_201).is_err());
         assert!(monthly_interest_cents(i64::MAX, 10_000, 1_200).is_err());
+    }
+
+    #[test]
+    fn repayment_amount_allows_zero_but_not_negative() {
+        assert_eq!(parse_repayment_amount("0").unwrap(), 0);
+        assert_eq!(parse_repayment_amount("0.00").unwrap(), 0);
+        assert_eq!(parse_repayment_amount("12.34").unwrap(), 1_234);
+        assert!(parse_repayment_amount("-0.01").is_err());
+        assert!(parse_repayment_amount("abc").is_err());
     }
 
     #[test]

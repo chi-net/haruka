@@ -186,6 +186,11 @@ pub(super) async fn outstanding_balances(
         let entry = native.entry((record.person_id, currency)).or_default();
         apply_outstanding(&record.kind, amount - settled, &mut entry.0, &mut entry.1)?;
     }
+    // 实还可高于剩余本金（差额按利息/多付处理），但债务汇总不能显示负数。
+    for (receivable, payable) in native.values_mut() {
+        *receivable = (*receivable).max(0);
+        *payable = (*payable).max(0);
+    }
     let mut result: HashMap<i64, (i64, i64)> = HashMap::new();
     for ((person, currency), (receivable, payable)) in native {
         let entry = result.entry(person).or_default();

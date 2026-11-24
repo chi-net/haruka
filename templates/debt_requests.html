@@ -251,7 +251,7 @@ document.querySelectorAll('[data-fed-action]').forEach(button => {
       hiddenPrincipal.value = formatCents(principal);
       hiddenRate.value = String(bps);
       hiddenMonths.value = String(months);
-      preview.textContent = `本金 ${formatCents(principal)} + 利息 ${formatCents(interest)} = ${formatCents(total)}（年利率 ${(bps / 100).toFixed(2)}%，${months} 个月）`;
+      preview.textContent = `建议实还 ${formatCents(total)}（本金 ${formatCents(principal)} + 利息 ${formatCents(interest)}，年利率 ${(bps / 100).toFixed(2)}%，${months} 个月）`;
       preview.className = 'mt-1 text-xs font-medium text-amber-900';
     };
     for (const input of [principalInput, monthsInput, rateInput, spreadInput]) {
@@ -260,8 +260,7 @@ document.querySelectorAll('[data-fed-action]').forEach(button => {
     }
     amount.addEventListener('input', () => {
       if (amount.value !== lastAuto) {
-        clearInterest();
-        preview.textContent = '已手动修改还款金额；如需计息，请重新调整上方参数。';
+        preview.textContent = '实还金额已手动修改；LPR/利率仅作为建议，服务端按实还金额记账。';
         preview.className = 'mt-1 text-xs font-medium text-gray-600';
       }
     });
