@@ -501,7 +501,27 @@ pub(crate) async fn ensure_balance_delta(
     account_id: i64,
     delta: i64,
 ) -> HandlerResult<()> {
-    ensure_balance_delta_on(&state.db, dek, account_id, delta).await
+    ensure_balance_delta_with(state, dek, account_id, delta, false).await
+}
+
+/// 仅供攒钱页的“特殊情况转出”使用；普通支出、转账等仍走只进不出检查。
+pub(crate) async fn ensure_balance_delta_allow_savings(
+    state: &AppState,
+    dek: &crypto::Dek,
+    account_id: i64,
+    delta: i64,
+) -> HandlerResult<()> {
+    ensure_balance_delta_with(state, dek, account_id, delta, true).await
+}
+
+async fn ensure_balance_delta_with(
+    state: &AppState,
+    dek: &crypto::Dek,
+    account_id: i64,
+    delta: i64,
+    allow_savings: bool,
+) -> HandlerResult<()> {
+    ensure_balance_delta_on_with(&state.db, dek, account_id, delta, allow_savings).await
 }
 
 pub(crate) async fn ensure_balance_delta_on<C: ConnectionTrait>(
@@ -510,6 +530,21 @@ pub(crate) async fn ensure_balance_delta_on<C: ConnectionTrait>(
     account_id: i64,
     delta: i64,
 ) -> HandlerResult<()> {
+    ensure_balance_delta_on_with(db, dek, account_id, delta, false).await
+}
+
+async fn ensure_balance_delta_on_with<C: ConnectionTrait>(
+    db: &C,
+    dek: &crypto::Dek,
+    account_id: i64,
+    delta: i64,
+    allow_savings: bool,
+) -> HandlerResult<()> {
+    if delta < 0 && !allow_savings && super::savings::is_savings_account_on(db, account_id).await? {
+        return Err(bad_request(
+            "攒钱账户原则上只进不出；如确需转出，请在攒钱页使用特殊情况转出",
+        ));
+    }
     let projected = current_balance_on(db, dek, account_id)
         .await?
         .checked_add(delta)
@@ -529,6 +564,7 @@ pub async fn balance_summary(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     let balance = current_balance(&state, &dek, id).await?;
+    let savings = super::savings::is_savings_account_on(&state.db, id).await?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(AccountBalanceResponse {
@@ -538,7 +574,8 @@ pub async fn balance_summary(
             balance_cents: balance.to_string(),
             can_transfer_out: balance > 0
                 && crate::investment_funds::is_money_account(&account)
-                && account.kind != "credit_service",
+                && account.kind != "credit_service"
+                && !savings,
             can_transfer_in: crate::investment_funds::is_money_account(&account)
                 && !matches!(account.kind.as_str(), "credit_card" | "credit_service"),
             currency: account.currency,
@@ -1338,6 +1375,11 @@ pub async fn update(
             return Err(bad_request("投资分组货币不可修改；请新建对应货币分组"));
         }
     }
+    if super::savings::is_savings_account_on(&state.db, id).await?
+        && (account.kind != form.account_kind || account.currency != form.currency)
+    {
+        return Err(bad_request("攒钱账户不能修改类型或货币"));
+    }
     if matches!(account.kind.as_str(), "credit_card" | "credit_service")
         && !matches!(form.account_kind.as_str(), "credit_card" | "credit_service")
     {
@@ -1526,6 +1568,11 @@ pub async fn force_balance(
     let target = parse_balance(&form.balance)?;
     ensure_allowed_balance(&state.db, &dek, id, target).await?;
     let previous = current_balance(&state, &dek, id).await?;
+    if target < previous && super::savings::is_savings_account_on(&state.db, id).await? {
+        return Err(bad_request(
+            "攒钱账户不能直接调低余额；如确需转出，请在攒钱页使用特殊情况转出",
+        ));
+    }
     let offset = target
         .checked_sub(transaction_balance(&state.db, &dek, id).await?)
         .ok_or_else(|| bad_request("余额超出范围"))?;
@@ -1560,6 +1607,9 @@ pub async fn delete(
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
+    if super::savings::is_savings_account_on(&state.db, id).await? {
+        return Err(bad_request("该账户是攒钱附属账户，请先清空并删除攒钱项目"));
+    }
     if debt_request::Entity::find()
         .select_only()
         .column(debt_request::Column::Id)

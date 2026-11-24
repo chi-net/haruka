@@ -6,8 +6,8 @@ use crate::entity::{
     account, account_detail, balance_adjustment, bill, bill_share, budget, category, debt_person,
     debt_record, debt_request, exchange_rate, financial_plan, installment_item, installment_plan,
     investment_execution, investment_sms_event, market_closed_day, market_index_quote, meta,
-    passkey, preference, privacy_credential, recovery, recurring_investment, sms_template,
-    subscription, transfer,
+    passkey, preference, privacy_credential, recovery, recurring_investment, savings_project,
+    sms_template, subscription, transfer,
 };
 
 pub async fn init() -> DatabaseConnection {
@@ -484,6 +484,11 @@ pub async fn init() -> DatabaseConnection {
         "TEXT NOT NULL DEFAULT 'month'",
     )
     .await;
+    let mut create_savings_projects = schema.create_table_from_entity(savings_project::Entity);
+    db.execute(builder.build(create_savings_projects.if_not_exists()))
+        .await
+        .expect("建攒钱项目表失败");
+
     let mut create_subscriptions = schema.create_table_from_entity(subscription::Entity);
     db.execute(builder.build(create_subscriptions.if_not_exists()))
         .await

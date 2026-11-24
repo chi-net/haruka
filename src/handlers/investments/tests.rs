@@ -1,5 +1,7 @@
 use super::*;
-use crate::entity::{account_detail, balance_adjustment, category, debt_person, debt_record};
+use crate::entity::{
+    account_detail, balance_adjustment, category, debt_person, debt_record, savings_project,
+};
 use sea_orm::{ConnectionTrait, Database, DbBackend, PaginatorTrait, Schema, Statement};
 
 struct Fixture {
@@ -26,6 +28,7 @@ impl Fixture {
             schema.create_table_from_entity(recurring_investment::Entity),
             schema.create_table_from_entity(investment_execution::Entity),
             schema.create_table_from_entity(market_closed_day::Entity),
+            schema.create_table_from_entity(savings_project::Entity),
         ] {
             db.execute(backend.build(&table)).await.unwrap();
         }

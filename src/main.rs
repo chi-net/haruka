@@ -546,6 +546,19 @@ async fn main() {
             "/subscriptions/run-due",
             post(handlers::subscriptions::run_due),
         )
+        .route(
+            "/savings",
+            get(handlers::savings::list).post(handlers::savings::create),
+        )
+        .route("/savings/new", get(handlers::savings::new_form))
+        .route(
+            "/savings/{id}/edit",
+            get(handlers::savings::edit_form).post(handlers::savings::update),
+        )
+        .route("/savings/{id}/deposit", post(handlers::savings::deposit))
+        .route("/savings/{id}/withdraw", post(handlers::savings::withdraw))
+        .route("/savings/{id}/delete", post(handlers::savings::delete))
+        .route("/savings/run-due", post(handlers::savings::run_due))
         .route("/finance", get(handlers::finance::show))
         .route("/finance/save", post(handlers::finance::save))
         .route("/finance/generate", post(handlers::finance::generate))

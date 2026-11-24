@@ -14,6 +14,7 @@
 </div>
 
 <div id="auto-debit-run-status" class="hidden mb-5 rounded-lg border p-4 text-sm" role="status" aria-live="polite"></div>
+<div id="savings-run-status" class="hidden mb-5 rounded-lg border p-4 text-sm" role="status" aria-live="polite"></div>
 <div id="sms-process-status" class="hidden mb-5 rounded-lg border p-4 text-sm" role="alert" aria-live="assertive"></div>
 
 {% if !auto_debit_warnings.is_empty() %}
@@ -213,6 +214,32 @@
   }).catch(error => {
     status.className = 'mb-5 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800';
     status.textContent = `自动扣款检查失败：${error.message}`;
+  });
+})();
+
+(() => {
+  const status = document.getElementById('savings-run-status');
+  if (!status) return;
+  fetch('/savings/run-due', {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+    cache: 'no-store'
+  }).then(async response => {
+    const raw = await response.text();
+    let payload;
+    try { payload = JSON.parse(raw); } catch (_) { throw new Error(window.harukaErrorMessage(raw, response.headers.get('content-type') || '', response.status)); }
+    if (!response.ok) throw new Error(payload.error || '自动攒钱检查失败');
+    if (payload.executed > 0) {
+      window.location.reload();
+      return;
+    }
+    if (payload.failures && payload.failures.length) {
+      status.className = 'mb-5 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800';
+      status.textContent = `自动攒钱未完成：${payload.failures.join('；')}`;
+    }
+  }).catch(error => {
+    status.className = 'mb-5 rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800';
+    status.textContent = `自动攒钱检查失败：${error.message}`;
   });
 })();
 

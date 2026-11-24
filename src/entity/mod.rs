@@ -25,6 +25,7 @@ pub mod preference;
 pub mod privacy_credential;
 pub mod recovery;
 pub mod recurring_investment;
+pub mod savings_project;
 pub mod sms_template;
 pub mod subscription;
 pub mod transfer;
