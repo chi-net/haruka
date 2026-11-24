@@ -353,6 +353,18 @@ fn credit_amounts(balance: i64, limit: i64) -> CreditAmounts {
     }
 }
 
+fn hide_statement_installments_without_debt(
+    statement: &mut credit_statements::Statement,
+    balance: i64,
+) {
+    if balance >= 0 {
+        statement.unbilled = 0;
+        statement.installment_principal = 0;
+        statement.next_installment = None;
+        statement.due.clear();
+    }
+}
+
 fn credit_due_summary(
     amount: credit_statements::DueAmount,
     account_currency: &str,
@@ -465,10 +477,15 @@ pub async fn show(
         let statement = if account.kind == "credit_card" && limit == 0 {
             None
         } else {
-            Some(
+            let mut statement =
                 credit_statements::calculate(account, detail, &ledger, &dek, time_zone, today)
-                    .map_err(err500)?,
-            )
+                    .map_err(err500)?;
+            // 账户已无欠款（余额为 0 或为正）时，不再把历史分期计划显示为待还本金。
+            hide_statement_installments_without_debt(
+                &mut statement,
+                account_balances.get(&account.id).copied().unwrap_or(0),
+            );
+            Some(statement)
         };
         statements.insert(account.id, (limit, statement));
     }
@@ -789,6 +806,10 @@ pub async fn show(
         if refund.full_refund || refund.needs_review {
             continue;
         }
+        // 信用卡/信贷账户没有欠款时，不再提醒历史分期计划的本金。
+        if account_balances.get(&plan.account_id).copied().unwrap_or(0) >= 0 {
+            continue;
+        }
         let plan_bill = plan.bill_id.and_then(|id| reminder_bills.get(&id));
         let Some(plan_currency) = account_currencies.get(&plan.account_id) else {
             continue;
@@ -932,6 +953,42 @@ mod tests {
             assert_eq!(amounts.usage_percent, 100);
             assert!(amounts.danger);
         }
+    }
+
+    #[test]
+    fn settled_credit_account_clears_installment_display() {
+        let due = credit_statements::DueAmount {
+            due_date: NaiveDate::from_ymd_opt(2026, 12, 1).unwrap(),
+            ordinary: 100,
+            installment: 500,
+            total: 600,
+        };
+        let mut statement = credit_statements::Statement {
+            unbilled: 200,
+            installment_principal: 1_000,
+            next_installment: Some(due.clone()),
+            due: vec![due],
+            has_adjustments: true,
+            has_future_entries: true,
+        };
+        hide_statement_installments_without_debt(&mut statement, 0);
+        assert_eq!(statement.unbilled, 0);
+        assert_eq!(statement.installment_principal, 0);
+        assert!(statement.next_installment.is_none());
+        assert!(statement.due.is_empty());
+        assert!(statement.has_adjustments);
+        assert!(statement.has_future_entries);
+
+        let mut owed = credit_statements::Statement {
+            unbilled: 200,
+            installment_principal: 1_000,
+            next_installment: None,
+            due: Vec::new(),
+            has_adjustments: false,
+            has_future_entries: false,
+        };
+        hide_statement_installments_without_debt(&mut owed, -1);
+        assert_eq!(owed.installment_principal, 1_000);
     }
 
     fn model(dek: &crypto::Dek, id: i64, kind: &str, parent_id: Option<i64>) -> account::Model {
