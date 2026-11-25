@@ -178,7 +178,8 @@ async fn candidates(
             continue;
         }
         // Only offer migration where the old schedule is visibly inconsistent with the balance.
-        if !(before_due > debt || (balance >= 0 && before_due == 0 && before_unbilled > 0)) {
+        if !(due_installment_total > 0 && before_due > debt || (balance > 0 && before_unbilled > 0))
+        {
             continue;
         }
         let principal = proposed

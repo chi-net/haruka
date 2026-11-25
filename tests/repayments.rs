@@ -799,6 +799,17 @@ async fn stock_reconcile_prompts_previews_and_only_changes_after_confirmation() 
         0
     );
     assert_eq!(app.balance(card).await, "CNY -286.42");
+    assert_eq!(
+        app.post("/installments/reconcile/apply", &[])
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE paid_at IS NOT NULL")
+            .await,
+        0
+    );
 
     let applied = app
         .post(
