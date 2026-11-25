@@ -54,7 +54,7 @@
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0"><h2 class="font-medium truncate"><a href="/installments/{{ plan.id }}" class="text-blue-600 hover:underline">{{ plan.title }}</a></h2><p class="text-xs text-gray-500 mt-1 truncate">{{ plan.account_name }}</p></div>
       {% if plan.deleted %}<span>已删除 · 历史</span>{% endif %}{% if plan.refunded %}<span>已退款终止</span>{% endif %}{% if plan.needs_review %}<span class="text-amber-700">待核对 · 已暂停</span>{% endif %}
-      {% if plan.overdue_count > 0 %}<span class="shrink-0 text-xs rounded-full px-2 py-0.5 bg-red-100 text-red-700">逾期 {{ plan.overdue_count }} 期</span>{% else %}<span class="shrink-0 text-xs rounded-full px-2 py-0.5 bg-blue-50 text-blue-700">已还 {{ plan.progress }}</span>{% endif %}
+      {% if plan.overdue_count > 0 %}<span class="shrink-0 text-xs rounded-full px-2 py-0.5 bg-red-100 text-red-700">逾期 {{ plan.overdue_count }} 期</span>{% else if plan.completed %}<span class="shrink-0 text-xs rounded-full px-2 py-0.5 bg-green-100 text-green-700">已结清</span>{% else %}<span class="shrink-0 text-xs rounded-full px-2 py-0.5 bg-blue-50 text-blue-700">已还 {{ plan.progress }}</span>{% endif %}
     </div>
     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-4 text-sm">
       <div><div class="text-xs text-gray-400">分期本金</div><div class="font-mono mt-0.5">{{ plan.principal }}</div></div>

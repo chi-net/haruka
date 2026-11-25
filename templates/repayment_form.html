@@ -15,6 +15,7 @@
   <p role="alert">暂无同币种非信用还款账户，请先<a href="/accounts/new" class="text-blue-600">创建账户</a>。</p>
   {% else %}
   <section class="border rounded bg-white p-4 space-y-3">
+    <p class="text-xs text-gray-500">直接填写本次实际还款金额即可；信用账户余额清零后，已有分期计划会自动视为结清，无需逐项选择。</p>
     <form method="post" action="/repayments" class="space-y-3">
       <input type="hidden" name="mode" value="custom"><input type="hidden" name="to_account_id" value="{{ selected_id }}">
       <input type="hidden" name="redirect_to" value="/bills/new">
