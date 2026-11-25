@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}存量分期核对 - Haruka{% endblock %}
+{% block content %}
+<div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+  <div>
+    <h1 class="text-xl font-bold">存量分期核对</h1>
+    <p class="text-sm text-gray-500 mt-1">仅在你确认后才会修改期次状态；不会改动账户余额、转账或账单。</p>
+  </div>
+  <a href="/dashboard" class="text-blue-600 hover:underline text-sm">返回仪表板</a>
+</div>
+
+{% if candidates.is_empty() %}
+<div class="rounded-lg border bg-white p-4">
+  <p class="text-sm">没有发现需要迁移的历史分期。</p>
+  <form method="post" action="/installments/reconcile/decline" class="mt-3"><button class="rounded border px-3 py-1.5 text-sm">完成检查</button></form>
+</div>
+{% else %}
+<div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+  检测到以下信用账户的分期剩余与当前账单/余额可能不一致。迁移会把下列“已出账 + 下一期准备出账”的期次标记为已还，用于修正存量显示；不会生成新的资金流水，也不会改动余额。
+</div>
+{% for candidate in candidates %}
+<section class="mt-4 rounded-lg border bg-white p-4">
+  <h2 class="font-semibold">{{ candidate.account_name }} <span class="text-xs text-gray-500">{{ candidate.currency }}</span></h2>
+  <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <div class="rounded border border-gray-200 p-3">
+      <h3 class="text-xs font-semibold text-gray-500">改前</h3>
+      <dl class="mt-2 space-y-1 text-sm">
+        <div class="flex justify-between"><dt>已出账应还</dt><dd class="font-mono">{{ candidate.before_due }}</dd></div>
+        <div class="flex justify-between"><dt>未出账总额</dt><dd class="font-mono">{{ candidate.before_unbilled }}</dd></div>
+        <div class="flex justify-between"><dt>分期剩余本金</dt><dd class="font-mono">{{ candidate.before_remaining }}</dd></div>
+      </dl>
+    </div>
+    <div class="rounded border border-emerald-200 bg-emerald-50 p-3">
+      <h3 class="text-xs font-semibold text-emerald-700">改后</h3>
+      <dl class="mt-2 space-y-1 text-sm">
+        <div class="flex justify-between"><dt>已出账应还</dt><dd class="font-mono">{{ candidate.after_due }}</dd></div>
+        <div class="flex justify-between"><dt>分期剩余本金</dt><dd class="font-mono">{{ candidate.after_remaining }}</dd></div>
+      </dl>
+      <p class="mt-2 text-xs text-emerald-800">未出账总额会在下次打开仪表板时按剩余期次重新计算。</p>
+    </div>
+  </div>
+  <div class="mt-3 overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead><tr class="text-left text-xs text-gray-500"><th class="py-1">计划</th><th>还款日</th><th class="text-right">月供</th><th class="text-right">本金</th></tr></thead>
+      <tbody>{% for item in candidate.items %}<tr class="border-t"><td class="py-1">{{ item.plan }}</td><td>{{ item.due_date }}</td><td class="text-right font-mono">{{ item.total }}</td><td class="text-right font-mono">{{ item.principal }}</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+</section>
+{% endfor %}
+<form method="post" action="/installments/reconcile/apply" class="mt-4 rounded-lg border bg-white p-4 space-y-3">
+  <label class="flex items-start gap-2 text-sm"><input type="checkbox" name="confirm" value="true" required class="mt-0.5"><span>我已查看改前/改后预览，允许把上述期次标记为已还；我知道这不会生成新的资金流水或手续费账单。</span></label>
+  <div class="flex flex-wrap gap-2">
+    <button class="rounded bg-amber-700 px-4 py-2 text-sm font-semibold text-white">确认迁移</button>
+    <button formaction="/installments/reconcile/decline" class="rounded border px-4 py-2 text-sm">暂不处理</button>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

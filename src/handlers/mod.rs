@@ -13,6 +13,7 @@ pub mod federation;
 pub(crate) mod fees;
 pub mod finance;
 pub mod funds;
+pub mod installment_reconcile;
 pub mod installments;
 pub mod investments;
 pub mod passkeys;

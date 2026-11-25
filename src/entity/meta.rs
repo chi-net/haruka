@@ -11,6 +11,8 @@ pub struct Model {
     /// Completed password-failure rounds; three permanently disable password verification.
     #[sea_orm(default_value = 0)]
     pub failed_password_rounds: i32,
+    #[sea_orm(default_value = "")]
+    pub installment_reconcile_state: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

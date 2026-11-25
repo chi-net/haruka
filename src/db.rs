@@ -28,6 +28,13 @@ pub async fn init() -> DatabaseConnection {
         "INTEGER NOT NULL DEFAULT 0",
     )
     .await;
+    ensure_column(
+        &db,
+        "meta",
+        "installment_reconcile_state",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
     let mut create_privacy = schema.create_table_from_entity(privacy_credential::Entity);
     db.execute(builder.build(create_privacy.if_not_exists()))
         .await

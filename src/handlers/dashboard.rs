@@ -13,7 +13,7 @@ use crate::{
     crypto, currency,
     entity::{
         account, account_detail, balance_adjustment, bill, debt_record, installment_item,
-        installment_plan, subscription, transfer,
+        installment_plan, meta, subscription, transfer,
     },
     AppState, SessionDek,
 };
@@ -315,6 +315,7 @@ struct DashboardTemplate {
     budget_statuses: Vec<super::budgets::BudgetStatus>,
     valuation_reminders: Vec<FundValuationReminder>,
     valuation_reminder_count: usize,
+    installment_reconcile_needed: bool,
 }
 
 fn account_kind_label(kind: &str) -> &'static str {
@@ -445,6 +446,14 @@ pub async fn show(
         .all(&state.db)
         .await
         .map_err(err500)?;
+    let installment_reconcile_state = meta::Entity::find_by_id(1)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .map(|meta| meta.installment_reconcile_state)
+        .unwrap_or_default();
+    let installment_reconcile_needed = installment_reconcile_state.is_empty()
+        && installment_items.iter().any(|item| item.paid_at.is_none());
     let ledger = Ledger {
         bills: &bills,
         transfers: &transfers,
@@ -898,6 +907,7 @@ pub async fn show(
         valuation_reminders,
         valuation_reminder_count,
         budget_statuses,
+        installment_reconcile_needed,
     }
     .render()
     .map_err(err500)?;

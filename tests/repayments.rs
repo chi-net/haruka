@@ -762,3 +762,70 @@ async fn overpayment_pays_current_and_pending_installments_but_not_future() {
     assert!(dashboard.contains("待出账分期"));
     assert!(dashboard.contains("CNY 400.00"));
 }
+
+#[tokio::test]
+async fn stock_reconcile_prompts_previews_and_only_changes_after_confirmation() {
+    use chrono::Datelike;
+
+    let app = TestApp::start().await;
+    let today = chrono::Utc::now().date_naive();
+    let card = app
+        .account_with_billing("credit_card", "CNY", today.day().min(28) as i32)
+        .await;
+    app.installment_bill(card, "1200", today + chrono::Duration::days(3))
+        .await;
+    assert_eq!(
+        app.post(
+            &format!("/accounts/{card}/balance"),
+            &[("balance", "-286.42".into())]
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+
+    let dashboard = app.get("/dashboard").await.text().await.unwrap();
+    assert!(dashboard.contains("检测到历史分期数据可能需要核对"));
+    assert!(dashboard.contains("/installments/reconcile"));
+
+    let preview = app.get("/installments/reconcile").await;
+    assert_eq!(preview.status(), StatusCode::OK);
+    let before = preview.text().await.unwrap();
+    assert!(before.contains("改前"));
+    assert!(before.contains("改后"));
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE paid_at IS NOT NULL")
+            .await,
+        0
+    );
+    assert_eq!(app.balance(card).await, "CNY -286.42");
+
+    let applied = app
+        .post(
+            "/installments/reconcile/apply",
+            &[("confirm", "true".into())],
+        )
+        .await;
+    assert_eq!(applied.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE paid_at IS NOT NULL")
+            .await,
+        2
+    );
+    assert_eq!(app.balance(card).await, "CNY -286.42");
+    assert_eq!(
+        app.text("SELECT installment_reconcile_state AS value FROM meta WHERE id = 1")
+            .await,
+        "done"
+    );
+
+    let preview = app
+        .get("/installments/reconcile")
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(preview.contains("没有发现需要迁移的历史分期"));
+    let dashboard = app.get("/dashboard").await.text().await.unwrap();
+    assert!(!dashboard.contains("检测到历史分期数据可能需要核对"));
+}

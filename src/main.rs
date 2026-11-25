@@ -633,6 +633,18 @@ async fn main() {
             "/installments/search",
             get(handlers::installments::advanced_search),
         )
+        .route(
+            "/installments/reconcile",
+            get(handlers::installment_reconcile::preview),
+        )
+        .route(
+            "/installments/reconcile/apply",
+            post(handlers::installment_reconcile::apply),
+        )
+        .route(
+            "/installments/reconcile/decline",
+            post(handlers::installment_reconcile::decline),
+        )
         .route("/installments/{id}", get(handlers::installments::detail))
         .route(
             "/installments/{id}/delete",
