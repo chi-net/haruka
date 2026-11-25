@@ -130,6 +130,9 @@ impl TestApp {
             .unwrap()
     }
     async fn account(&self, kind: &str, currency: &str) -> i64 {
+        self.account_with_billing(kind, currency, 1).await
+    }
+    async fn account_with_billing(&self, kind: &str, currency: &str, billing_day: i32) -> i64 {
         assert_eq!(
             self.post(
                 "/accounts",
@@ -140,7 +143,7 @@ impl TestApp {
                     ("card_number", String::new()),
                     ("account_username", String::new()),
                     ("credit_limit", "10000".into()),
-                    ("billing_day", "1".into()),
+                    ("billing_day", billing_day.to_string()),
                     ("repayment_day", "20".into()),
                     ("note", String::new()),
                     ("transfer_fee_rate", "2".into()),
@@ -189,6 +192,41 @@ impl TestApp {
                             .format("%Y-%m-%dT%H:%M")
                             .to_string()
                     ),
+                ]
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        self.scalar("SELECT MAX(id) AS value FROM bills").await
+    }
+    async fn installment_bill(
+        &self,
+        account: i64,
+        amount: &str,
+        first_due: chrono::NaiveDate,
+    ) -> i64 {
+        assert_eq!(
+            self.post(
+                "/bills",
+                &[
+                    ("account_id", account.to_string()),
+                    ("kind", "expense".into()),
+                    ("amount", amount.into()),
+                    ("category", "还款回归消费".into()),
+                    ("note", "分期账单".into()),
+                    (
+                        "happened_at",
+                        (chrono::Utc::now() - chrono::Duration::days(90))
+                            .format("%Y-%m-%dT%H:%M")
+                            .to_string()
+                    ),
+                    ("use_installment", "true".into()),
+                    ("installment_term", "3".into()),
+                    ("installment_method", "equal_principal".into()),
+                    ("installment_annual_rate", "0".into()),
+                    ("installment_fee", "0".into()),
+                    ("installment_first_due_date", first_due.to_string()),
                 ]
             )
             .await
@@ -629,4 +667,48 @@ async fn card_overpayment_is_real_cash_without_income_and_service_still_cannot_o
     assert_eq!(app.balance(card).await, "CNY 50.00");
     assert_eq!(app.balance(service).await, "CNY 0.00");
     assert_eq!(app.counts().await, (3, 1, 0));
+}
+
+#[tokio::test]
+async fn custom_repayment_pays_only_the_current_billing_cycle_installment() {
+    use chrono::Datelike;
+
+    let app = TestApp::start().await;
+    let source = app.account("other", "CNY").await;
+    let today = chrono::Utc::now().date_naive();
+    let card = app
+        .account_with_billing("credit_card", "CNY", today.day().min(28) as i32)
+        .await;
+    app.force_balance(source, "5000").await;
+    app.installment_bill(card, "1200", today + chrono::Duration::days(3))
+        .await;
+
+    let before = app.options(card).await;
+    assert_eq!(before["plans"][0]["remaining_cents"], "120000");
+    assert_eq!(before["plans"][0]["next_cents"], "40000");
+
+    assert_eq!(
+        app.post(
+            "/repayments",
+            &TestApp::fields(source, card, "custom", "400")
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(app.balance(source).await, "CNY 4600.00");
+    assert_eq!(app.balance(card).await, "CNY -800.00");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE paid_at IS NOT NULL")
+            .await,
+        1
+    );
+    let after = app.options(card).await;
+    assert_eq!(after["plans"][0]["remaining_cents"], "80000");
+    assert_eq!(after["plans"][0]["next_cents"], "40000");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE paid_at IS NULL")
+            .await,
+        2
+    );
 }
