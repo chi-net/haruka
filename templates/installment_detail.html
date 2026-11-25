@@ -8,7 +8,6 @@
 {% if !deleted && bill_id.is_none() && review_schedule.len() == total_records %}<form method="post" action="/installments/{{ plan_id }}/cancel-conversion" class="mb-4"><button class="text-red-700 underline">撤销余款分期转换（保留真实最低还款转账）</button></form>{% endif %}
 {% if deleted %}<p class="bg-gray-50 border p-4 mb-4">分期已删除，所有未还安排已终止，仅保留历史。</p>{% endif %}
 {% if refunded %}<p class="bg-blue-50 border p-4 mb-4">已全额退款</p>{% endif %}
-{% if account_settled && !deleted && !refunded && !needs_review %}<p class="bg-emerald-50 border border-emerald-200 p-4 mb-4">该信用账户当前已无欠款，剩余未还期次视为已结清；期次记录仍保留用于查账。</p>{% endif %}
 {% if needs_review %}
 <section class="bg-amber-50 border border-amber-300 p-4 mb-4">
 <h2 class="font-bold">退款后待核对：已暂停还款</h2>

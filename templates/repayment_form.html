@@ -15,12 +15,12 @@
   <p role="alert">暂无同币种非信用还款账户，请先<a href="/accounts/new" class="text-blue-600">创建账户</a>。</p>
   {% else %}
   <section class="border rounded bg-white p-4 space-y-3">
-    <p class="text-xs text-gray-500">直接填写本次实际还款金额即可；信用账户余额清零后，已有分期计划会自动视为结清，无需逐项选择。</p>
+    <p class="text-xs text-gray-500">直接填写本期账单还款额即可；系统会按账单日自动结清本期已出账的分期，无需逐项选择。未出账消费和未来分期仍会保留。</p>
     <form method="post" action="/repayments" class="space-y-3">
       <input type="hidden" name="mode" value="custom"><input type="hidden" name="to_account_id" value="{{ selected_id }}">
       <input type="hidden" name="redirect_to" value="/bills/new">
       <label class="block">还款来源 <select name="from_account_id" required class="border rounded px-3 py-2">{% for source in sources %}<option value="{{ source.id }}">{{ source.name }}</option>{% endfor %}</select></label>
-      <label class="block">还款金额 <input type="number" name="amount" min="0.01" {% if !allow_overpayment %}max="{{ ordinary_amount }}"{% endif %} step="0.01" required class="border rounded px-3 py-2"></label>
+      <label class="block">还款金额 <input type="number" name="amount" min="0.01" step="0.01" required class="border rounded px-3 py-2"></label>
       <label class="block">还款时间 <input type="datetime-local" name="happened_at" value="{{ happened_at }}" required class="border rounded px-3 py-2"></label>
       <label class="block">备注 <input name="note" class="border rounded px-3 py-2"></label>
       <button type="submit" class="bg-blue-600 text-white rounded px-4 py-2">还款</button>

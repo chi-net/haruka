@@ -627,7 +627,6 @@ struct InstallmentDetailTemplate {
     bill_id: Option<i64>,
     refunded: bool,
     full_refund: bool,
-    account_settled: bool,
     deleted: bool,
     needs_review: bool,
     refunded_cents: i64,
@@ -1050,13 +1049,6 @@ async fn render_list(
         .into_iter()
         .map(|detail| (detail.account_id, detail))
         .collect();
-    let mut account_balances = HashMap::new();
-    for account in accounts.values() {
-        account_balances.insert(
-            account.id,
-            super::accounts::current_balance(&state, &dek, account.id).await?,
-        );
-    }
     let all_items = installment_item::Entity::find()
         .order_by_asc(installment_item::Column::Sequence)
         .all(&state.db)
@@ -1082,7 +1074,6 @@ async fn render_list(
         let Some(account) = accounts.get(&plan.account_id) else {
             continue;
         };
-        let account_settled = account_balances.get(&account.id).copied().unwrap_or(0) >= 0;
         let items = items_by_plan
             .get(&plan.id)
             .map(Vec::as_slice)
@@ -1126,13 +1117,6 @@ async fn render_list(
             if item.due_date < today {
                 overdue_count += 1;
             }
-        }
-        if account_settled && !deleted && !refund.full_refund && !refund.needs_review {
-            remaining = 0;
-            annual_amounts.unpaid = 0;
-            overdue_count = 0;
-            next_due_date = None;
-            next_due = "账户已无欠款，计划视为结清".into();
         }
         let title = bill
             .map(|bill| bill_title(dek, bill))
@@ -1179,7 +1163,7 @@ async fn render_list(
             overdue_count,
             method_code: plan.method,
             next_due_date,
-            completed: !deleted && (paid == items.len() || account_settled),
+            completed: !deleted && paid == items.len(),
             refunded: !deleted && refund.full_refund,
             needs_review: !deleted && refund.needs_review,
             returned,
@@ -1354,7 +1338,6 @@ pub async fn detail(
         .one(&state.db)
         .await
         .map_err(err500)?;
-    let account_settled = super::accounts::current_balance(&state, &dek, account.id).await? >= 0;
     let items = installment_item::Entity::find()
         .filter(installment_item::Column::PlanId.eq(id))
         .order_by_asc(installment_item::Column::Sequence)
@@ -1467,7 +1450,6 @@ pub async fn detail(
             refunded: plan.deleted_at.is_none() && refund.full_refund,
             needs_review: plan.deleted_at.is_none() && refund.needs_review,
             full_refund: refund.full_refund,
-            account_settled,
             refunded_cents: refund.refunded,
             review_schedule,
             account_name: super::bills::account_display_name(&dek, &account, detail.as_ref()),

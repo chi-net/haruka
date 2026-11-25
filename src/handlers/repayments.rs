@@ -16,6 +16,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    credit_dates::installment_billing_close,
     credit_statements::{self, Ledger},
     crypto,
     entity::{
@@ -102,14 +103,14 @@ impl Snapshot {
                 .map_err(err500)?,
         })
     }
-    fn ordinary(
+    fn statement(
         &self,
         account: &account::Model,
         detail: Option<&account_detail::Model>,
         dek: &crypto::Dek,
         time_zone: super::ClientTimeZone,
-    ) -> HandlerResult<i64> {
-        let statement = credit_statements::calculate(
+    ) -> HandlerResult<credit_statements::Statement> {
+        credit_statements::calculate(
             account,
             detail,
             &Ledger {
@@ -124,11 +125,59 @@ impl Snapshot {
             time_zone,
             time_zone.today(),
         )
-        .map_err(|error| bad_request(&error))?;
+        .map_err(|error| bad_request(&error))
+    }
+    fn ordinary(
+        &self,
+        account: &account::Model,
+        detail: Option<&account_detail::Model>,
+        dek: &crypto::Dek,
+        time_zone: super::ClientTimeZone,
+    ) -> HandlerResult<i64> {
+        let statement = self.statement(account, detail, dek, time_zone)?;
         statement
             .due
             .iter()
             .try_fold(statement.unbilled, |total, due| add(total, due.ordinary))
+    }
+    fn due_installment_items(
+        &self,
+        account: &account::Model,
+        detail: Option<&account_detail::Model>,
+        dek: &crypto::Dek,
+        today: chrono::NaiveDate,
+    ) -> HandlerResult<Vec<(installment_plan::Model, Vec<installment_item::Model>)>> {
+        let refunds = RefundContext::new(dek, &self.bills).map_err(|error| bad_request(&error))?;
+        let mut groups = Vec::new();
+        for plan in self
+            .plans
+            .values()
+            .filter(|plan| plan.account_id == account.id && plan.deleted_at.is_none())
+        {
+            let refund = refunds
+                .state(dek, plan)
+                .map_err(|error| bad_request(&error))?;
+            if refund.full_refund || refund.needs_review {
+                continue;
+            }
+            let mut items = Vec::new();
+            for item in self
+                .items
+                .iter()
+                .filter(|item| item.plan_id == plan.id && item.paid_at.is_none())
+            {
+                let close = installment_billing_close(item.due_date, detail)
+                    .map_err(|error| bad_request(&error))?;
+                if close <= today {
+                    items.push(item.clone());
+                }
+            }
+            if !items.is_empty() {
+                groups.push((plan.clone(), items));
+            }
+        }
+        groups.sort_unstable_by_key(|(plan, _)| plan.id);
+        Ok(groups)
     }
     fn options(
         &self,
@@ -344,13 +393,51 @@ pub async fn create(
                 .one(&tx)
                 .await
                 .map_err(err500)?;
-            let ordinary = data.ordinary(&to, detail.as_ref(), &dek, time_zone)?;
+            let statement = data.statement(&to, detail.as_ref(), &dek, time_zone)?;
+            let ordinary = statement
+                .due
+                .iter()
+                .try_fold(statement.unbilled, |total, due| add(total, due.ordinary))?;
+            let due_total = statement
+                .due
+                .iter()
+                .try_fold(0, |total, due| add(total, due.total))?;
             let amount = amount(&form.amount)?;
             let allow_overpayment = to.kind == "credit_card" && form.mode == "custom";
-            if !allow_overpayment && amount > ordinary {
-                return Err(bad_request("还款不能超过普通欠款；分期请单独选择还款"));
+            if !allow_overpayment && amount > due_total.max(ordinary) {
+                return Err(bad_request("还款不能超过本期账单和未出账单合计"));
             }
-            let plan = if form.mode == "minimum" {
+            let due_groups = if form.mode == "custom" {
+                data.due_installment_items(&to, detail.as_ref(), &dek, time_zone.today())?
+            } else {
+                Vec::new()
+            };
+            let installment_due_total = due_groups.iter().try_fold(0, |total, (_, items)| {
+                items.iter().try_fold(total, |sum, item| {
+                    add(sum, crypto::decrypt_cents(&dek, &item.total))
+                })
+            })?;
+            let paying_due_installments = !due_groups.is_empty() && amount >= due_total;
+            let installment_principal_total = if paying_due_installments {
+                due_groups.iter().try_fold(0, |total, (_, items)| {
+                    items.iter().try_fold(total, |sum, item| {
+                        add(sum, crypto::decrypt_cents(&dek, &item.principal))
+                    })
+                })?
+            } else {
+                0
+            };
+            let ordinary_transfer = if paying_due_installments {
+                amount
+                    .checked_sub(installment_due_total)
+                    .ok_or_else(|| bad_request("还款金额不足本期分期"))?
+            } else {
+                amount
+            };
+            let credit_delta = ordinary_transfer
+                .checked_add(installment_principal_total)
+                .ok_or_else(|| bad_request("还款金额超出范围"))?;
+            let new_plan = if form.mode == "minimum" {
                 if happened_at > chrono::Utc::now().naive_utc() {
                     return Err(bad_request("最低还款转分期不能使用未来时间"));
                 }
@@ -375,10 +462,10 @@ pub async fn create(
                     .checked_neg()
                     .filter(|value| *value > 0)
                     .ok_or_else(|| bad_request("该信用账户当前没有实际欠款"))?;
-                if amount > actual_debt {
+                if credit_delta > actual_debt {
                     return Err(bad_request("还款不能超过实际欠款"));
                 }
-                if plan.is_some() && ordinary > actual_debt {
+                if new_plan.is_some() && ordinary > actual_debt {
                     return Err(bad_request(
                         "普通欠款估算高于实际欠款，不能创建分期；请先核对未来日期流水、退款及余额调整",
                     ));
@@ -391,34 +478,53 @@ pub async fn create(
                 return Err(bad_request("还款来源余额不足"));
             }
             super::accounts::ensure_allowed_balance(&tx, &dek, from.id, projected_from).await?;
-            super::accounts::ensure_allowed_balance(&tx, &dek, to.id, add(to_balance, amount)?)
-                .await?;
-            let payment = transfer::ActiveModel {
-                from_account_id: Set(from.id),
-                to_account_id: Set(to.id),
-                amount: Set(crypto::encrypt_cents(&dek, amount)),
-                to_amount: Set(crypto::encrypt_cents(&dek, amount)),
-                fee_rate_bps: Set(crypto::encrypt_cents(&dek, 0)),
-                fee_amount: Set(crypto::encrypt_cents(&dek, 0)),
-                fee_bill_id: Set(None),
-                note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
-                happened_at: Set(happened_at),
-                created_at: Set(chrono::Utc::now()),
-                ..Default::default()
+            super::accounts::ensure_allowed_balance(
+                &tx,
+                &dek,
+                to.id,
+                add(to_balance, credit_delta)?,
+            )
+            .await?;
+            if paying_due_installments {
+                for (plan, items) in &due_groups {
+                    super::installments::pay_items(&tx, &dek, plan, items, from.id, happened_at)
+                        .await?;
+                }
             }
-            .insert(&tx)
-            .await
-            .map_err(err500)?;
-            if let Some(plan) = plan {
+            let payment_id = if ordinary_transfer > 0 {
+                Some(
+                    transfer::ActiveModel {
+                        from_account_id: Set(from.id),
+                        to_account_id: Set(to.id),
+                        amount: Set(crypto::encrypt_cents(&dek, ordinary_transfer)),
+                        to_amount: Set(crypto::encrypt_cents(&dek, ordinary_transfer)),
+                        fee_rate_bps: Set(crypto::encrypt_cents(&dek, 0)),
+                        fee_amount: Set(crypto::encrypt_cents(&dek, 0)),
+                        fee_bill_id: Set(None),
+                        note: Set(crypto::encrypt(&dek, form.note.trim().as_bytes())),
+                        happened_at: Set(happened_at),
+                        created_at: Set(chrono::Utc::now()),
+                        ..Default::default()
+                    }
+                    .insert(&tx)
+                    .await
+                    .map_err(err500)?
+                    .id,
+                )
+            } else {
+                None
+            };
+            if let Some(plan) = new_plan {
                 let principal = ordinary
                     .checked_sub(amount)
                     .ok_or_else(|| bad_request("分期本金超出范围"))?;
+                let payment_id = payment_id.ok_or_else(|| bad_request("最低还款转账流水不存在"))?;
                 super::installments::create_statement_plan(
                     &tx,
                     &dek,
                     to.id,
                     principal,
-                    payment.id,
+                    payment_id,
                     happened_at,
                     plan,
                 )
