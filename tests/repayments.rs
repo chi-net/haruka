@@ -761,6 +761,7 @@ async fn overpayment_pays_current_and_pending_installments_but_not_future() {
     assert!(dashboard.contains("未出账总额"));
     assert!(dashboard.contains("待出账分期"));
     assert!(dashboard.contains("CNY 400.00"));
+    assert!(dashboard.contains("普通消费 CNY 0.00 · 待出账分期 CNY 0.00"));
 }
 
 #[tokio::test]
@@ -839,4 +840,18 @@ async fn stock_reconcile_prompts_previews_and_only_changes_after_confirmation() 
     assert!(preview.contains("没有发现需要迁移的历史分期"));
     let dashboard = app.get("/dashboard").await.text().await.unwrap();
     assert!(!dashboard.contains("检测到历史分期数据可能需要核对"));
+}
+
+#[tokio::test]
+async fn far_future_installment_is_not_in_the_unbilled_total() {
+    let app = TestApp::start().await;
+    let today = chrono::Utc::now().date_naive();
+    let card = app.account_with_billing("credit_card", "CNY", 5).await;
+    let first_due = today.checked_add_months(chrono::Months::new(3)).unwrap();
+    app.installment_bill(card, "1200", first_due).await;
+
+    let dashboard = app.get("/dashboard").await.text().await.unwrap();
+    assert!(dashboard.contains("未出账总额"));
+    assert!(dashboard.contains("普通消费 CNY 0.00 · 待出账分期 CNY 0.00"));
+    assert!(dashboard.contains("CNY 1200.00"));
 }

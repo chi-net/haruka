@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use chrono::{NaiveDate, NaiveDateTime};
 
 use crate::{
-    credit_dates::{installment_billing_close, statement_dates},
+    credit_dates::{installment_billing_close, next_billing_close, statement_dates},
     crypto,
     entity::{
         account, account_detail, balance_adjustment, bill, debt_record, installment_item,
@@ -377,6 +377,7 @@ pub(crate) fn calculate(
         }
         active_plans.insert(plan.id);
     }
+    let next_close = next_billing_close(today, detail)?;
     let mut unbilled_plans = HashSet::new();
     for item in ledger.items.iter().filter(|item| item.paid_at.is_none()) {
         let Some(plan) = ledger.plans.get(&item.plan_id) else {
@@ -394,7 +395,7 @@ pub(crate) fn calculate(
             continue;
         }
         let close = installment_billing_close(item.due_date, detail)?;
-        if close > today && unbilled_plans.insert(plan.id) {
+        if close > today && close == next_close && unbilled_plans.insert(plan.id) {
             statement.unbilled_installment = add(statement.unbilled_installment, total)?;
         }
         match statement.next_installment.as_mut() {
@@ -736,6 +737,22 @@ mod tests {
             vec![due("2026-10-05", 0, 30425), due("2026-11-05", 0, 20150)]
         );
         assert_eq!(overdue.installment_principal, 70000);
+    }
+
+    #[test]
+    fn future_installment_waits_for_its_billing_cycle() {
+        let mut f = Fixture::new(20, 5);
+        f.bill(1, "2026-09-01 00:00:00", "expense", 30000);
+        f.plan(1, 1, "2027-02-05");
+        f.item(1, 1, "2027-02-05", 30000, 0, 0);
+        let statement = f.calculate("2026-11-25").unwrap();
+        assert!(statement.due.is_empty());
+        assert_eq!(statement.unbilled_installment, 0);
+        assert_eq!(statement.installment_principal, 30000);
+        assert_eq!(
+            statement.next_installment,
+            Some(due("2027-02-05", 0, 30000))
+        );
     }
 
     #[test]

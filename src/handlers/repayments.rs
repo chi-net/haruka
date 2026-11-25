@@ -16,7 +16,7 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    credit_dates::installment_billing_close,
+    credit_dates::{installment_billing_close, next_billing_close},
     credit_statements::{self, Ledger},
     crypto,
     entity::{
@@ -187,6 +187,7 @@ impl Snapshot {
         today: chrono::NaiveDate,
     ) -> HandlerResult<Vec<(installment_plan::Model, Vec<installment_item::Model>)>> {
         let refunds = RefundContext::new(dek, &self.bills).map_err(|error| bad_request(&error))?;
+        let next_close = next_billing_close(today, detail).map_err(|error| bad_request(&error))?;
         let mut groups = Vec::new();
         for plan in self
             .plans
@@ -207,7 +208,7 @@ impl Snapshot {
             {
                 let close = installment_billing_close(item.due_date, detail)
                     .map_err(|error| bad_request(&error))?;
-                if close > today {
+                if close > today && close == next_close {
                     next = Some(item.clone());
                     break;
                 }

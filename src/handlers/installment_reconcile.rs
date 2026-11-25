@@ -13,7 +13,7 @@ use sea_orm::{
 use serde::Deserialize;
 
 use crate::{
-    credit_dates::installment_billing_close,
+    credit_dates::{installment_billing_close, next_billing_close},
     credit_statements::{self, Ledger},
     crypto,
     entity::{
@@ -137,6 +137,7 @@ async fn candidates(
             .checked_add(statement.unbilled_installment)
             .ok_or_else(|| bad_request("金额超出范围"))?;
         let debt = balance.checked_neg().unwrap_or(0).max(0);
+        let next_close = next_billing_close(today, detail).map_err(|error| bad_request(&error))?;
         let mut proposed = Vec::new();
         let mut due_installment_total = 0i64;
         for plan in plans
@@ -149,21 +150,13 @@ async fn candidates(
             if refund.full_refund || refund.needs_review {
                 continue;
             }
-            let mut pending_taken = false;
             for item in items
                 .iter()
                 .filter(|item| item.plan_id == plan.id && item.paid_at.is_none())
             {
                 let close = installment_billing_close(item.due_date, detail)
                     .map_err(|error| bad_request(&error))?;
-                let include = if close <= today {
-                    true
-                } else if !pending_taken {
-                    pending_taken = true;
-                    true
-                } else {
-                    false
-                };
+                let include = close <= today || close == next_close;
                 if include {
                     if close <= today {
                         due_installment_total = due_installment_total

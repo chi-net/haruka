@@ -149,6 +149,18 @@ pub(crate) fn statement_dates(
     Ok((close, due))
 }
 
+/// 严格晚于给定日期的下一次出账日；用于判断“下一期准备出账”的分期。
+pub(crate) fn next_billing_close(
+    on: NaiveDate,
+    detail: Option<&account_detail::Model>,
+) -> Result<NaiveDate, String> {
+    let (mut close, _) = statement_dates(on, detail)?;
+    if close <= on {
+        close = billing_close(shift_month(close, true)?, detail)?;
+    }
+    Ok(close)
+}
+
 /// 分期还款日之前（含当天）的最近一次出账日。
 pub(crate) fn installment_billing_close(
     due: NaiveDate,
