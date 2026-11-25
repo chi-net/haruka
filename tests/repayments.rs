@@ -712,3 +712,53 @@ async fn custom_repayment_pays_only_the_current_billing_cycle_installment() {
         2
     );
 }
+
+#[tokio::test]
+async fn overpayment_pays_current_and_pending_installments_but_not_future() {
+    use chrono::Datelike;
+
+    let app = TestApp::start().await;
+    let source = app.account("other", "CNY").await;
+    let today = chrono::Utc::now().date_naive();
+    let card = app
+        .account_with_billing("credit_card", "CNY", today.day().min(28) as i32)
+        .await;
+    app.force_balance(source, "5000").await;
+    app.installment_bill(card, "1200", today + chrono::Duration::days(3))
+        .await;
+
+    let dashboard = app.get("/dashboard").await.text().await.unwrap();
+    assert!(dashboard.contains("未出账总额"));
+    assert!(dashboard.contains("待出账分期"));
+    assert!(dashboard.contains("CNY 400.00"));
+
+    assert_eq!(
+        app.post(
+            "/repayments",
+            &TestApp::fields(source, card, "custom", "800")
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(app.balance(source).await, "CNY 4200.00");
+    assert_eq!(app.balance(card).await, "CNY -400.00");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE paid_at IS NOT NULL")
+            .await,
+        2
+    );
+    let after = app.options(card).await;
+    assert_eq!(after["plans"][0]["remaining_cents"], "40000");
+    assert_eq!(after["plans"][0]["next_cents"], "40000");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE paid_at IS NULL")
+            .await,
+        1
+    );
+
+    let dashboard = app.get("/dashboard").await.text().await.unwrap();
+    assert!(dashboard.contains("未出账总额"));
+    assert!(dashboard.contains("待出账分期"));
+    assert!(dashboard.contains("CNY 400.00"));
+}

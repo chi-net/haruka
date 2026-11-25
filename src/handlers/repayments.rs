@@ -179,6 +179,46 @@ impl Snapshot {
         groups.sort_unstable_by_key(|(plan, _)| plan.id);
         Ok(groups)
     }
+    fn pending_installment_items(
+        &self,
+        account: &account::Model,
+        detail: Option<&account_detail::Model>,
+        dek: &crypto::Dek,
+        today: chrono::NaiveDate,
+    ) -> HandlerResult<Vec<(installment_plan::Model, Vec<installment_item::Model>)>> {
+        let refunds = RefundContext::new(dek, &self.bills).map_err(|error| bad_request(&error))?;
+        let mut groups = Vec::new();
+        for plan in self
+            .plans
+            .values()
+            .filter(|plan| plan.account_id == account.id && plan.deleted_at.is_none())
+        {
+            let refund = refunds
+                .state(dek, plan)
+                .map_err(|error| bad_request(&error))?;
+            if refund.full_refund || refund.needs_review {
+                continue;
+            }
+            let mut next = None;
+            for item in self
+                .items
+                .iter()
+                .filter(|item| item.plan_id == plan.id && item.paid_at.is_none())
+            {
+                let close = installment_billing_close(item.due_date, detail)
+                    .map_err(|error| bad_request(&error))?;
+                if close > today {
+                    next = Some(item.clone());
+                    break;
+                }
+            }
+            if let Some(item) = next {
+                groups.push((plan.clone(), vec![item]));
+            }
+        }
+        groups.sort_unstable_by_key(|(plan, _)| plan.id);
+        Ok(groups)
+    }
     fn options(
         &self,
         account: &account::Model,
@@ -404,32 +444,75 @@ pub async fn create(
                 .try_fold(0, |total, due| add(total, due.total))?;
             let amount = amount(&form.amount)?;
             let allow_overpayment = to.kind == "credit_card" && form.mode == "custom";
-            if !allow_overpayment && amount > due_total.max(ordinary) {
-                return Err(bad_request("还款不能超过本期账单和未出账单合计"));
-            }
             let due_groups = if form.mode == "custom" {
                 data.due_installment_items(&to, detail.as_ref(), &dek, time_zone.today())?
             } else {
                 Vec::new()
             };
-            let installment_due_total = due_groups.iter().try_fold(0, |total, (_, items)| {
-                items.iter().try_fold(total, |sum, item| {
-                    add(sum, crypto::decrypt_cents(&dek, &item.total))
-                })
-            })?;
-            let paying_due_installments = !due_groups.is_empty() && amount >= due_total;
-            let installment_principal_total = if paying_due_installments {
-                due_groups.iter().try_fold(0, |total, (_, items)| {
-                    items.iter().try_fold(total, |sum, item| {
-                        add(sum, crypto::decrypt_cents(&dek, &item.principal))
+            let pending_groups = if form.mode == "custom" {
+                data.pending_installment_items(&to, detail.as_ref(), &dek, time_zone.today())?
+            } else {
+                Vec::new()
+            };
+            let sum_total =
+                |groups: &[(installment_plan::Model, Vec<installment_item::Model>)]| {
+                    groups.iter().try_fold(0, |total, (_, items)| {
+                        items.iter().try_fold(total, |sum, item| {
+                            add(sum, crypto::decrypt_cents(&dek, &item.total))
+                        })
                     })
-                })?
+                };
+            let sum_principal =
+                |groups: &[(installment_plan::Model, Vec<installment_item::Model>)]| {
+                    groups.iter().try_fold(0, |total, (_, items)| {
+                        items.iter().try_fold(total, |sum, item| {
+                            add(sum, crypto::decrypt_cents(&dek, &item.principal))
+                        })
+                    })
+                };
+            let installment_due_total = sum_total(&due_groups)?;
+            let pending_total = sum_total(&pending_groups)?;
+            if !allow_overpayment
+                && amount
+                    > due_total.max(ordinary).max(
+                        due_total
+                            .checked_add(pending_total)
+                            .ok_or_else(|| bad_request("还款金额超出范围"))?,
+                    )
+            {
+                return Err(bad_request("还款不能超过本期账单和未出账单合计"));
+            }
+            let paying_due_installments = !due_groups.is_empty() && amount >= due_total;
+            let paying_pending_installments = !pending_groups.is_empty()
+                && amount
+                    >= due_total
+                        .checked_add(pending_total)
+                        .ok_or_else(|| bad_request("还款金额超出范围"))?;
+            let installment_total_paid = (if paying_due_installments {
+                installment_due_total
             } else {
                 0
-            };
-            let ordinary_transfer = if paying_due_installments {
+            })
+            .checked_add(if paying_pending_installments {
+                pending_total
+            } else {
+                0
+            })
+            .ok_or_else(|| bad_request("还款金额超出范围"))?;
+            let installment_principal_total = (if paying_due_installments {
+                sum_principal(&due_groups)?
+            } else {
+                0
+            })
+            .checked_add(if paying_pending_installments {
+                sum_principal(&pending_groups)?
+            } else {
+                0
+            })
+            .ok_or_else(|| bad_request("还款金额超出范围"))?;
+            let ordinary_transfer = if installment_total_paid > 0 {
                 amount
-                    .checked_sub(installment_due_total)
+                    .checked_sub(installment_total_paid)
                     .ok_or_else(|| bad_request("还款金额不足本期分期"))?
             } else {
                 amount
@@ -487,6 +570,12 @@ pub async fn create(
             .await?;
             if paying_due_installments {
                 for (plan, items) in &due_groups {
+                    super::installments::pay_items(&tx, &dek, plan, items, from.id, happened_at)
+                        .await?;
+                }
+            }
+            if paying_pending_installments {
+                for (plan, items) in &pending_groups {
                     super::installments::pay_items(&tx, &dek, plan, items, from.id, happened_at)
                         .await?;
                 }

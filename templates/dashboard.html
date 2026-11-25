@@ -67,8 +67,9 @@
       <div class="mt-2 flex items-center gap-2"><div class="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-gray-200"><div class="h-full {% if service.danger %}bg-red-600{% else %}bg-gray-500{% endif %}" style="width: {{ service.usage_percent }}%"></div></div><span class="text-xs text-gray-600">已用 {{ service.usage_percent }}%</span></div>
       <div class="mt-2 border-t border-gray-200 pt-2 text-sm">
         <section data-credit-unbilled class="flex flex-wrap items-baseline justify-between gap-1">
-          <h4 class="text-gray-700">未出账普通消费</h4><p class="font-mono font-semibold break-all">{{ service.unbilled }}</p>
+          <h4 class="text-gray-700">未出账总额</h4><p class="font-mono font-semibold break-all">{{ service.unbilled_total }}</p>
         </section>
+        <p class="mt-1 text-xs text-gray-500">普通消费 {{ service.unbilled }} · 待出账分期 {{ service.unbilled_installment }}</p>
         <section data-credit-installments class="mt-2">
           {% match service.next_installment %}
           {% when Some with (period) %}

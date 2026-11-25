@@ -32,6 +32,7 @@ pub(crate) struct DueAmount {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Statement {
     pub unbilled: i64,
+    pub unbilled_installment: i64,
     pub installment_principal: i64,
     pub next_installment: Option<DueAmount>,
     pub due: Vec<DueAmount>,
@@ -376,6 +377,7 @@ pub(crate) fn calculate(
         }
         active_plans.insert(plan.id);
     }
+    let mut unbilled_plans = HashSet::new();
     for item in ledger.items.iter().filter(|item| item.paid_at.is_none()) {
         let Some(plan) = ledger.plans.get(&item.plan_id) else {
             continue;
@@ -390,6 +392,10 @@ pub(crate) fn calculate(
         let total = crypto::decrypt_cents(dek, &item.total);
         if total == 0 {
             continue;
+        }
+        let close = installment_billing_close(item.due_date, detail)?;
+        if close > today && unbilled_plans.insert(plan.id) {
+            statement.unbilled_installment = add(statement.unbilled_installment, total)?;
         }
         match statement.next_installment.as_mut() {
             Some(next) if next.due_date == item.due_date => {
@@ -406,7 +412,7 @@ pub(crate) fn calculate(
                 });
             }
         }
-        if installment_billing_close(item.due_date, detail)? <= today {
+        if close <= today {
             merge_due(&mut due, item.due_date, 0, total)?;
         }
     }
@@ -719,8 +725,10 @@ mod tests {
         f.item(4, 2, "2026-10-05", 10000, 200, 75);
         let before = f.calculate("2026-09-19").unwrap();
         assert!(before.due.is_empty());
+        assert_eq!(before.unbilled_installment, 30425);
         assert_eq!(before.next_installment, Some(due("2026-10-05", 0, 30425)));
         let closed = f.calculate("2026-09-20").unwrap();
+        assert_eq!(closed.unbilled_installment, 20150);
         assert_eq!(closed.due, vec![due("2026-10-05", 0, 30425)]);
         let overdue = f.calculate("2026-10-20").unwrap();
         assert_eq!(

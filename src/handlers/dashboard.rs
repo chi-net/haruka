@@ -260,6 +260,8 @@ struct CreditAccountSummary {
     available: String,
     limit: String,
     unbilled: String,
+    unbilled_installment: String,
+    unbilled_total: String,
     due: Vec<CreditDueSummary>,
     due_total: String,
     installment_principal: String,
@@ -582,6 +584,17 @@ pub async fn show(
                 available: currency::format(amounts.available, &account.currency),
                 limit: currency::format(limit, &account.currency),
                 unbilled: currency::format(statement.unbilled, &account.currency),
+                unbilled_installment: currency::format(
+                    statement.unbilled_installment,
+                    &account.currency,
+                ),
+                unbilled_total: currency::format(
+                    statement
+                        .unbilled
+                        .checked_add(statement.unbilled_installment)
+                        .ok_or_else(|| err500("未出账金额超出范围"))?,
+                    &account.currency,
+                ),
                 due_total: currency::format(due_total, &account.currency),
                 due: statement
                     .due
