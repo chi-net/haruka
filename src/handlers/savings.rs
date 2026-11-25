@@ -16,7 +16,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto, currency,
-    entity::{account, account_detail, savings_project, transfer},
+    entity::{account, account_detail, bill, category, savings_project, transfer},
     AppState, SessionDek,
 };
 
@@ -41,11 +41,22 @@ struct AccountOption {
 struct ProjectRow {
     id: i64,
     name: String,
+    kind: String,
+    kind_label: String,
     account_name: String,
     currency: String,
     balance: String,
+    target: String,
+    progress: String,
     auto_label: String,
     next_run_value: String,
+    status_label: String,
+    realized: bool,
+    redeemed_item: bool,
+    realized_amount: String,
+    realized_at: String,
+    realized_note: String,
+    can_redeem: bool,
     note: String,
 }
 
@@ -63,6 +74,8 @@ struct SavingsFormTemplate {
     heading: String,
     action: String,
     name: String,
+    kind: String,
+    target_amount: String,
     account_name: String,
     account_id: i64,
     note: String,
@@ -79,6 +92,10 @@ struct SavingsFormTemplate {
 #[derive(Deserialize)]
 pub struct SavingsFormData {
     name: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    target_amount: String,
     account_id: i64,
     #[serde(default)]
     note: String,
@@ -110,6 +127,16 @@ pub struct WithdrawForm {
     confirm_withdrawal: bool,
 }
 
+#[derive(Deserialize)]
+pub struct RedeemForm {
+    #[serde(default)]
+    amount: String,
+    #[serde(default)]
+    note: String,
+    #[serde(default)]
+    confirm_redeem: bool,
+}
+
 #[derive(Serialize)]
 pub struct RunDueResponse {
     ok: bool,
@@ -137,6 +164,19 @@ pub(crate) async fn is_savings_account_on<C: ConnectionTrait>(
         .is_some())
 }
 
+/// 实体物品兑现后附属账户自动解锁；资金目标达成后仍保持只进不出。
+pub(crate) async fn is_locked_savings_account_on<C: ConnectionTrait>(
+    db: &C,
+    account_id: i64,
+) -> HandlerResult<bool> {
+    Ok(savings_project::Entity::find()
+        .filter(savings_project::Column::AccountId.eq(account_id))
+        .one(db)
+        .await
+        .map_err(err500)?
+        .is_some_and(|project| !(project.status == "realized" && project.kind == "item")))
+}
+
 fn parse_amount(value: &str, label: &str) -> HandlerResult<i64> {
     let decimal = Decimal::from_str(value.trim())
         .map_err(|_| bad_request(&format!("{label}格式不正确")))?
@@ -147,6 +187,34 @@ fn parse_amount(value: &str, label: &str) -> HandlerResult<i64> {
     (decimal * Decimal::from(100))
         .to_i64()
         .ok_or_else(|| bad_request(&format!("{label}超出范围")))
+}
+
+fn parse_redeem_amount(value: &str) -> HandlerResult<i64> {
+    let decimal = Decimal::from_str(value.trim())
+        .map_err(|_| bad_request("实际消费金额格式不正确"))?
+        .round_dp(2);
+    if decimal < Decimal::ZERO {
+        return Err(bad_request("实际消费金额不能为负数"));
+    }
+    (decimal * Decimal::from(100))
+        .to_i64()
+        .ok_or_else(|| bad_request("实际消费金额超出范围"))
+}
+
+fn parse_kind_target(form: &SavingsFormData) -> HandlerResult<(String, i64)> {
+    let kind = if form.kind.trim().is_empty() {
+        "item"
+    } else {
+        form.kind.trim()
+    };
+    match kind {
+        "item" => Ok(("item".into(), 0)),
+        "fund" => {
+            let target = parse_amount(&form.target_amount, "资金目标金额")?;
+            Ok(("fund".into(), target))
+        }
+        _ => Err(bad_request("攒钱项目类型无效")),
+    }
 }
 
 fn valid_cycle(cycle: &str) -> bool {
@@ -213,6 +281,30 @@ async fn load_project(state: &AppState, id: i64) -> HandlerResult<savings_projec
         .await
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "攒钱项目不存在".into()))
+}
+
+async fn reconcile_fund_goal(
+    state: &AppState,
+    dek: &crypto::Dek,
+    project: &mut savings_project::Model,
+    balance: i64,
+) -> HandlerResult<bool> {
+    if project.status != "active" || project.kind != "fund" {
+        return Ok(false);
+    }
+    let target = crypto::decrypt_cents(dek, &project.target_amount);
+    if target <= 0 || balance < target {
+        return Ok(false);
+    }
+    let mut active = project.clone().into_active_model();
+    active.status = Set("realized".into());
+    active.realized_amount = Set(crypto::encrypt_cents(dek, 0));
+    active.realized_at = Set(Some(chrono::Utc::now()));
+    active.realized_note = Set(crypto::encrypt(dek, "资金目标达成".as_bytes()));
+    active.auto_enabled = Set(false);
+    active.next_run_at = Set(None);
+    *project = active.update(&state.db).await.map_err(err500)?;
+    Ok(true)
 }
 
 async fn validate_account(
@@ -322,7 +414,7 @@ pub async fn list(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
 ) -> HandlerResult<Html<String>> {
-    let projects = savings_project::Entity::find()
+    let mut projects = savings_project::Entity::find()
         .order_by_asc(savings_project::Column::Id)
         .all(&state.db)
         .await
@@ -342,23 +434,46 @@ pub async fn list(
         .collect();
     let names = super::bills::account_display_names(&dek, &accounts, &details);
     let mut rows = Vec::new();
-    for project in &projects {
+    for project in &mut projects {
         let account = accounts
             .iter()
             .find(|account| account.id == project.account_id)
             .ok_or_else(|| err500("攒钱附属账户不存在"))?;
         let balance = super::accounts::current_balance(&state, &dek, account.id).await?;
+        reconcile_fund_goal(&state, &dek, project, balance).await?;
         let amount = crypto::decrypt_cents(&dek, &project.amount);
+        let target = crypto::decrypt_cents(&dek, &project.target_amount);
         let source_name = project
             .source_account_id
             .and_then(|id| names.get(&id).cloned())
             .unwrap_or_default();
+        let realized = project.status == "realized";
+        let progress = if project.kind == "fund" && target > 0 {
+            format!(
+                "{}%",
+                (i128::from(balance.max(0)) * 100 / i128::from(target)).min(100)
+            )
+        } else {
+            String::new()
+        };
         rows.push(ProjectRow {
             id: project.id,
             name: crypto::decrypt_string(&dek, &project.name),
+            kind: project.kind.clone(),
+            kind_label: if project.kind == "fund" {
+                "资金目标".into()
+            } else {
+                "实体物品".into()
+            },
             account_name: names.get(&account.id).cloned().unwrap_or_default(),
             currency: account.currency.clone(),
             balance: currency::format(balance, &account.currency),
+            target: if project.kind == "fund" {
+                currency::format(target, &account.currency)
+            } else {
+                String::new()
+            },
+            progress,
             auto_label: if project.auto_enabled {
                 format!(
                     "{} · {} → {}",
@@ -373,6 +488,31 @@ pub async fn list(
                 .next_run_at
                 .map(|at| at.format(TIME_FMT).to_string())
                 .unwrap_or_default(),
+            status_label: if realized {
+                if project.kind == "fund" {
+                    "目标达成".into()
+                } else {
+                    "已兑现".into()
+                }
+            } else {
+                "进行中".into()
+            },
+            realized,
+            redeemed_item: realized && project.kind == "item",
+            realized_amount: if realized && project.kind == "item" {
+                currency::format(
+                    crypto::decrypt_cents(&dek, &project.realized_amount),
+                    &account.currency,
+                )
+            } else {
+                String::new()
+            },
+            realized_at: project
+                .realized_at
+                .map(|at| at.format(TIME_FMT).to_string())
+                .unwrap_or_default(),
+            realized_note: crypto::decrypt_string(&dek, &project.realized_note),
+            can_redeem: project.kind == "item" && !realized,
             note: crypto::decrypt_string(&dek, &project.note),
         });
     }
@@ -403,6 +543,8 @@ pub async fn new_form(
         heading: "新建攒钱项目".into(),
         action: "/savings".into(),
         name: String::new(),
+        kind: "item".into(),
+        target_amount: String::new(),
         account_name: String::new(),
         account_id: 0,
         note: String::new(),
@@ -436,13 +578,20 @@ pub async fn create(
     if is_savings_account_on(&state.db, savings_account.id).await? {
         return Err(bad_request("该账户已经是攒钱账户"));
     }
+    let (kind, target_cents) = parse_kind_target(&form)?;
     let (source, amount_cents, cycle, next_run_at, auto_enabled) =
         parse_auto(&state, &form, &savings_account).await?;
     if form.note.chars().count() > 1000 {
         return Err(bad_request("说明不能超过 1000 个字符"));
     }
-    savings_project::ActiveModel {
+    let mut project = savings_project::ActiveModel {
         name: Set(crypto::encrypt(&dek, name.as_bytes())),
+        kind: Set(kind),
+        target_amount: Set(if target_cents > 0 {
+            crypto::encrypt_cents(&dek, target_cents)
+        } else {
+            String::new()
+        }),
         account_id: Set(savings_account.id),
         source_account_id: Set(source),
         amount: Set(if auto_enabled {
@@ -460,6 +609,8 @@ pub async fn create(
     .insert(&state.db)
     .await
     .map_err(err500)?;
+    let balance = super::accounts::current_balance(&state, &dek, savings_account.id).await?;
+    reconcile_fund_goal(&state, &dek, &mut project, balance).await?;
     Ok(Redirect::to("/savings"))
 }
 
@@ -469,6 +620,9 @@ pub async fn edit_form(
     Path(id): Path<i64>,
 ) -> HandlerResult<Html<String>> {
     let project = load_project(&state, id).await?;
+    if project.status == "realized" {
+        return Err(bad_request("已兑现或已达成目标的项目不可编辑"));
+    }
     let account = account::Entity::find_by_id(project.account_id)
         .one(&state.db)
         .await
@@ -509,6 +663,12 @@ pub async fn edit_form(
         heading: "编辑攒钱项目".into(),
         action: format!("/savings/{id}/edit"),
         name: crypto::decrypt_string(&dek, &project.name),
+        kind: project.kind.clone(),
+        target_amount: if project.kind == "fund" {
+            super::fmt_cents(crypto::decrypt_cents(&dek, &project.target_amount))
+        } else {
+            String::new()
+        },
         account_name: names.remove(&account.id).unwrap_or_default(),
         account_id: account.id,
         note: crypto::decrypt_string(&dek, &project.note),
@@ -537,6 +697,9 @@ pub async fn update(
 ) -> HandlerResult<Redirect> {
     let _guard = state.balance_writes.lock().await;
     let project = load_project(&state, id).await?;
+    if project.status == "realized" {
+        return Err(bad_request("已兑现或已达成目标的项目不可编辑"));
+    }
     let savings_account = account::Entity::find_by_id(project.account_id)
         .one(&state.db)
         .await
@@ -546,6 +709,7 @@ pub async fn update(
     if name.is_empty() || name.chars().count() > 100 {
         return Err(bad_request("项目名必须为 1 到 100 个字符"));
     }
+    let (kind, target_cents) = parse_kind_target(&form)?;
     let (source, amount_cents, cycle, next_run_at, auto_enabled) =
         parse_auto(&state, &form, &savings_account).await?;
     if form.note.chars().count() > 1000 {
@@ -553,6 +717,12 @@ pub async fn update(
     }
     let mut active = project.into_active_model();
     active.name = Set(crypto::encrypt(&dek, name.as_bytes()));
+    active.kind = Set(kind);
+    active.target_amount = Set(if target_cents > 0 {
+        crypto::encrypt_cents(&dek, target_cents)
+    } else {
+        String::new()
+    });
     active.source_account_id = Set(source);
     active.amount = Set(if auto_enabled {
         crypto::encrypt_cents(&dek, amount_cents)
@@ -563,7 +733,9 @@ pub async fn update(
     active.next_run_at = Set(next_run_at);
     active.auto_enabled = Set(auto_enabled);
     active.note = Set(crypto::encrypt(&dek, form.note.trim().as_bytes()));
-    active.update(&state.db).await.map_err(err500)?;
+    let mut project = active.update(&state.db).await.map_err(err500)?;
+    let balance = super::accounts::current_balance(&state, &dek, savings_account.id).await?;
+    reconcile_fund_goal(&state, &dek, &mut project, balance).await?;
     Ok(Redirect::to("/savings"))
 }
 
@@ -575,7 +747,8 @@ pub async fn delete(
     let _guard = state.balance_writes.lock().await;
     let project = load_project(&state, id).await?;
     let balance = super::accounts::current_balance(&state, &dek, project.account_id).await?;
-    if balance != 0 {
+    let redeemed_item = project.status == "realized" && project.kind == "item";
+    if balance != 0 && !redeemed_item {
         return Err(bad_request(
             "攒钱账户仍有余额，请先通过特殊转出清空后再删除项目",
         ));
@@ -595,6 +768,9 @@ pub async fn deposit(
 ) -> HandlerResult<Redirect> {
     let _guard = state.balance_writes.lock().await;
     let project = load_project(&state, id).await?;
+    if project.status == "realized" {
+        return Err(bad_request("项目已兑现或已达成目标，不能再存入"));
+    }
     let savings = account::Entity::find_by_id(project.account_id)
         .one(&state.db)
         .await
@@ -623,6 +799,10 @@ pub async fn deposit(
         None,
     )
     .await?;
+    if let Ok(mut project) = load_project(&state, id).await {
+        let balance = super::accounts::current_balance(&state, &dek, savings.id).await?;
+        reconcile_fund_goal(&state, &dek, &mut project, balance).await?;
+    }
     Ok(Redirect::to("/savings"))
 }
 
@@ -672,6 +852,110 @@ pub async fn withdraw(
     Ok(Redirect::to("/savings"))
 }
 
+pub async fn redeem(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Path(id): Path<i64>,
+    Form(form): Form<RedeemForm>,
+) -> HandlerResult<Redirect> {
+    let _guard = state.balance_writes.lock().await;
+    let project = load_project(&state, id).await?;
+    if project.kind != "item" || project.status != "active" {
+        return Err(bad_request("只有进行中的实体物品项目可以兑现"));
+    }
+    if !form.confirm_redeem {
+        return Err(bad_request("兑现前必须明确确认"));
+    }
+    if form.note.chars().count() > 1000 {
+        return Err(bad_request("兑现说明不能超过 1000 个字符"));
+    }
+    let amount = parse_redeem_amount(&form.amount)?;
+    let savings = account::Entity::find_by_id(project.account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("攒钱附属账户不存在"))?;
+    let balance = super::accounts::current_balance(&state, &dek, savings.id).await?;
+    if amount > balance {
+        return Err(bad_request("实际消费金额超过攒钱账户余额"));
+    }
+    if amount > 0 {
+        super::accounts::ensure_balance_delta_allow_savings(
+            &state,
+            &dek,
+            savings.id,
+            amount
+                .checked_neg()
+                .ok_or_else(|| bad_request("金额超出范围"))?,
+        )
+        .await?;
+    }
+    let name = crypto::decrypt_string(&dek, &project.name);
+    let note = form.note.trim();
+    let now = chrono::Utc::now();
+    let transaction = state.db.begin().await.map_err(err500)?;
+    if amount > 0 {
+        let categories = category::Entity::find()
+            .filter(category::Column::Kind.eq("expense"))
+            .all(&transaction)
+            .await
+            .map_err(err500)?;
+        let category = if let Some(category) = categories
+            .iter()
+            .find(|item| crypto::decrypt_string(&dek, &item.name) == "攒钱兑现")
+        {
+            category.clone()
+        } else {
+            category::ActiveModel {
+                kind: Set("expense".into()),
+                name: Set(crypto::encrypt(&dek, "攒钱兑现".as_bytes())),
+                is_food: Set(false),
+                count_limit: Set(String::new()),
+                count_limit_period: Set("month".into()),
+                created_at: Set(now),
+                ..Default::default()
+            }
+            .insert(&transaction)
+            .await
+            .map_err(err500)?
+        };
+        let bill_note = if note.is_empty() {
+            format!("攒钱兑现 · {name}")
+        } else {
+            format!("攒钱兑现 · {name} · {note}")
+        };
+        bill::ActiveModel {
+            account_id: Set(savings.id),
+            kind: Set("expense".into()),
+            amount: Set(crypto::encrypt_cents(&dek, amount)),
+            category: Set(crypto::encrypt(&dek, "攒钱兑现".as_bytes())),
+            category_id: Set(Some(category.id)),
+            is_food: Set(false),
+            note: Set(crypto::encrypt(&dek, bill_note.as_bytes())),
+            happened_at: Set(now.naive_utc()),
+            created_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&transaction)
+        .await
+        .map_err(err500)?;
+    }
+    let mut active = project.into_active_model();
+    active.status = Set("realized".into());
+    active.realized_amount = Set(if amount > 0 {
+        crypto::encrypt_cents(&dek, amount)
+    } else {
+        String::new()
+    });
+    active.realized_at = Set(Some(now));
+    active.realized_note = Set(crypto::encrypt(&dek, note.as_bytes()));
+    active.auto_enabled = Set(false);
+    active.next_run_at = Set(None);
+    active.update(&transaction).await.map_err(err500)?;
+    transaction.commit().await.map_err(err500)?;
+    Ok(Redirect::to("/savings"))
+}
+
 pub async fn run_due(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
@@ -714,10 +998,27 @@ pub async fn run_due(
             failures.push(format!("{name}：资金来源与攒钱账户不匹配"));
             continue;
         }
-        let amount = crypto::decrypt_cents(&dek, &project.amount);
+        let mut amount = crypto::decrypt_cents(&dek, &project.amount);
         if amount <= 0 {
             failures.push(format!("{name}：自动转入金额无效"));
             continue;
+        }
+        let savings_balance = super::accounts::current_balance(&state, &dek, savings.id).await?;
+        if project.kind == "fund" {
+            let target = crypto::decrypt_cents(&dek, &project.target_amount);
+            if target > 0 {
+                let remaining = target.saturating_sub(savings_balance);
+                if remaining <= 0 {
+                    let mut refreshed = project.clone();
+                    if let Err((_, error)) =
+                        reconcile_fund_goal(&state, &dek, &mut refreshed, savings_balance).await
+                    {
+                        failures.push(format!("{name}：{error}"));
+                    }
+                    continue;
+                }
+                amount = amount.min(remaining);
+            }
         }
         let next = match advance_next(project.next_run_at.unwrap_or(now), &project.cycle, now) {
             Ok(next) => next,
@@ -738,7 +1039,14 @@ pub async fn run_due(
         )
         .await
         {
-            Ok(()) => executed += 1,
+            Ok(()) => {
+                executed += 1;
+                if let Ok(mut refreshed) = load_project(&state, project.id).await {
+                    let balance =
+                        super::accounts::current_balance(&state, &dek, savings.id).await?;
+                    reconcile_fund_goal(&state, &dek, &mut refreshed, balance).await?;
+                }
+            }
             Err((_, error)) => failures.push(format!("{name}：{error}")),
         }
     }
@@ -759,7 +1067,7 @@ pub async fn run_due(
 
 #[cfg(test)]
 mod tests {
-    use super::advance_next;
+    use super::{advance_next, parse_redeem_amount};
     use chrono::NaiveDate;
 
     fn at(year: i32, month: u32, day: u32) -> chrono::NaiveDateTime {
@@ -767,6 +1075,14 @@ mod tests {
             .unwrap()
             .and_hms_opt(9, 0, 0)
             .unwrap()
+    }
+
+    #[test]
+    fn redemption_amount_allows_zero_but_not_negative() {
+        assert_eq!(parse_redeem_amount("0").unwrap(), 0);
+        assert_eq!(parse_redeem_amount("12.34").unwrap(), 1_234);
+        assert!(parse_redeem_amount("-0.01").is_err());
+        assert!(parse_redeem_amount("abc").is_err());
     }
 
     #[test]

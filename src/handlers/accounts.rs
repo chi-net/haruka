@@ -540,7 +540,10 @@ async fn ensure_balance_delta_on_with<C: ConnectionTrait>(
     delta: i64,
     allow_savings: bool,
 ) -> HandlerResult<()> {
-    if delta < 0 && !allow_savings && super::savings::is_savings_account_on(db, account_id).await? {
+    if delta < 0
+        && !allow_savings
+        && super::savings::is_locked_savings_account_on(db, account_id).await?
+    {
         return Err(bad_request(
             "攒钱账户原则上只进不出；如确需转出，请在攒钱页使用特殊情况转出",
         ));
@@ -564,7 +567,7 @@ pub async fn balance_summary(
         .map_err(err500)?
         .ok_or((StatusCode::NOT_FOUND, "账户不存在".into()))?;
     let balance = current_balance(&state, &dek, id).await?;
-    let savings = super::savings::is_savings_account_on(&state.db, id).await?;
+    let savings = super::savings::is_locked_savings_account_on(&state.db, id).await?;
     Ok((
         [(header::CACHE_CONTROL, "no-store")],
         Json(AccountBalanceResponse {
@@ -1568,7 +1571,7 @@ pub async fn force_balance(
     let target = parse_balance(&form.balance)?;
     ensure_allowed_balance(&state.db, &dek, id, target).await?;
     let previous = current_balance(&state, &dek, id).await?;
-    if target < previous && super::savings::is_savings_account_on(&state.db, id).await? {
+    if target < previous && super::savings::is_locked_savings_account_on(&state.db, id).await? {
         return Err(bad_request(
             "攒钱账户不能直接调低余额；如确需转出，请在攒钱页使用特殊情况转出",
         ));

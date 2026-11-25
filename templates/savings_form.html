@@ -13,6 +13,19 @@
     <label class="mb-1 block text-sm text-gray-600">项目名</label>
     <input name="name" value="{{ name }}" required maxlength="100" autofocus placeholder="例如：旅行基金、应急金" class="w-full rounded border px-3 py-2 text-sm">
   </div>
+  <div>
+    <label class="mb-1 block text-sm text-gray-600">项目类型</label>
+    <select id="savings-kind" name="kind" class="w-full rounded border bg-white px-3 py-2 text-sm">
+      <option value="item" {% if kind == "item" %}selected{% endif %}>实体物品</option>
+      <option value="fund" {% if kind == "fund" %}selected{% endif %}>资金目标</option>
+    </select>
+    <p class="mt-1 text-xs text-gray-500">实体物品在兑现时填写实际消费；资金目标达到目标金额后自动标记为已达成。</p>
+  </div>
+  <div id="savings-target-field">
+    <label class="mb-1 block text-sm text-gray-600">目标金额</label>
+    <input name="target_amount" type="number" min="0.01" step="0.01" value="{{ target_amount }}" class="w-full rounded border px-3 py-2 text-sm font-mono">
+    <p class="mt-1 text-xs text-gray-500">资金目标必填；达到后自动停止自动转入并标记为已达成。</p>
+  </div>
   {% if edit %}
   <div>
     <label class="mb-1 block text-sm text-gray-600">攒钱账户</label>
@@ -75,6 +88,20 @@
 </form>
 <script>
 (() => {
+  const kind = document.getElementById('savings-kind');
+  const targetField = document.getElementById('savings-target-field');
+  const updateKind = () => {
+    if (!kind || !targetField) return;
+    const fund = kind.value === 'fund';
+    targetField.hidden = !fund;
+    const target = targetField.querySelector('input');
+    if (target) {
+      target.disabled = !fund;
+      target.required = fund;
+    }
+  };
+  if (kind) kind.addEventListener('change', updateKind);
+  updateKind();
   const toggle = document.getElementById('savings-auto-toggle');
   const fields = document.getElementById('savings-auto-fields');
   if (!toggle || !fields) return;

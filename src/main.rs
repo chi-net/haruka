@@ -557,6 +557,7 @@ async fn main() {
         )
         .route("/savings/{id}/deposit", post(handlers::savings::deposit))
         .route("/savings/{id}/withdraw", post(handlers::savings::withdraw))
+        .route("/savings/{id}/redeem", post(handlers::savings::redeem))
         .route("/savings/{id}/delete", post(handlers::savings::delete))
         .route("/savings/run-due", post(handlers::savings::run_due))
         .route("/finance", get(handlers::finance::show))

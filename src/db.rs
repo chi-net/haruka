@@ -488,6 +488,42 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_savings_projects.if_not_exists()))
         .await
         .expect("建攒钱项目表失败");
+    ensure_column(
+        &db,
+        "savings_projects",
+        "kind",
+        "TEXT NOT NULL DEFAULT 'item'",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "savings_projects",
+        "target_amount",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "savings_projects",
+        "status",
+        "TEXT NOT NULL DEFAULT 'active'",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "savings_projects",
+        "realized_amount",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    ensure_column(&db, "savings_projects", "realized_at", "TIMESTAMP").await;
+    ensure_column(
+        &db,
+        "savings_projects",
+        "realized_note",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
 
     let mut create_subscriptions = schema.create_table_from_entity(subscription::Entity);
     db.execute(builder.build(create_subscriptions.if_not_exists()))
