@@ -47,6 +47,15 @@
     <label class="mb-1 block text-sm text-gray-600">说明</label>
     <textarea name="note" maxlength="1000" rows="3" class="w-full rounded border px-3 py-2 text-sm">{{ note }}</textarea>
   </div>
+  <div>
+    <label class="mb-1 block text-sm text-gray-600">计划结束时间（可选）</label>
+    <div data-utc-field>
+      <input data-utc-picker data-utc-value="{{ end_at }}" type="datetime-local" class="w-full rounded border px-3 py-2 text-sm">
+      <input data-utc-target type="hidden" name="end_at" value="{{ end_at }}">
+    </div>
+    <p class="mt-1 text-xs text-gray-500">仅作为计划截止时间展示，不会自动扣款或改变冻结金额。</p>
+  </div>
+
 
   <section class="rounded-lg border border-blue-200 bg-blue-50 p-4">
     <label class="flex items-start gap-2 text-sm font-medium text-blue-900">

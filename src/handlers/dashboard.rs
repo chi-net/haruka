@@ -13,7 +13,7 @@ use crate::{
     crypto, currency,
     entity::{
         account, account_detail, balance_adjustment, bill, debt_record, installment_item,
-        installment_plan, meta, subscription, transfer,
+        installment_plan, meta, savings_project, subscription, transfer,
     },
     AppState, SessionDek,
 };
@@ -316,6 +316,17 @@ struct DashboardTemplate {
     valuation_reminders: Vec<FundValuationReminder>,
     valuation_reminder_count: usize,
     installment_reconcile_needed: bool,
+    savings_projects: Vec<DashboardSavings>,
+}
+
+struct DashboardSavings {
+    name: String,
+    account_name: String,
+    saved: String,
+    target: String,
+    progress: String,
+    end_at: String,
+    realized: bool,
 }
 
 fn account_kind_label(kind: &str) -> &'static str {
@@ -903,6 +914,41 @@ pub async fn show(
             .ok_or_else(|| err500("报表金额超出范围"))?;
     }
     let budget_statuses = super::budgets::current_statuses(&state, &dek, time_zone).await?;
+    let savings = savings_project::Entity::find()
+        .order_by_asc(savings_project::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let savings_projects = savings
+        .into_iter()
+        .filter_map(|project| {
+            let account = accounts
+                .iter()
+                .find(|account| account.id == project.account_id)?;
+            let saved = crypto::decrypt_cents(&dek, &project.saved_amount).max(0);
+            let target = crypto::decrypt_cents(&dek, &project.target_amount);
+            let progress = if target > 0 {
+                format!(
+                    "{}%",
+                    (i128::from(saved) * 100 / i128::from(target)).min(100)
+                )
+            } else {
+                "—".into()
+            };
+            Some(DashboardSavings {
+                name: crypto::decrypt_string(&dek, &project.name),
+                account_name: crypto::decrypt_string(&dek, &account.name),
+                saved: currency::format(saved, &account.currency),
+                target: currency::format(target, &account.currency),
+                progress,
+                end_at: project
+                    .end_at
+                    .map(|at| at.format(TIME_FMT).to_string())
+                    .unwrap_or_default(),
+                realized: project.status == "realized",
+            })
+        })
+        .collect();
     let html = DashboardTemplate {
         account_groups,
         credit_accounts,
@@ -920,6 +966,7 @@ pub async fn show(
         valuation_reminder_count,
         budget_statuses,
         installment_reconcile_needed,
+        savings_projects,
     }
     .render()
     .map_err(err500)?;

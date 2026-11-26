@@ -1101,6 +1101,12 @@ async fn savings_requires_a_target_and_freezes_the_linked_account() {
                 ("amount", String::new()),
                 ("cycle", "month".into()),
                 ("next_run_at", String::new()),
+                (
+                    "end_at",
+                    (chrono::Utc::now() + chrono::Duration::days(30))
+                        .format("%Y-%m-%dT%H:%M")
+                        .to_string(),
+                ),
             ],
         )
         .await;
@@ -1115,6 +1121,29 @@ async fn savings_requires_a_target_and_freezes_the_linked_account() {
     assert!(quick.contains("相机"));
     assert!(page.contains("目标"));
     assert!(page.contains("CNY 80.00"));
+    assert!(page.contains("计划结束"));
+
+    let second = app
+        .post(
+            "/savings",
+            &[
+                ("name", "备用金".into()),
+                ("kind", "fund".into()),
+                ("target_amount", "20".into()),
+                ("account_id", savings.to_string()),
+                ("note", String::new()),
+                ("auto_enabled", "false".into()),
+                ("amount", String::new()),
+                ("cycle", "month".into()),
+                ("next_run_at", String::new()),
+                ("end_at", String::new()),
+            ],
+        )
+        .await;
+    assert_eq!(second.status(), StatusCode::SEE_OTHER);
+    let dashboard = app.get("/dashboard").await.text().await.unwrap();
+    assert!(dashboard.contains("攒钱项目"));
+    assert!(dashboard.contains("相机"));
 
     let deposited = app
         .post(

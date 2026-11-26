@@ -12,8 +12,7 @@ pub struct Model {
     /// 资金目标金额（整数分密文）；实体物品为空
     #[sea_orm(default_value = "")]
     pub target_amount: String,
-    /// 只进不出的附属攒钱账户
-    #[sea_orm(unique)]
+    /// 只进不出的附属攒钱账户；多个项目可以共用同一个账户。
     pub account_id: i64,
     /// 已划入攒钱资金池的金额（整数分密文），与账户可用余额独立。
     #[sea_orm(default_value = "")]
@@ -33,6 +32,8 @@ pub struct Model {
     #[sea_orm(default_value = "")]
     pub realized_amount: String,
     pub realized_at: Option<DateTimeUtc>,
+    /// 可选的计划结束时间（UTC）。
+    pub end_at: Option<DateTime>,
     /// 兑现说明（密文）
     #[sea_orm(default_value = "")]
     pub realized_note: String,

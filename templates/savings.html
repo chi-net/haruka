@@ -41,6 +41,7 @@
         <div class="mt-1 h-2 overflow-hidden rounded-full bg-gray-200"><div class="h-full bg-emerald-500" style="width: {{ project.progress }}"></div></div>
       </div>
       <p class="mt-1 text-xs text-gray-500">{{ project.auto_label }}{% if !project.next_run_value.is_empty() %} · 下一次 <time data-utc-time="{{ project.next_run_value }}">{{ project.next_run_value }}</time>{% endif %}</p>
+      {% if !project.end_at.is_empty() %}<p class="mt-1 text-xs text-gray-500">计划结束：<time data-utc-time="{{ project.end_at }}">{{ project.end_at }}</time></p>{% endif %}
       {% if project.realized %}
       <div class="mt-3 rounded border border-green-200 bg-green-50 p-2 text-xs text-green-900">
         <p>{% if project.kind == "fund" %}资金目标已达成，资金继续冻结。{% else %}已兑现，附属账户资金已全部解除冻结。{% endif %}</p>

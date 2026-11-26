@@ -531,6 +531,8 @@ pub async fn init() -> DatabaseConnection {
         "TEXT NOT NULL DEFAULT ''",
     )
     .await;
+    ensure_column(&db, "savings_projects", "end_at", "TIMESTAMP").await;
+
     ensure_column(
         &db,
         "savings_projects",
@@ -553,6 +555,8 @@ pub async fn init() -> DatabaseConnection {
         "TEXT NOT NULL DEFAULT ''",
     )
     .await;
+
+    rebuild_savings_projects_without_unique(&db).await;
 
     let mut create_subscriptions = schema.create_table_from_entity(subscription::Entity);
     db.execute(builder.build(create_subscriptions.if_not_exists()))
@@ -720,4 +724,83 @@ async fn ensure_column(
         .await
         .unwrap_or_else(|error| panic!("升级 {table}.{column} 失败: {error}"));
     }
+}
+
+async fn rebuild_savings_projects_without_unique(db: &DatabaseConnection) {
+    let indexes = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "PRAGMA index_list('savings_projects')".to_string(),
+        ))
+        .await
+        .expect("读取攒钱表索引失败");
+    let mut has_unique_account = false;
+    for index in indexes {
+        let unique: i64 = index.try_get("", "unique").unwrap_or(0);
+        if unique == 0 {
+            continue;
+        }
+        let name: String = index.try_get("", "name").unwrap_or_default();
+        let columns = db
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                format!("PRAGMA index_info('{}')", name.replace('\'', "''")),
+            ))
+            .await
+            .expect("读取攒钱表索引列失败");
+        if columns.iter().any(|column| {
+            column
+                .try_get::<String>("", "name")
+                .is_ok_and(|value| value == "account_id")
+        }) {
+            has_unique_account = true;
+            break;
+        }
+    }
+    if !has_unique_account {
+        return;
+    }
+    let transaction = db.begin().await.expect("开始重建攒钱表失败");
+    let statements = [
+        "ALTER TABLE savings_projects RENAME TO savings_projects_unique_legacy",
+        "CREATE TABLE savings_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'item',
+            target_amount TEXT NOT NULL DEFAULT '',
+            account_id INTEGER NOT NULL,
+            saved_amount TEXT NOT NULL DEFAULT '',
+            source_account_id INTEGER,
+            amount TEXT NOT NULL,
+            cycle TEXT NOT NULL,
+            next_run_at DATETIME,
+            auto_enabled BOOLEAN NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            realized_amount TEXT NOT NULL DEFAULT '',
+            realized_at DATETIME,
+            realized_note TEXT NOT NULL DEFAULT '',
+            end_at DATETIME,
+            note TEXT NOT NULL,
+            created_at DATETIME NOT NULL
+        )",
+        "INSERT INTO savings_projects (
+            id, name, kind, target_amount, account_id, saved_amount,
+            source_account_id, amount, cycle, next_run_at, auto_enabled,
+            status, realized_amount, realized_at, realized_note, end_at,
+            note, created_at
+        ) SELECT
+            id, name, kind, target_amount, account_id, saved_amount,
+            source_account_id, amount, cycle, next_run_at, auto_enabled,
+            status, realized_amount, realized_at, realized_note, end_at,
+            note, created_at
+        FROM savings_projects_unique_legacy",
+        "DROP TABLE savings_projects_unique_legacy",
+    ];
+    for sql in statements {
+        transaction
+            .execute(Statement::from_string(DbBackend::Sqlite, sql.to_string()))
+            .await
+            .expect("重建攒钱表失败");
+    }
+    transaction.commit().await.expect("提交攒钱表重建失败");
 }

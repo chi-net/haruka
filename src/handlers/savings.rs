@@ -54,6 +54,7 @@ struct ProjectRow {
     redeemed_item: bool,
     realized_amount: String,
     realized_at: String,
+    end_at: String,
     realized_note: String,
     can_redeem: bool,
     note: String,
@@ -94,6 +95,7 @@ struct SavingsFormTemplate {
     amount: String,
     cycle: String,
     next_run_at: String,
+    end_at: String,
     savings_accounts: Vec<AccountOption>,
     edit: bool,
 }
@@ -116,6 +118,8 @@ pub struct SavingsFormData {
     cycle: String,
     #[serde(default)]
     next_run_at: String,
+    #[serde(default)]
+    end_at: String,
 }
 
 #[derive(Deserialize)]
@@ -183,13 +187,15 @@ pub(crate) async fn saved_amount_on<C: ConnectionTrait>(
     dek: &crypto::Dek,
     account_id: i64,
 ) -> HandlerResult<i64> {
-    Ok(savings_project::Entity::find()
+    let projects = savings_project::Entity::find()
         .filter(savings_project::Column::AccountId.eq(account_id))
-        .one(db)
+        .all(db)
         .await
-        .map_err(err500)?
-        .map(|project| saved_amount(&project, dek))
-        .unwrap_or(0))
+        .map_err(err500)?;
+    Ok(projects
+        .iter()
+        .map(|project| saved_amount(project, dek))
+        .fold(0i64, |total, amount| total.saturating_add(amount)))
 }
 
 fn parse_amount(value: &str, label: &str) -> HandlerResult<i64> {
@@ -282,6 +288,16 @@ fn parse_kind_target(form: &SavingsFormData) -> HandlerResult<(String, i64)> {
         }
         _ => Err(bad_request("攒钱项目类型无效")),
     }
+}
+
+fn parse_end_at(value: &str) -> HandlerResult<Option<NaiveDateTime>> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let end_at = NaiveDateTime::parse_from_str(value, TIME_FMT)
+        .map_err(|_| bad_request("结束时间格式不正确"))?;
+    Ok(Some(end_at))
 }
 
 fn valid_cycle(cycle: &str) -> bool {
@@ -497,6 +513,10 @@ pub async fn list(
                 .realized_at
                 .map(|at| at.format(TIME_FMT).to_string())
                 .unwrap_or_default(),
+            end_at: project
+                .end_at
+                .map(|at| at.format(TIME_FMT).to_string())
+                .unwrap_or_default(),
             realized_note: crypto::decrypt_string(&dek, &project.realized_note),
             can_redeem: project.kind == "item" && !realized,
             note: crypto::decrypt_string(&dek, &project.note),
@@ -517,14 +537,7 @@ pub async fn new_form(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
 ) -> HandlerResult<Html<String>> {
-    let linked: Vec<i64> = savings_project::Entity::find()
-        .all(&state.db)
-        .await
-        .map_err(err500)?
-        .into_iter()
-        .map(|project| project.account_id)
-        .collect();
-    let funding_accounts = account_options(&state, &dek, &linked).await?;
+    let funding_accounts = account_options(&state, &dek, &[]).await?;
     let html = SavingsFormTemplate {
         heading: "新建攒钱项目".into(),
         action: "/savings".into(),
@@ -540,6 +553,7 @@ pub async fn new_form(
         next_run_at: (chrono::Utc::now() + Duration::days(1))
             .format(TIME_FMT)
             .to_string(),
+        end_at: String::new(),
         savings_accounts: funding_accounts,
         edit: false,
     }
@@ -559,10 +573,8 @@ pub async fn create(
         return Err(bad_request("项目名必须为 1 到 100 个字符"));
     }
     let savings_account = validate_account(&state, form.account_id, "攒钱账户").await?;
-    if is_savings_account_on(&state.db, savings_account.id).await? {
-        return Err(bad_request("该账户已经是攒钱账户"));
-    }
     let (kind, target_cents) = parse_kind_target(&form)?;
+    let end_at = parse_end_at(&form.end_at)?;
     let (_source, amount_cents, cycle, next_run_at, auto_enabled) = parse_auto(&form).await?;
     if form.note.chars().count() > 1000 {
         return Err(bad_request("说明不能超过 1000 个字符"));
@@ -572,6 +584,7 @@ pub async fn create(
         kind: Set(kind),
         target_amount: Set(crypto::encrypt_cents(&dek, target_cents)),
         saved_amount: Set(crypto::encrypt_cents(&dek, 0)),
+        end_at: Set(end_at),
         account_id: Set(savings_account.id),
         source_account_id: Set(None),
         amount: Set(if auto_enabled {
@@ -589,8 +602,8 @@ pub async fn create(
     .insert(&state.db)
     .await
     .map_err(err500)?;
-    let balance = super::accounts::current_balance(&state, &dek, savings_account.id).await?;
-    reconcile_fund_goal(&state, &dek, &mut project, balance).await?;
+    let saved = saved_amount(&project, &dek);
+    reconcile_fund_goal(&state, &dek, &mut project, saved).await?;
     Ok(Redirect::to("/savings"))
 }
 
@@ -641,6 +654,10 @@ pub async fn edit_form(
             .next_run_at
             .map(|at| at.format(TIME_FMT).to_string())
             .unwrap_or_default(),
+        end_at: project
+            .end_at
+            .map(|at| at.format(TIME_FMT).to_string())
+            .unwrap_or_default(),
         savings_accounts: Vec::new(),
         edit: true,
     }
@@ -670,6 +687,7 @@ pub async fn update(
         return Err(bad_request("项目名必须为 1 到 100 个字符"));
     }
     let (kind, target_cents) = parse_kind_target(&form)?;
+    let end_at = parse_end_at(&form.end_at)?;
     let (_source, amount_cents, cycle, next_run_at, auto_enabled) = parse_auto(&form).await?;
     if form.note.chars().count() > 1000 {
         return Err(bad_request("说明不能超过 1000 个字符"));
@@ -690,6 +708,7 @@ pub async fn update(
     });
     active.cycle = Set(cycle);
     active.next_run_at = Set(next_run_at);
+    active.end_at = Set(end_at);
     active.auto_enabled = Set(auto_enabled);
     active.note = Set(crypto::encrypt(&dek, form.note.trim().as_bytes()));
     let mut project = active.update(&state.db).await.map_err(err500)?;
@@ -705,11 +724,9 @@ pub async fn delete(
 ) -> HandlerResult<Redirect> {
     let _guard = state.balance_writes.lock().await;
     let project = load_project(&state, id).await?;
-    let balance = super::accounts::current_balance(&state, &dek, project.account_id).await?;
-    let redeemed_item = project.status == "realized" && project.kind == "item";
-    if balance != 0 && !redeemed_item {
+    if saved_amount(&project, &dek) != 0 {
         return Err(bad_request(
-            "攒钱账户仍有余额，请先通过特殊转出清空后再删除项目",
+            "该项目仍有冻结的攒钱金额，请先通过特殊情况转出后再删除项目",
         ));
     }
     savings_project::Entity::delete_by_id(id)
