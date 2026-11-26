@@ -261,6 +261,8 @@ struct CreditAccountSummary {
     limit: String,
     unbilled: String,
     unbilled_installment: String,
+    unbilled_residual: String,
+    has_unbilled_residual: bool,
     unbilled_total: String,
     due: Vec<CreditDueSummary>,
     due_total: String,
@@ -586,6 +588,16 @@ pub async fn show(
                     .checked_add(due.total)
                     .ok_or_else(|| err500("已出账应还金额超出范围"))
             })?;
+            let unbilled_residual =
+                if due_total == 0 && statement.unbilled == 0 && statement.unbilled_installment == 0
+                {
+                    amounts
+                        .used
+                        .saturating_sub(statement.installment_principal)
+                        .max(0)
+                } else {
+                    0
+                };
             credit_accounts.push(CreditAccountSummary {
                 name,
                 kind: account_kind_label(&account.kind).into(),
@@ -597,10 +609,13 @@ pub async fn show(
                     statement.unbilled_installment,
                     &account.currency,
                 ),
+                unbilled_residual: currency::format(unbilled_residual, &account.currency),
+                has_unbilled_residual: unbilled_residual > 0,
                 unbilled_total: currency::format(
                     statement
                         .unbilled
                         .checked_add(statement.unbilled_installment)
+                        .and_then(|total| total.checked_add(unbilled_residual))
                         .ok_or_else(|| err500("未出账金额超出范围"))?,
                     &account.currency,
                 ),
