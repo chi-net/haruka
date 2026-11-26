@@ -21,8 +21,7 @@ use crate::{
     credit_dates::{installment_billing_close, next_billing_close},
     crypto, currency,
     entity::{
-        account, account_detail, balance_adjustment, bill, category, installment_item,
-        installment_plan, transfer,
+        account, account_detail, bill, category, installment_item, installment_plan, transfer,
     },
     installment_state::RefundContext,
     AppState, SessionDek,
@@ -553,7 +552,6 @@ struct ItemAmountTemplate {
     interest: String,
     fee: String,
     total: String,
-    adjusts_balance: bool,
 }
 
 #[derive(Deserialize)]
@@ -1409,7 +1407,6 @@ pub async fn item_amount_form(
         interest: currency::format(interest, &account.currency),
         fee: currency::format(fee, &account.currency),
         total: currency::format(total, &account.currency),
-        adjusts_balance: status != "未入账",
     }
     .render()
     .map_err(err500)?;
@@ -1419,7 +1416,6 @@ pub async fn item_amount_form(
 pub async fn update_item_amount(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
-    Extension(time_zone): Extension<super::ClientTimeZone>,
     Path((plan_id, item_id)): Path<(i64, i64)>,
     Form(form): Form<ItemAmountForm>,
 ) -> HandlerResult<Redirect> {
@@ -1453,11 +1449,6 @@ pub async fn update_item_amount(
     if refund.full_refund || refund.needs_review {
         return Err(bad_request("该分期已退款或待核对，不能修改金额"));
     }
-    let detail = account_detail::Entity::find_by_id(plan.account_id)
-        .one(&tx)
-        .await
-        .map_err(err500)?;
-    let status = item_billing_status(&item, detail.as_ref(), time_zone.today())?;
     let interest = crypto::decrypt_cents(&dek, &item.interest);
     let fee = crypto::decrypt_cents(&dek, &item.fee);
     let old_total = crypto::decrypt_cents(&dek, &item.total);
@@ -1472,40 +1463,24 @@ pub async fn update_item_amount(
     let delta = new_total
         .checked_sub(old_total)
         .ok_or_else(|| bad_request("金额超出范围"))?;
-    if status != "未入账" && delta != 0 {
-        let account = account::Entity::find_by_id(plan.account_id)
-            .one(&tx)
-            .await
-            .map_err(err500)?
-            .ok_or_else(|| bad_request("分期账户不存在"))?;
-        let current = super::accounts::current_balance_on(&tx, &dek, account.id).await?;
-        // Amount increases add debt (balance decreases); amount decreases reduce debt.
-        let balance_delta = delta
-            .checked_neg()
-            .ok_or_else(|| bad_request("余额超出范围"))?;
-        let target = current
-            .checked_add(balance_delta)
-            .ok_or_else(|| bad_request("余额超出范围"))?;
-        super::accounts::ensure_allowed_balance(&tx, &dek, account.id, target).await?;
-        let offset = crypto::decrypt_cents(&dek, &account.balance_offset)
-            .checked_add(balance_delta)
-            .ok_or_else(|| bad_request("余额超出范围"))?;
-        let account_id = account.id;
-        let mut active = account.into_active_model();
-        active.balance_offset = Set(crypto::encrypt_cents(&dek, offset));
-        active.update(&tx).await.map_err(err500)?;
-        balance_adjustment::ActiveModel {
-            account_id: Set(account_id),
-            installment_item_id: Set(Some(item.id)),
-            from_balance: Set(crypto::encrypt_cents(&dek, current)),
-            to_balance: Set(crypto::encrypt_cents(&dek, target)),
-            happened_at: Set(chrono::Utc::now().naive_utc()),
-            created_at: Set(chrono::Utc::now()),
-            ..Default::default()
+    if delta != 0 {
+        if let Some(bill_id) = plan.bill_id {
+            let bill = bill::Entity::find_by_id(bill_id)
+                .one(&tx)
+                .await
+                .map_err(err500)?
+                .ok_or_else(|| bad_request("分期原账单不存在"))?;
+            let original = crypto::decrypt_cents(&dek, &bill.amount);
+            let updated = original
+                .checked_add(delta)
+                .ok_or_else(|| bad_request("金额超出范围"))?;
+            if updated < 0 {
+                return Err(bad_request("修改后原账单金额不能为负"));
+            }
+            let mut active = bill.into_active_model();
+            active.amount = Set(crypto::encrypt_cents(&dek, updated));
+            active.update(&tx).await.map_err(err500)?;
         }
-        .insert(&tx)
-        .await
-        .map_err(err500)?;
     }
     let mut active = item.into_active_model();
     active.principal = Set(crypto::encrypt_cents(&dek, new_principal));

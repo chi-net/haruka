@@ -857,7 +857,7 @@ async fn far_future_installment_is_not_in_the_unbilled_total() {
 }
 
 #[tokio::test]
-async fn installment_periods_can_be_edited_with_only_billed_or_pending_balance_changes() {
+async fn installment_periods_can_be_edited_and_update_the_original_bill() {
     use chrono::Datelike;
 
     let app = TestApp::start().await;
@@ -896,7 +896,7 @@ async fn installment_periods_can_be_edited_with_only_billed_or_pending_balance_c
     assert_eq!(
         app.scalar("SELECT COUNT(*) AS value FROM balance_adjustments")
             .await,
-        1
+        0
     );
 
     assert_eq!(
@@ -921,11 +921,11 @@ async fn installment_periods_can_be_edited_with_only_billed_or_pending_balance_c
         .status(),
         StatusCode::SEE_OTHER
     );
-    assert_eq!(app.balance(card).await, "CNY -977.61");
+    assert_eq!(app.balance(card).await, "CNY -1050.00");
     assert_eq!(
         app.scalar("SELECT COUNT(*) AS value FROM balance_adjustments")
             .await,
-        2
+        0
     );
 
     let detail = app.get("/installments/1").await.text().await.unwrap();
