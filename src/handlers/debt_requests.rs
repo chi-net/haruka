@@ -139,6 +139,8 @@ struct RequestView {
     can_print: bool,
     can_submit_repayment: bool,
     can_settle: bool,
+    fully_repaid: bool,
+    linked_repayments: Vec<RequestView>,
     settled: bool,
     settlement_amount: String,
     settlement_note: String,
@@ -1697,6 +1699,7 @@ pub async fn list(
         .collect::<HashMap<_, _>>();
     let mut pending_requests = Vec::new();
     let mut completed_requests = Vec::new();
+    let mut linked_children: HashMap<i64, Vec<(bool, RequestView)>> = HashMap::new();
     let requests = debt_request::Entity::find()
         .order_by_desc(debt_request::Column::CreatedAt)
         .all(&state.db)
@@ -1724,9 +1727,35 @@ pub async fn list(
         let origin_settled = request
             .origin_debt_record_id
             .is_some_and(|id| settled_origins.contains(&id));
+        let fully_repaid = if !settled
+            && !origin_settled
+            && matches!(request.kind.as_str(), "borrow" | "lend")
+            && request.status != "revoked"
+            && request.confirmed_debt_record_id.is_some()
+        {
+            let repayment_kind = if request.kind == "borrow" {
+                "repayment_paid"
+            } else {
+                "repayment_received"
+            };
+            repayment_capacity(
+                &state,
+                &dek,
+                repayment_kind,
+                request
+                    .person_id
+                    .ok_or_else(|| bad_request("原借款缺少借贷对象"))?,
+                &snapshot.currency,
+                request.confirmed_debt_record_id,
+            )
+            .await?
+                == 0
+        } else {
+            false
+        };
         let verified = verify_chain(&request) && (!settled || settlement.is_some());
         let expired = request.expires_at <= now;
-        let status_label = match request.status.as_str() {
+        let mut status_label = match request.status.as_str() {
             _ if settled => "已强制平账（账主单方结清，非实际还款）",
             _ if origin_settled && request.confirmed_debt_record_id.is_none() => {
                 "原借款已强制平账，本请求不能入账"
@@ -1742,6 +1771,9 @@ pub async fn list(
             _ if expired => "已过期",
             _ => "等待对方提交或确认",
         };
+        if fully_repaid {
+            status_label = "已还清";
+        }
         let has_submission = submission.is_some();
         let submitted = submission.unwrap_or_default();
         let has_repayment = repayment.is_some();
@@ -1788,6 +1820,7 @@ pub async fn list(
             can_submit_repayment: matches!(request.kind.as_str(), "borrow" | "lend")
                 && matches!(request.status.as_str(), "confirmed" | "recorded")
                 && !settled
+                && !fully_repaid
                 && verified,
             can_settle: matches!(request.kind.as_str(), "borrow" | "lend")
                 && request.confirmed_debt_record_id.is_some()
@@ -1796,7 +1829,10 @@ pub async fn list(
                     "confirmed" | "recorded" | "repayment_submitted" | "repaid"
                 )
                 && !settled
+                && !fully_repaid
                 && verified,
+            fully_repaid,
+            linked_repayments: Vec::new(),
             settled,
             settlement_amount: settlement
                 .as_ref()
@@ -1829,10 +1865,34 @@ pub async fn list(
             incoming: incoming(&request.kind),
             origin_debt_record_id: request.origin_debt_record_id.unwrap_or_default(),
         };
-        if pending {
+        if let Some(origin_id) = request.origin_debt_record_id {
+            linked_children
+                .entry(origin_id)
+                .or_default()
+                .push((pending, view));
+        } else if pending {
             pending_requests.push(view);
         } else {
             completed_requests.push(view);
+        }
+    }
+    for view in pending_requests
+        .iter_mut()
+        .chain(completed_requests.iter_mut())
+    {
+        if view.confirmed_debt_record_id != 0 {
+            if let Some(children) = linked_children.remove(&view.confirmed_debt_record_id) {
+                view.linked_repayments = children.into_iter().map(|(_, child)| child).collect();
+            }
+        }
+    }
+    for (_, children) in linked_children {
+        for (pending, child) in children {
+            if pending {
+                pending_requests.push(child);
+            } else {
+                completed_requests.push(child);
+            }
         }
     }
     let (linked_instances, federated) = super::federation::load_views(&state).await?;

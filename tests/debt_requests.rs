@@ -1491,3 +1491,31 @@ async fn forced_settlement_marks_zero_remaining_loan_closed() {
         0
     );
 }
+
+#[tokio::test]
+async fn fully_repaid_loan_hides_repayment_form_and_groups_the_linked_repayment() {
+    let app = App::start().await;
+    let account = app.account("CNY").await;
+    let person = app.person().await;
+    app.force_balance(account, "5000").await;
+    let (borrow, _record) = app.book("borrow", account, person, "500", None).await;
+    let response = app
+        .post(
+            &format!("/debt-requests/{borrow}/repayment"),
+            &[
+                ("account_id", account.to_string()),
+                ("amount", "500".into()),
+                ("repaid_at", PAID_AT.into()),
+                ("note", "全额还清".into()),
+                ("requires_confirmation", "false".into()),
+            ],
+        )
+        .await;
+    let repayment = App::created_id(&response);
+
+    let html = app.get("/debt-requests", true).await.text().await.unwrap();
+    assert!(html.contains("本笔借款已还清，无需再登记还款。"));
+    assert!(html.contains("关联还款请求（1）"));
+    assert!(!html.contains(&format!("id=\"debt-request-{repayment}\"")));
+    assert!(html.contains(&format!("id=\"debt-request-{borrow}\"")));
+}
