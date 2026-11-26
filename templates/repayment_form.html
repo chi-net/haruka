@@ -60,7 +60,6 @@
           <input type="hidden" name="item_id" value="{{ item_id }}"><input type="hidden" name="remaining_cents" value="{{ plan.remaining_cents }}"><input type="hidden" name="redirect_to" value="/installments">
           <label class="block">还款来源 <select name="from_account_id" required class="border rounded px-3 py-2">{% for source in sources %}<option value="{{ source.id }}">{{ source.name }}</option>{% endfor %}</select></label>
           <label class="block">还款时间<input type="datetime-local" name="happened_at" value="{{ happened_at }}" required class="border rounded px-3 py-2"></label>
-          <button type="submit" name="mode" value="installment_next" class="bg-blue-600 text-white rounded px-4 py-2">支付本期</button>
           <button type="submit" name="mode" value="installment_all" class="border rounded px-4 py-2">全部结清</button>
         </form>
         {% endif %}

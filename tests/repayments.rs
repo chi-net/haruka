@@ -1111,6 +1111,9 @@ async fn savings_requires_a_target_and_freezes_the_linked_account() {
         .await;
     let page = app.get("/savings").await.text().await.unwrap();
     assert!(page.contains("相机"));
+    let quick = app.get("/bills/new").await.text().await.unwrap();
+    assert!(quick.contains("data-quick-mode=\"savings\""));
+    assert!(quick.contains("相机"));
     assert!(page.contains("目标"));
     assert!(page.contains("CNY 80.00"));
 

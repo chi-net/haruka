@@ -24,7 +24,7 @@
         <div><label for="quick-repayment-to" class="mb-1 block text-xs text-gray-500">还款信用账户</label><select id="quick-repayment-to" name="to_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in repayment_accounts %}<option value="{{ a.id }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-repayment-to" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
         <div><label for="quick-repayment-from" class="mb-1 block text-xs text-gray-500">扣款资金账户（同币种、非信用账户）</label><select id="quick-repayment-from" name="from_account_id" required class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for a in ordinary_accounts %}<option value="{{ a.id }}" data-currency="{{ a.currency }}">{{ a.name }}</option>{% endfor %}</select><p data-account-balance-for="quick-repayment-from" class="mt-1 text-xs text-gray-400" aria-live="polite">正在读取余额…</p></div>
         <p id="quick-repayment-debt" class="break-words text-sm text-gray-700 sm:col-span-2" aria-live="polite"></p>
-        <div class="sm:col-span-2"><label for="quick-repayment-mode" class="mb-1 block text-xs text-gray-500">还款方式</label><select id="quick-repayment-mode" name="mode" class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"><option value="custom">自定义还款（信用卡可留溢缴款）</option><option value="installment_next">分期：偿还本期</option><option value="installment_all">分期：全部结清</option><option value="minimum">按机构实际最低还款额还款，剩余普通欠款转分期</option></select></div>
+        <div class="sm:col-span-2"><label for="quick-repayment-mode" class="mb-1 block text-xs text-gray-500">还款方式</label><select id="quick-repayment-mode" name="mode" class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"><option value="custom">自定义还款（系统自动结清本期分期，信用卡可留溢缴款）</option><option value="installment_all">分期：全部结清</option><option value="minimum">按机构实际最低还款额还款，剩余普通欠款转分期</option></select></div>
         <div id="quick-repayment-plan-field" class="hidden min-w-0 sm:col-span-2"><label for="quick-repayment-plan" class="mb-1 block text-xs text-gray-500">选择分期计划</label><select id="quick-repayment-plan" name="plan_id" disabled class="w-full min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"></select></div>
         <p id="quick-repayment-plans-status" class="break-words text-xs text-amber-700 sm:col-span-2"></p>
         <input id="quick-repayment-item" name="item_id" type="hidden" disabled>
@@ -415,7 +415,7 @@
   let controller;
   let loading = false;
   const active = () => form.dataset.quickForm === 'repayment';
-  const isPlan = () => ['installment_next', 'installment_all'].includes(mode.value);
+  const isPlan = () => mode.value === 'installment_all';
   const maxCents = 9223372036854775807n;
   const parseAmount = value => {
     if (!/^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(value.trim())) return null;
@@ -440,8 +440,15 @@
   };
   const update = () => {
     if (!active()) return;
-    const planned = isPlan();
     const minimum = mode.value === 'minimum';
+    const allOption = mode.querySelector('option[value="installment_all"]');
+    if (allOption && options) {
+      const hasPlans = options.plans.length > 0;
+      allOption.hidden = !hasPlans;
+      allOption.disabled = !hasPlans;
+      if (!hasPlans && mode.value === 'installment_all') mode.value = 'custom';
+    }
+    const planned = isPlan();
     const allowOverpayment = !planned && !minimum && options?.allow_overpayment === true;
     const selected = selectedPlan();
     const currency = to.selectedOptions[0]?.dataset.currency || '';
@@ -450,10 +457,10 @@
     document.getElementById('quick-repayment-plan-field').classList.toggle('hidden', !planned);
     minimumFields.disabled = !minimum;
     minimumFields.classList.toggle('hidden', !minimum);
-    item.disabled = mode.value !== 'installment_next';
+    item.disabled = true;
     ordinary.disabled = !minimum;
-    remaining.disabled = mode.value !== 'installment_all';
-    item.value = selected?.next_item_id == null ? '' : String(selected.next_item_id);
+    remaining.disabled = !planned;
+    item.value = '';
     ordinary.value = options?.ordinary_cents || '';
     remaining.value = selected?.remaining_cents || '';
     amount.disabled = planned;
@@ -462,8 +469,8 @@
     preview.textContent = '';
     minimumPreview.textContent = '';
     if (planned) {
-      amount.value = selected ? (mode.value === 'installment_next' ? selected.next_amount : selected.remaining_amount) : '';
-      if (selected) preview.textContent = `${mode.value === 'installment_next' ? '本期' : '全部结清'}合计扣款：${amount.value} ${currency}（含本金、利息、手续费）。`;
+      amount.value = selected ? selected.remaining_amount : '';
+      if (selected) preview.textContent = `全部结清合计扣款：${amount.value} ${currency}（含本金、利息、手续费）。`;
     } else if (options) {
       const cents = parseAmount(amount.value);
       const debtCents = BigInt(options.ordinary_cents);
@@ -554,7 +561,7 @@
   };
   root.harukaRepaymentConfirmation = () => {
     const currency = to.selectedOptions[0]?.dataset.currency || '';
-    const labels = { custom: '普通欠款还款', installment_next: '分期本期还款', installment_all: '分期全部结清', minimum: '最低还款并将剩余普通欠款转分期' };
+    const labels = { custom: '普通欠款还款', installment_all: '分期全部结清', minimum: '最低还款并将剩余普通欠款转分期' };
     return `确认记录${labels[mode.value]}？\n资金账户：${from.selectedOptions[0]?.textContent}\n信用账户：${to.selectedOptions[0]?.textContent}\n本次扣款：${amount.value} ${currency}${mode.value === 'minimum' ? '\n' + minimumPreview.textContent : ''}\n仅记录已实际完成的还款，不连接银行、不发起真实扣款。`;
   };
   to.addEventListener('change', () => { filterSources(); refresh(); });
