@@ -933,3 +933,56 @@ async fn installment_periods_can_be_edited_with_only_billed_or_pending_balance_c
     assert!(detail.contains("CNY 350.00"));
     assert!(detail.contains("CNY 400.00"));
 }
+
+#[tokio::test]
+async fn paid_installment_period_amount_can_be_edited_without_undo() {
+    use chrono::Datelike;
+
+    let app = TestApp::start().await;
+    let source = app.account("other", "CNY").await;
+    let today = chrono::Utc::now().date_naive();
+    let card = app
+        .account_with_billing("credit_card", "CNY", today.day().min(28) as i32)
+        .await;
+    app.force_balance(source, "5000").await;
+    app.installment_bill(card, "982.83", today + chrono::Duration::days(3))
+        .await;
+    assert_eq!(
+        app.post(
+            "/repayments",
+            &TestApp::fields(source, card, "custom", "327.61")
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE paid_at IS NOT NULL")
+            .await,
+        1
+    );
+    let item = app
+        .scalar("SELECT MIN(id) AS value FROM installment_items")
+        .await;
+    assert_eq!(app.balance(card).await, "CNY -655.22");
+
+    let detail = app.get("/installments/1").await.text().await.unwrap();
+    assert!(detail.contains("已还"));
+    assert!(detail.contains("修改金额"));
+
+    assert_eq!(
+        app.post(
+            &format!("/installments/1/items/{item}/amount"),
+            &[("amount", "300.00".into())]
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(app.balance(card).await, "CNY -627.61");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE paid_at IS NOT NULL")
+            .await,
+        1
+    );
+}

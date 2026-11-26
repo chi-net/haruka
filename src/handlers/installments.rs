@@ -1372,9 +1372,6 @@ pub async fn item_amount_form(
     if item.plan_id != plan.id {
         return Err(bad_request("期次不属于该分期计划"));
     }
-    if item.paid_at.is_some() {
-        return Err(bad_request("已还期次不能修改金额"));
-    }
     let bills = bill::Entity::find()
         .filter(bill::Column::AccountId.eq(plan.account_id))
         .all(&state.db)
@@ -1443,9 +1440,6 @@ pub async fn update_item_amount(
         .ok_or((StatusCode::NOT_FOUND, "分期期次不存在".into()))?;
     if item.plan_id != plan.id {
         return Err(bad_request("期次不属于该分期计划"));
-    }
-    if item.paid_at.is_some() {
-        return Err(bad_request("已还期次不能修改金额"));
     }
     let bills = bill::Entity::find()
         .filter(bill::Column::AccountId.eq(plan.account_id))
@@ -1646,10 +1640,7 @@ pub async fn detail(
             } else {
                 item_billing_status(&item, detail.as_ref(), today)?
             };
-            let editable = plan.deleted_at.is_none()
-                && !refund.full_refund
-                && !refund.needs_review
-                && item.paid_at.is_none();
+            let editable = plan.deleted_at.is_none() && !refund.full_refund && !refund.needs_review;
             Ok(ScheduleRow {
                 id: item.id,
                 sequence: item.sequence,

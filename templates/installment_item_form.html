@@ -9,7 +9,7 @@
   <div class="rounded-lg border bg-white p-4">
     <div class="flex flex-wrap items-center gap-2 text-sm">
       <span class="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">{{ status }}</span>
-      {% if adjusts_balance %}<span class="text-xs text-amber-700">修改后本金差额会调整信用账户余额，并写入余额调整流水。</span>{% else %}<span class="text-xs text-gray-500">仅修改未来计划，不调整当前账户余额。</span>{% endif %}
+      {% if status == "已还" %}<span class="text-xs text-amber-700">已还期次修改金额会调整信用账户余额，原还款流水保留，不需要先撤销。</span>{% else if adjusts_balance %}<span class="text-xs text-amber-700">修改后本金差额会调整信用账户余额，并写入余额调整流水。</span>{% else %}<span class="text-xs text-gray-500">仅修改未来计划，不调整当前账户余额。</span>{% endif %}
     </div>
     <dl class="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
       <div><dt class="text-xs text-gray-500">本金</dt><dd class="font-mono">{{ principal }}</dd></div>
