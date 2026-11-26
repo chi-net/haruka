@@ -201,8 +201,8 @@ impl TestApp {
             .into()
     }
     async fn bill(&self, account: i64, amount: &str) -> i64 {
-        assert_eq!(
-            self.post(
+        let response = self
+            .post(
                 "/bills",
                 &[
                     ("account_id", account.to_string()),
@@ -214,14 +214,14 @@ impl TestApp {
                         "happened_at",
                         (chrono::Utc::now() - chrono::Duration::days(1))
                             .format("%Y-%m-%dT%H:%M")
-                            .to_string()
+                            .to_string(),
                     ),
-                ]
+                ],
             )
-            .await
-            .status(),
-            StatusCode::OK
-        );
+            .await;
+        let status = response.status();
+        let body = response.text().await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{body}");
         self.scalar("SELECT MAX(id) AS value FROM bills").await
     }
     async fn installment_bill(
@@ -1084,9 +1084,8 @@ async fn rejects_future_and_pre_1970_bill_times() {
 #[tokio::test]
 async fn savings_requires_a_target_and_freezes_the_linked_account() {
     let app = TestApp::start().await;
-    let source = app.asset_account("CNY").await;
     let savings = app.asset_account("CNY").await;
-    app.force_balance(source, "100").await;
+    app.force_balance(savings, "50").await;
 
     let response = app
         .post(
@@ -1120,11 +1119,7 @@ async fn savings_requires_a_target_and_freezes_the_linked_account() {
     let deposited = app
         .post(
             "/savings/deposit",
-            &[
-                ("project_id", project.to_string()),
-                ("from_account_id", source.to_string()),
-                ("amount", "50".into()),
-            ],
+            &[("project_id", project.to_string()), ("amount", "50".into())],
         )
         .await;
     assert_eq!(deposited.status(), StatusCode::SEE_OTHER);

@@ -527,6 +527,13 @@ pub async fn init() -> DatabaseConnection {
     ensure_column(
         &db,
         "savings_projects",
+        "saved_amount",
+        "TEXT NOT NULL DEFAULT ''",
+    )
+    .await;
+    ensure_column(
+        &db,
+        "savings_projects",
         "status",
         "TEXT NOT NULL DEFAULT 'active'",
     )

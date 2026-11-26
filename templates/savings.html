@@ -54,13 +54,11 @@
 
     {% if !project.realized %}
     <form method="post" action="/savings/{{ project.id }}/deposit" class="mt-4 border-t border-gray-100 pt-3">
-      <h3 class="text-xs font-semibold text-gray-700">从普通账户存入</h3>
+      <h3 class="text-xs font-semibold text-gray-700">从附属账户未冻结余额划入</h3>
+      <p class="mt-1 text-xs text-gray-500">不从外部账户转入；只在该附属账户内部把可用余额划入攒钱资金池。</p>
       <div class="mt-2 flex flex-wrap gap-2">
-        <select name="from_account_id" required class="min-w-0 flex-1 rounded border px-2 py-1.5 text-sm">
-          {% for account in funding_accounts %}{% if account.currency == project.currency %}<option value="{{ account.id }}">{{ account.name }}</option>{% endif %}{% endfor %}
-        </select>
-        <input name="amount" type="number" min="0.01" step="0.01" required placeholder="金额" class="w-28 rounded border px-2 py-1.5 text-sm font-mono">
-        <button class="rounded bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700">存入</button>
+        <input name="amount" type="number" min="0.01" step="0.01" required placeholder="金额" class="min-w-0 flex-1 rounded border px-2 py-1.5 text-sm font-mono">
+        <button class="rounded bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-blue-700">划入</button>
       </div>
     </form>
     {% endif %}
@@ -83,19 +81,11 @@
     {% if !project.realized || project.kind == "fund" %}
     <details class="mt-3 rounded-lg border border-red-200 bg-red-50 p-3">
       <summary class="cursor-pointer text-xs font-semibold text-red-800">特殊情况转出</summary>
-      <p class="mt-2 text-xs text-red-800">只有确实需要动用攒钱款时才使用。转出会留下普通转账流水，并在说明中记录原因。</p>
-      <form method="post" action="/savings/{{ project.id }}/withdraw" class="mt-2 space-y-2" hx-confirm="确认这是特殊情况下的攒钱转出？该操作会减少攒钱余额。">
-        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <div>
-            <label class="mb-1 block text-xs font-medium">转入普通账户</label>
-            <select name="to_account_id" required class="w-full rounded border px-2 py-1.5 text-sm">
-              {% for account in funding_accounts %}{% if account.currency == project.currency %}<option value="{{ account.id }}">{{ account.name }}</option>{% endif %}{% endfor %}
-            </select>
-          </div>
-          <div>
-            <label class="mb-1 block text-xs font-medium">转出金额</label>
-            <input name="amount" type="number" min="0.01" step="0.01" required class="w-full rounded border px-2 py-1.5 text-sm font-mono">
-          </div>
+      <p class="mt-2 text-xs text-red-800">只有确实需要动用攒钱款时才使用。这里只解除该附属账户内部的冻结节余，不产生外部转账。</p>
+      <form method="post" action="/savings/{{ project.id }}/withdraw" class="mt-2 space-y-2" hx-confirm="确认这是特殊情况下的攒钱转出？该操作会减少冻结的攒钱金额。">
+        <div>
+          <label class="mb-1 block text-xs font-medium">解除冻结金额</label>
+          <input name="amount" type="number" min="0.01" step="0.01" required class="w-full rounded border px-2 py-1.5 text-sm font-mono">
         </div>
         <div>
           <label class="mb-1 block text-xs font-medium">特殊原因</label>

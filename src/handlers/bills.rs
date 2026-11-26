@@ -122,7 +122,6 @@ struct QuickEntryPageTemplate {
     accounts: Vec<AccountOption>,
     ordinary_accounts: Vec<AccountOption>,
     savings_projects: Vec<SavingsQuickOption>,
-    savings_funding_accounts: Vec<AccountOption>,
     transfer_source_accounts: Vec<AccountOption>,
     repayment_accounts: Vec<AccountOption>,
     categories: Vec<CategoryOption>,
@@ -1309,7 +1308,6 @@ pub async fn new_form(
         .all(&state.db)
         .await
         .map_err(err500)?;
-    let savings_ids: HashSet<i64> = savings.iter().map(|project| project.account_id).collect();
     let account_names: HashMap<i64, String> = accounts
         .iter()
         .map(|account| (account.id, account.name.clone()))
@@ -1331,11 +1329,6 @@ pub async fn new_form(
                 .unwrap_or_default(),
         })
         .collect();
-    let savings_funding_accounts = ordinary_accounts
-        .iter()
-        .filter(|account| !savings_ids.contains(&account.id))
-        .cloned()
-        .collect();
     let repayment_accounts = accounts
         .iter()
         .filter(|a| a.kind == "credit_card" || a.kind == "credit_service")
@@ -1345,7 +1338,6 @@ pub async fn new_form(
         accounts,
         ordinary_accounts,
         savings_projects,
-        savings_funding_accounts,
         transfer_source_accounts,
         repayment_accounts,
         categories: category_options(&state, &dek).await?,

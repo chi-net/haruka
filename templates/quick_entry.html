@@ -43,8 +43,7 @@
         <p class="break-words text-xs text-gray-500 sm:col-span-2">仅记录已实际完成的还款，不连接银行、不发起真实扣款；分期还款额含所选期次的本金、利息和手续费。</p>
       </fieldset>
       <fieldset data-quick-fields="savings" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
-        <div><label for="quick-savings-project" class="mb-1 block text-xs text-gray-500">攒钱项目</label><select id="quick-savings-project" name="project_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for project in savings_projects %}<option value="{{ project.id }}" data-currency="{{ project.currency }}">{{ project.name }} · {{ project.account_name }} · {{ project.currency }}</option>{% endfor %}</select><p class="mt-1 text-xs text-gray-500">存入附属账户的资金会被冻结，不能直接消费；只能通过攒钱页特殊情况转出。</p></div>
-        <div><label for="quick-savings-from" class="mb-1 block text-xs text-gray-500">资金来源账户</label><select id="quick-savings-from" name="from_account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for account in savings_funding_accounts %}<option value="{{ account.id }}" data-currency="{{ account.currency }}">{{ account.name }} · {{ account.currency }}</option>{% endfor %}</select><p class="mt-1 text-xs text-gray-500">必须是同币种普通账户，且不能是另一个攒钱账户。</p></div>
+        <div class="sm:col-span-2"><label for="quick-savings-project" class="mb-1 block text-xs text-gray-500">攒钱项目</label><select id="quick-savings-project" name="project_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for project in savings_projects %}<option value="{{ project.id }}" data-currency="{{ project.currency }}">{{ project.name }} · {{ project.account_name }} · {{ project.currency }}</option>{% endfor %}</select><p class="mt-1 text-xs text-gray-500">从未冻结的附属账户余额内部划入，不产生外部转账；划入后资金冻结，只能通过攒钱页特殊情况转出。</p></div>
       </fieldset>
       <p id="quick-entry-unavailable" class="hidden text-sm text-amber-700" role="status"></p>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -134,7 +133,7 @@
   const unavailable = document.getElementById('quick-entry-unavailable');
   const updateAvailable = () => {
     const family = form.dataset.quickForm;
-    const account = document.getElementById(({ transfer: 'quick-transfer-from', repayment: 'quick-repayment-to', savings: 'quick-savings-from' })[family] || 'quick-bill-account');
+    const account = document.getElementById(({ transfer: 'quick-transfer-from', repayment: 'quick-repayment-to', savings: 'quick-savings-project' })[family] || 'quick-bill-account');
     let message = account.options.length ? '' : '请先创建可用的资金账户。';
     if (family === 'transfer') {
       if (!account.value || account.selectedOptions[0]?.disabled) message = root.dataset.transferSourceUnavailable || '请选择可用的转出账户；信用卡仅可转出现有正余额。';

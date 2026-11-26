@@ -51,18 +51,11 @@
   <section class="rounded-lg border border-blue-200 bg-blue-50 p-4">
     <label class="flex items-start gap-2 text-sm font-medium text-blue-900">
       <input id="savings-auto-toggle" type="checkbox" name="auto_enabled" value="true" {% if auto_enabled %}checked{% endif %} class="mt-1">
-      <span>自动定期转入<span class="mt-0.5 block text-xs font-normal text-blue-700">到期后会在打开仪表板或攒钱页时，从资金来源账户转入一笔；余额不足则保留待执行。</span></span>
+      <span>自动定期划入<span class="mt-0.5 block text-xs font-normal text-blue-700">到期后会在打开仪表板或攒钱页时，从附属账户未冻结余额内部划入；余额不足则保留待执行。</span></span>
     </label>
     <div id="savings-auto-fields" class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div>
-        <label class="mb-1 block text-xs text-blue-900">资金来源账户</label>
-        <select name="source_account_id" class="w-full rounded border border-blue-200 bg-white px-2 py-1.5 text-sm">
-          <option value="0">请选择同币种普通账户</option>
-          {% for account in funding_accounts %}<option value="{{ account.id }}" {% if account.id == source_account_id %}selected{% endif %}>{{ account.name }} · {{ account.currency }}</option>{% endfor %}
-        </select>
-      </div>
-      <div>
-        <label class="mb-1 block text-xs text-blue-900">每次转入金额</label>
+        <label class="mb-1 block text-xs text-blue-900">每次划入金额</label>
         <input name="amount" type="number" min="0.01" step="0.01" value="{{ amount }}" class="w-full rounded border border-blue-200 px-2 py-1.5 text-sm font-mono">
       </div>
       <div>

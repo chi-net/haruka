@@ -15,6 +15,9 @@ pub struct Model {
     /// 只进不出的附属攒钱账户
     #[sea_orm(unique)]
     pub account_id: i64,
+    /// 已划入攒钱资金池的金额（整数分密文），与账户可用余额独立。
+    #[sea_orm(default_value = "")]
+    pub saved_amount: String,
     /// 自动转入的资金来源账户；空表示未启用自动转入
     pub source_account_id: Option<i64>,
     /// 每次自动转入金额（整数分密文）
