@@ -238,6 +238,11 @@ pub(crate) fn calculate(
             statement.has_future_entries = true;
             continue;
         }
+        // Installment amount edits already change installment principal; the
+        // matching offset adjustment must not also become ordinary debt.
+        if adjustment.installment_item_id.is_some() {
+            continue;
+        }
         events.push(Event {
             happened_at: adjustment.happened_at,
             source: 4,
@@ -534,6 +539,7 @@ mod tests {
                 account_id: 1,
                 from_balance: crypto::encrypt_cents(&self.dek, from),
                 to_balance: crypto::encrypt_cents(&self.dek, to),
+                installment_item_id: None,
                 happened_at: time(when),
                 created_at: time(when).and_utc(),
             });

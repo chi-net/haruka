@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}修改分期金额 - Haruka{% endblock %}
+{% block content %}
+<div class="max-w-xl">
+  <div class="flex items-start justify-between gap-3 mb-4">
+    <div><h1 class="text-xl font-bold">修改第 {{ sequence }} 期金额</h1><p class="text-sm text-gray-500 mt-1">{{ title }} · 还款日 {{ due_date }}</p></div>
+    <a href="/installments/{{ plan_id }}" class="text-blue-600 hover:underline text-sm">返回分期</a>
+  </div>
+  <div class="rounded-lg border bg-white p-4">
+    <div class="flex flex-wrap items-center gap-2 text-sm">
+      <span class="rounded-full bg-blue-50 px-2 py-0.5 text-blue-700">{{ status }}</span>
+      {% if adjusts_balance %}<span class="text-xs text-amber-700">修改后本金差额会调整信用账户余额，并写入余额调整流水。</span>{% else %}<span class="text-xs text-gray-500">仅修改未来计划，不调整当前账户余额。</span>{% endif %}
+    </div>
+    <dl class="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+      <div><dt class="text-xs text-gray-500">本金</dt><dd class="font-mono">{{ principal }}</dd></div>
+      <div><dt class="text-xs text-gray-500">利息</dt><dd class="font-mono">{{ interest }}</dd></div>
+      <div><dt class="text-xs text-gray-500">手续费</dt><dd class="font-mono">{{ fee }}</dd></div>
+      <div><dt class="text-xs text-gray-500">当前合计</dt><dd class="font-mono font-semibold">{{ total }}</dd></div>
+    </dl>
+    <form method="post" action="/installments/{{ plan_id }}/items/{{ item_id }}/amount" class="mt-4 space-y-3">
+      <label class="block">本期实际金额
+        <input name="amount" type="number" min="0" step="0.01" required class="mt-1 w-full rounded border px-3 py-2 font-mono" placeholder="例如 327.61">
+      </label>
+      <p class="text-xs text-gray-500">修改的是本期合计金额；利息和手续费保持不变，差额计入本金。已入账或即将入账的期次会同步调整账面欠款。</p>
+      <button class="rounded bg-blue-600 px-4 py-2 text-sm font-semibold text-white" hx-confirm="确认修改该期金额？">保存金额</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

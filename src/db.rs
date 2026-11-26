@@ -164,6 +164,7 @@ pub async fn init() -> DatabaseConnection {
     db.execute(builder.build(create_balance_adjustments.if_not_exists()))
         .await
         .expect("建表失败");
+    ensure_column(&db, "balance_adjustments", "installment_item_id", "INTEGER").await;
     let mut create_bills = schema.create_table_from_entity(bill::Entity);
     db.execute(builder.build(create_bills.if_not_exists()))
         .await

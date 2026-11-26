@@ -18,10 +18,13 @@ use std::{
 };
 
 use crate::{
+    credit_dates::{installment_billing_close, next_billing_close},
     crypto, currency,
     entity::{
-        account, account_detail, bill, category, installment_item, installment_plan, transfer,
+        account, account_detail, balance_adjustment, bill, category, installment_item,
+        installment_plan, transfer,
     },
+    installment_state::RefundContext,
     AppState, SessionDek,
 };
 
@@ -532,7 +535,49 @@ struct ScheduleRow {
     total: String,
     paid: bool,
     overdue: bool,
+    status: String,
+    editable: bool,
     repayment_account_name: String,
+}
+
+#[derive(Template)]
+#[template(path = "installment_item_form.html")]
+struct ItemAmountTemplate {
+    plan_id: i64,
+    item_id: i64,
+    title: String,
+    sequence: i32,
+    due_date: String,
+    status: String,
+    principal: String,
+    interest: String,
+    fee: String,
+    total: String,
+    adjusts_balance: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ItemAmountForm {
+    amount: String,
+}
+
+fn item_billing_status(
+    item: &installment_item::Model,
+    detail: Option<&account_detail::Model>,
+    today: NaiveDate,
+) -> HandlerResult<&'static str> {
+    if item.paid_at.is_some() {
+        return Ok("已还");
+    }
+    let close =
+        installment_billing_close(item.due_date, detail).map_err(|error| bad_request(&error))?;
+    if close <= today {
+        Ok("已入账")
+    } else if close == next_billing_close(today, detail).map_err(|error| bad_request(&error))? {
+        Ok("即将入账")
+    } else {
+        Ok("未入账")
+    }
 }
 
 struct RepaymentAccountOption {
@@ -1305,6 +1350,191 @@ async fn render_list(
     ))
 }
 
+pub async fn item_amount_form(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
+    Path((plan_id, item_id)): Path<(i64, i64)>,
+) -> HandlerResult<Html<String>> {
+    let plan = installment_plan::Entity::find_by_id(plan_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "分期计划不存在".into()))?;
+    if plan.deleted_at.is_some() {
+        return Err(bad_request("分期计划已删除"));
+    }
+    let item = installment_item::Entity::find_by_id(item_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "分期期次不存在".into()))?;
+    if item.plan_id != plan.id {
+        return Err(bad_request("期次不属于该分期计划"));
+    }
+    if item.paid_at.is_some() {
+        return Err(bad_request("已还期次不能修改金额"));
+    }
+    let bills = bill::Entity::find()
+        .filter(bill::Column::AccountId.eq(plan.account_id))
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let refund = RefundContext::new(&dek, &bills)
+        .map_err(|error| bad_request(&error))?
+        .state(&dek, &plan)
+        .map_err(|error| bad_request(&error))?;
+    if refund.full_refund || refund.needs_review {
+        return Err(bad_request("该分期已退款或待核对，不能修改金额"));
+    }
+    let account = account::Entity::find_by_id(plan.account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("分期账户不存在"))?;
+    let detail = account_detail::Entity::find_by_id(plan.account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?;
+    let status = item_billing_status(&item, detail.as_ref(), time_zone.today())?;
+    let principal = crypto::decrypt_cents(&dek, &item.principal);
+    let interest = crypto::decrypt_cents(&dek, &item.interest);
+    let fee = crypto::decrypt_cents(&dek, &item.fee);
+    let total = crypto::decrypt_cents(&dek, &item.total);
+    let html = ItemAmountTemplate {
+        plan_id,
+        item_id,
+        title: format!("分期计划 #{}", plan.id),
+        sequence: item.sequence,
+        due_date: item.due_date.format("%Y-%m-%d").to_string(),
+        status: status.into(),
+        principal: currency::format(principal, &account.currency),
+        interest: currency::format(interest, &account.currency),
+        fee: currency::format(fee, &account.currency),
+        total: currency::format(total, &account.currency),
+        adjusts_balance: status != "未入账",
+    }
+    .render()
+    .map_err(err500)?;
+    Ok(Html(html))
+}
+
+pub async fn update_item_amount(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Extension(time_zone): Extension<super::ClientTimeZone>,
+    Path((plan_id, item_id)): Path<(i64, i64)>,
+    Form(form): Form<ItemAmountForm>,
+) -> HandlerResult<Redirect> {
+    let _guard = state.balance_writes.lock().await;
+    let tx = state.db.begin().await.map_err(err500)?;
+    let plan = installment_plan::Entity::find_by_id(plan_id)
+        .one(&tx)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "分期计划不存在".into()))?;
+    if plan.deleted_at.is_some() {
+        return Err(bad_request("分期计划已删除"));
+    }
+    let item = installment_item::Entity::find_by_id(item_id)
+        .one(&tx)
+        .await
+        .map_err(err500)?
+        .ok_or((StatusCode::NOT_FOUND, "分期期次不存在".into()))?;
+    if item.plan_id != plan.id {
+        return Err(bad_request("期次不属于该分期计划"));
+    }
+    if item.paid_at.is_some() {
+        return Err(bad_request("已还期次不能修改金额"));
+    }
+    let bills = bill::Entity::find()
+        .filter(bill::Column::AccountId.eq(plan.account_id))
+        .all(&tx)
+        .await
+        .map_err(err500)?;
+    let refund = RefundContext::new(&dek, &bills)
+        .map_err(|error| bad_request(&error))?
+        .state(&dek, &plan)
+        .map_err(|error| bad_request(&error))?;
+    if refund.full_refund || refund.needs_review {
+        return Err(bad_request("该分期已退款或待核对，不能修改金额"));
+    }
+    let detail = account_detail::Entity::find_by_id(plan.account_id)
+        .one(&tx)
+        .await
+        .map_err(err500)?;
+    let status = item_billing_status(&item, detail.as_ref(), time_zone.today())?;
+    let interest = crypto::decrypt_cents(&dek, &item.interest);
+    let fee = crypto::decrypt_cents(&dek, &item.fee);
+    let old_total = crypto::decrypt_cents(&dek, &item.total);
+    let new_total = review_cents(&form.amount)?;
+    let new_principal = new_total
+        .checked_sub(interest)
+        .and_then(|value| value.checked_sub(fee))
+        .ok_or_else(|| bad_request("金额超出范围"))?;
+    if new_principal < 0 {
+        return Err(bad_request("金额不能小于该期的利息与手续费"));
+    }
+    let delta = new_total
+        .checked_sub(old_total)
+        .ok_or_else(|| bad_request("金额超出范围"))?;
+    if status != "未入账" && delta != 0 {
+        let account = account::Entity::find_by_id(plan.account_id)
+            .one(&tx)
+            .await
+            .map_err(err500)?
+            .ok_or_else(|| bad_request("分期账户不存在"))?;
+        let current = super::accounts::current_balance_on(&tx, &dek, account.id).await?;
+        // Amount increases add debt (balance decreases); amount decreases reduce debt.
+        let balance_delta = delta
+            .checked_neg()
+            .ok_or_else(|| bad_request("余额超出范围"))?;
+        let target = current
+            .checked_add(balance_delta)
+            .ok_or_else(|| bad_request("余额超出范围"))?;
+        super::accounts::ensure_allowed_balance(&tx, &dek, account.id, target).await?;
+        let offset = crypto::decrypt_cents(&dek, &account.balance_offset)
+            .checked_add(balance_delta)
+            .ok_or_else(|| bad_request("余额超出范围"))?;
+        let account_id = account.id;
+        let mut active = account.into_active_model();
+        active.balance_offset = Set(crypto::encrypt_cents(&dek, offset));
+        active.update(&tx).await.map_err(err500)?;
+        balance_adjustment::ActiveModel {
+            account_id: Set(account_id),
+            installment_item_id: Set(Some(item.id)),
+            from_balance: Set(crypto::encrypt_cents(&dek, current)),
+            to_balance: Set(crypto::encrypt_cents(&dek, target)),
+            happened_at: Set(chrono::Utc::now().naive_utc()),
+            created_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        }
+        .insert(&tx)
+        .await
+        .map_err(err500)?;
+    }
+    let mut active = item.into_active_model();
+    active.principal = Set(crypto::encrypt_cents(&dek, new_principal));
+    active.total = Set(crypto::encrypt_cents(&dek, new_total));
+    active.update(&tx).await.map_err(err500)?;
+    let items = installment_item::Entity::find()
+        .filter(installment_item::Column::PlanId.eq(plan.id))
+        .all(&tx)
+        .await
+        .map_err(err500)?;
+    let principal_sum = items
+        .iter()
+        .try_fold(0i64, |total, item| {
+            total.checked_add(crypto::decrypt_cents(&dek, &item.principal))
+        })
+        .ok_or_else(|| bad_request("分期本金超出范围"))?;
+    let mut plan_active = plan.into_active_model();
+    plan_active.principal = Set(crypto::encrypt_cents(&dek, principal_sum));
+    plan_active.update(&tx).await.map_err(err500)?;
+    tx.commit().await.map_err(err500)?;
+    Ok(Redirect::to(&format!("/installments/{plan_id}")))
+}
+
 pub async fn detail(
     State(state): State<AppState>,
     Extension(SessionDek(dek)): Extension<SessionDek>,
@@ -1406,32 +1636,52 @@ pub async fn detail(
         .collect::<HandlerResult<Vec<_>>>()?;
     let schedule = items
         .into_iter()
-        .map(|item| ScheduleRow {
-            id: item.id,
-            sequence: item.sequence,
-            due_date: item.due_date.format("%Y-%m-%d").to_string(),
-            principal: currency::format(
-                crypto::decrypt_cents(&dek, &item.principal),
-                &account.currency,
-            ),
-            interest: currency::format(
-                crypto::decrypt_cents(&dek, &item.interest),
-                &account.currency,
-            ),
-            fee: currency::format(crypto::decrypt_cents(&dek, &item.fee), &account.currency),
-            total: currency::format(crypto::decrypt_cents(&dek, &item.total), &account.currency),
-            paid: item.paid_at.is_some(),
-            overdue: plan.deleted_at.is_none()
+        .map(|item| {
+            let status = if plan.deleted_at.is_some() {
+                "已删除"
+            } else if refund.full_refund {
+                "已退款终止"
+            } else if refund.needs_review {
+                "待核对"
+            } else {
+                item_billing_status(&item, detail.as_ref(), today)?
+            };
+            let editable = plan.deleted_at.is_none()
                 && !refund.full_refund
                 && !refund.needs_review
-                && item.paid_at.is_none()
-                && item.due_date < today,
-            repayment_account_name: item
-                .repayment_account_id
-                .and_then(|id| repayment_account_names.get(&id).cloned())
-                .unwrap_or_default(),
+                && item.paid_at.is_none();
+            Ok(ScheduleRow {
+                id: item.id,
+                sequence: item.sequence,
+                due_date: item.due_date.format("%Y-%m-%d").to_string(),
+                principal: currency::format(
+                    crypto::decrypt_cents(&dek, &item.principal),
+                    &account.currency,
+                ),
+                interest: currency::format(
+                    crypto::decrypt_cents(&dek, &item.interest),
+                    &account.currency,
+                ),
+                fee: currency::format(crypto::decrypt_cents(&dek, &item.fee), &account.currency),
+                total: currency::format(
+                    crypto::decrypt_cents(&dek, &item.total),
+                    &account.currency,
+                ),
+                paid: item.paid_at.is_some(),
+                overdue: plan.deleted_at.is_none()
+                    && !refund.full_refund
+                    && !refund.needs_review
+                    && item.paid_at.is_none()
+                    && item.due_date < today,
+                status: status.into(),
+                editable,
+                repayment_account_name: item
+                    .repayment_account_id
+                    .and_then(|id| repayment_account_names.get(&id).cloned())
+                    .unwrap_or_default(),
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<HandlerResult<Vec<_>>>()?;
     let total_records = schedule.len();
     let pagination = super::pagination(total_records, query.page, query.per_page);
     let schedule = schedule

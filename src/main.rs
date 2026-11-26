@@ -645,6 +645,11 @@ async fn main() {
             "/installments/reconcile/decline",
             post(handlers::installment_reconcile::decline),
         )
+        .route(
+            "/installments/{plan_id}/items/{item_id}/amount",
+            get(handlers::installments::item_amount_form)
+                .post(handlers::installments::update_item_amount),
+        )
         .route("/installments/{id}", get(handlers::installments::detail))
         .route(
             "/installments/{id}/delete",

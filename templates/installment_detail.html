@@ -83,6 +83,8 @@
         <td class="px-4 py-2 text-right font-mono">{{ item.fee }}</td>
         <td class="px-4 py-2 text-right font-mono font-medium">{{ item.total }}</td>
         <td class="px-4 py-2 text-right whitespace-nowrap">
+          <div class="text-xs text-gray-500 mb-1">{{ item.status }}</div>
+          {% if item.editable %}<a href="/installments/{{ plan_id }}/items/{{ item.id }}/amount" class="text-xs text-blue-600 hover:underline mr-2">修改金额</a>{% endif %}
           {% if item.paid %}
           <div class="text-xs text-gray-500 mb-1">{% if !item.repayment_account_name.is_empty() %}{{ item.repayment_account_name }}{% else %}历史手动标记{% endif %}</div>
           <form method="post" action="/installments/items/{{ item.id }}/paid" class="inline"><input type="hidden" name="paid" value="false"><button class="text-green-700 hover:underline" hx-confirm="撤销这期还款并删除自动生成的本金转账及费用支出？">已还 · 撤销</button></form>

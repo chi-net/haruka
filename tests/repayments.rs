@@ -855,3 +855,81 @@ async fn far_future_installment_is_not_in_the_unbilled_total() {
     assert!(dashboard.contains("普通消费 CNY 0.00 · 待出账分期 CNY 0.00"));
     assert!(dashboard.contains("CNY 1200.00"));
 }
+
+#[tokio::test]
+async fn installment_periods_can_be_edited_with_only_billed_or_pending_balance_changes() {
+    use chrono::Datelike;
+
+    let app = TestApp::start().await;
+    let today = chrono::Utc::now().date_naive();
+    let card = app
+        .account_with_billing("credit_card", "CNY", today.day().min(28) as i32)
+        .await;
+    app.installment_bill(card, "982.83", today + chrono::Duration::days(3))
+        .await;
+    let item1 = app
+        .scalar("SELECT MIN(id) AS value FROM installment_items")
+        .await;
+    let item2 = app
+        .scalar("SELECT MAX(id) AS value FROM installment_items WHERE sequence = 2")
+        .await;
+    let item3 = app
+        .scalar("SELECT MAX(id) AS value FROM installment_items WHERE sequence = 3")
+        .await;
+
+    let detail = app.get("/installments/1").await.text().await.unwrap();
+    assert!(detail.contains("已入账"));
+    assert!(detail.contains("即将入账"));
+    assert!(detail.contains("未入账"));
+    assert!(detail.contains("修改金额"));
+
+    assert_eq!(
+        app.post(
+            &format!("/installments/1/items/{item1}/amount"),
+            &[("amount", "300.00".into())]
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(app.balance(card).await, "CNY -955.22");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM balance_adjustments")
+            .await,
+        1
+    );
+
+    assert_eq!(
+        app.post(
+            &format!("/installments/1/items/{item2}/amount"),
+            &[("amount", "350.00".into())]
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(app.balance(card).await, "CNY -977.61");
+    let dashboard = app.get("/dashboard").await.text().await.unwrap();
+    assert!(dashboard.contains("普通消费 CNY 0.00"));
+
+    assert_eq!(
+        app.post(
+            &format!("/installments/1/items/{item3}/amount"),
+            &[("amount", "400.00".into())]
+        )
+        .await
+        .status(),
+        StatusCode::SEE_OTHER
+    );
+    assert_eq!(app.balance(card).await, "CNY -977.61");
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM balance_adjustments")
+            .await,
+        2
+    );
+
+    let detail = app.get("/installments/1").await.text().await.unwrap();
+    assert!(detail.contains("CNY 300.00"));
+    assert!(detail.contains("CNY 350.00"));
+    assert!(detail.contains("CNY 400.00"));
+}

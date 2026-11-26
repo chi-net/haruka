@@ -9,6 +9,8 @@ pub struct Model {
     /// 调整前、后的账户原币余额（整数分密文）。
     pub from_balance: String,
     pub to_balance: String,
+    /// Set when this adjustment represents an installment period amount edit.
+    pub installment_item_id: Option<i64>,
     pub happened_at: DateTime,
     pub created_at: DateTimeUtc,
 }
