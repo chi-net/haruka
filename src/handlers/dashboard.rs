@@ -402,7 +402,6 @@ pub async fn show(
     Extension(time_zone): Extension<super::ClientTimeZone>,
 ) -> HandlerResult<Html<String>> {
     let today = time_zone.today();
-    super::installments::repair_paid_installment_bills(&state, &dek).await?;
     let balance_guard = state.balance_writes.lock().await;
     let accounts = account::Entity::find()
         .order_by_asc(account::Column::Id)
@@ -587,38 +586,33 @@ pub async fn show(
                     .checked_add(due.total)
                     .ok_or_else(|| err500("已出账应还金额超出范围"))
             })?;
-            let unbilled_residual =
-                if due_total == 0 && statement.unbilled == 0 && statement.unbilled_installment == 0
-                {
-                    amounts
-                        .used
-                        .saturating_sub(statement.installment_principal)
-                        .max(0)
-                } else {
-                    0
-                };
+            let ordinary_due = statement.due.iter().try_fold(0i64, |total, due| {
+                total
+                    .checked_add(due.ordinary)
+                    .ok_or_else(|| err500("已出账应还金额超出范围"))
+            })?;
+            // The account balance already nets every repayment and credit.
+            // Derive the remaining unbilled ordinary debt from balance minus
+            // installment principal and ordinary amount already billed.
+            let unbilled_residual = amounts
+                .used
+                .saturating_sub(statement.installment_principal)
+                .saturating_sub(ordinary_due)
+                .max(0);
             credit_accounts.push(CreditAccountSummary {
                 name,
                 kind: account_kind_label(&account.kind).into(),
                 used: currency::format(amounts.used, &account.currency),
                 available: currency::format(amounts.available, &account.currency),
                 limit: currency::format(limit, &account.currency),
-                unbilled: currency::format(
-                    statement
-                        .unbilled
-                        .checked_add(unbilled_residual)
-                        .ok_or_else(|| err500("未出账金额超出范围"))?,
-                    &account.currency,
-                ),
+                unbilled: currency::format(unbilled_residual, &account.currency),
                 unbilled_installment: currency::format(
                     statement.unbilled_installment,
                     &account.currency,
                 ),
                 unbilled_total: currency::format(
-                    statement
-                        .unbilled
+                    unbilled_residual
                         .checked_add(statement.unbilled_installment)
-                        .and_then(|total| total.checked_add(unbilled_residual))
                         .ok_or_else(|| err500("未出账金额超出范围"))?,
                     &account.currency,
                 ),

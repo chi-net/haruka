@@ -251,8 +251,6 @@ pub async fn apply(
         active.update(&tx).await.map_err(err500)?;
     }
     tx.commit().await.map_err(err500)?;
-    drop(_guard);
-    super::installments::repair_paid_installment_bills(&state, &dek).await?;
     let _ = changed;
     Ok(Redirect::to("/installments/reconcile").into_response())
 }

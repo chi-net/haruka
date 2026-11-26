@@ -1420,7 +1420,6 @@ pub async fn update_item_amount(
     Path((plan_id, item_id)): Path<(i64, i64)>,
     Form(form): Form<ItemAmountForm>,
 ) -> HandlerResult<Redirect> {
-    repair_paid_installment_bills(&state, &dek).await?;
     let _guard = state.balance_writes.lock().await;
     let tx = state.db.begin().await.map_err(err500)?;
     let plan = installment_plan::Entity::find_by_id(plan_id)
@@ -1511,6 +1510,7 @@ pub async fn update_item_amount(
 /// Older reconciliation/paid flags may have marked a period paid without
 /// reducing the original installment bill. Remove the paid principal from the
 /// bill once, or just mark it reconciled when an old balance adjustment exists.
+#[allow(dead_code)]
 pub async fn repair_paid_installment_bills(
     state: &AppState,
     dek: &crypto::Dek,
