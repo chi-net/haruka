@@ -18,6 +18,9 @@ pub struct Model {
     pub repayment_account_id: Option<i64>,
     pub principal_transfer_id: Option<i64>,
     pub charge_bill_id: Option<i64>,
+    /// Whether this item's principal was already removed from the original bill.
+    #[sea_orm(default_value = false)]
+    pub bill_adjusted: bool,
     pub created_at: DateTimeUtc,
 }
 

@@ -402,6 +402,7 @@ pub async fn show(
     Extension(time_zone): Extension<super::ClientTimeZone>,
 ) -> HandlerResult<Html<String>> {
     let today = time_zone.today();
+    super::installments::repair_paid_installment_bills(&state, &dek).await?;
     let balance_guard = state.balance_writes.lock().await;
     let accounts = account::Entity::find()
         .order_by_asc(account::Column::Id)

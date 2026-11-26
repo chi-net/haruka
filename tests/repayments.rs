@@ -824,7 +824,7 @@ async fn stock_reconcile_prompts_previews_and_only_changes_after_confirmation() 
             .await,
         2
     );
-    assert_eq!(app.balance(card).await, "CNY -286.42");
+    assert_eq!(app.balance(card).await, "CNY 513.58");
     assert_eq!(
         app.text("SELECT installment_reconcile_state AS value FROM meta WHERE id = 1")
             .await,
@@ -984,5 +984,34 @@ async fn paid_installment_period_amount_can_be_edited_without_undo() {
         app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE paid_at IS NOT NULL")
             .await,
         1
+    );
+}
+
+#[tokio::test]
+async fn dashboard_repairs_paid_periods_that_never_reduced_the_original_bill() {
+    let app = TestApp::start().await;
+    let today = chrono::Utc::now().date_naive();
+    let card = app.account_with_billing("credit_card", "CNY", 11).await;
+    app.installment_bill(card, "982.83", today + chrono::Duration::days(3))
+        .await;
+    app.bill(card, "240.15").await;
+    app.db
+        .execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "UPDATE installment_items SET paid_at = '2026-11-26T00:00:00+00:00' WHERE sequence <= 2"
+                .to_owned(),
+        ))
+        .await
+        .unwrap();
+
+    let dashboard = app.get("/dashboard").await.text().await.unwrap();
+    assert_eq!(app.balance(card).await, "CNY -567.76");
+    assert!(dashboard.contains("普通消费 CNY 240.15"));
+    assert!(dashboard.contains("分期剩余本金"));
+    assert!(dashboard.contains("CNY 327.61"));
+    assert_eq!(
+        app.scalar("SELECT COUNT(*) AS value FROM installment_items WHERE bill_adjusted = 1")
+            .await,
+        2
     );
 }

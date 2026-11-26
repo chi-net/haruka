@@ -200,6 +200,13 @@ pub async fn init() -> DatabaseConnection {
     ensure_column(&db, "installment_items", "charge_bill_id", "INTEGER").await;
     ensure_column(
         &db,
+        "installment_items",
+        "bill_adjusted",
+        "BOOLEAN NOT NULL DEFAULT 0",
+    )
+    .await;
+    ensure_column(
+        &db,
         "installment_plans",
         "principal",
         "TEXT NOT NULL DEFAULT ''",

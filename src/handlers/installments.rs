@@ -21,7 +21,8 @@ use crate::{
     credit_dates::{installment_billing_close, next_billing_close},
     crypto, currency,
     entity::{
-        account, account_detail, bill, category, installment_item, installment_plan, transfer,
+        account, account_detail, balance_adjustment, bill, category, installment_item,
+        installment_plan, transfer,
     },
     installment_state::RefundContext,
     AppState, SessionDek,
@@ -1419,6 +1420,7 @@ pub async fn update_item_amount(
     Path((plan_id, item_id)): Path<(i64, i64)>,
     Form(form): Form<ItemAmountForm>,
 ) -> HandlerResult<Redirect> {
+    repair_paid_installment_bills(&state, &dek).await?;
     let _guard = state.balance_writes.lock().await;
     let tx = state.db.begin().await.map_err(err500)?;
     let plan = installment_plan::Entity::find_by_id(plan_id)
@@ -1482,9 +1484,11 @@ pub async fn update_item_amount(
             active.update(&tx).await.map_err(err500)?;
         }
     }
+    let was_paid = item.paid_at.is_some();
     let mut active = item.into_active_model();
     active.principal = Set(crypto::encrypt_cents(&dek, new_principal));
     active.total = Set(crypto::encrypt_cents(&dek, new_total));
+    active.bill_adjusted = Set(was_paid);
     active.update(&tx).await.map_err(err500)?;
     let items = installment_item::Entity::find()
         .filter(installment_item::Column::PlanId.eq(plan.id))
@@ -1502,6 +1506,62 @@ pub async fn update_item_amount(
     plan_active.update(&tx).await.map_err(err500)?;
     tx.commit().await.map_err(err500)?;
     Ok(Redirect::to(&format!("/installments/{plan_id}")))
+}
+
+/// Older reconciliation/paid flags may have marked a period paid without
+/// reducing the original installment bill. Remove the paid principal from the
+/// bill once, or just mark it reconciled when an old balance adjustment exists.
+pub async fn repair_paid_installment_bills(
+    state: &AppState,
+    dek: &crypto::Dek,
+) -> HandlerResult<()> {
+    let _guard = state.balance_writes.lock().await;
+    let items = installment_item::Entity::find()
+        .filter(installment_item::Column::PaidAt.is_not_null())
+        .filter(installment_item::Column::PrincipalTransferId.is_null())
+        .filter(installment_item::Column::BillAdjusted.eq(false))
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    if items.is_empty() {
+        return Ok(());
+    }
+    let tx = state.db.begin().await.map_err(err500)?;
+    for item in items {
+        let adjusted = balance_adjustment::Entity::find()
+            .filter(balance_adjustment::Column::InstallmentItemId.eq(item.id))
+            .one(&tx)
+            .await
+            .map_err(err500)?
+            .is_some();
+        if !adjusted {
+            if let Some(plan) = installment_plan::Entity::find_by_id(item.plan_id)
+                .one(&tx)
+                .await
+                .map_err(err500)?
+            {
+                if let Some(bill_id) = plan.bill_id {
+                    if let Some(bill) = bill::Entity::find_by_id(bill_id)
+                        .one(&tx)
+                        .await
+                        .map_err(err500)?
+                    {
+                        let principal = crypto::decrypt_cents(dek, &item.principal);
+                        let original = crypto::decrypt_cents(dek, &bill.amount);
+                        let updated = original.saturating_sub(principal);
+                        let mut active = bill.into_active_model();
+                        active.amount = Set(crypto::encrypt_cents(dek, updated));
+                        active.update(&tx).await.map_err(err500)?;
+                    }
+                }
+            }
+        }
+        let mut active = item.into_active_model();
+        active.bill_adjusted = Set(true);
+        active.update(&tx).await.map_err(err500)?;
+    }
+    tx.commit().await.map_err(err500)?;
+    Ok(())
 }
 
 pub async fn detail(
@@ -2144,6 +2204,7 @@ mod annual_tests {
             repayment_account_id: None,
             principal_transfer_id: None,
             charge_bill_id: None,
+            bill_adjusted: false,
             created_at: chrono::Utc::now(),
         }
     }

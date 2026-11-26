@@ -589,6 +589,7 @@ mod tests {
                 repayment_account_id: None,
                 principal_transfer_id: None,
                 charge_bill_id: None,
+                bill_adjusted: false,
                 created_at: time("2026-01-01 00:00:00").and_utc(),
             });
         }
