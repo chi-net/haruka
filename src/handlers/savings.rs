@@ -16,7 +16,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto, currency,
-    entity::{account, account_detail, bill, category, meta, savings_project, transfer},
+    entity::{account, account_detail, meta, savings_project, transfer},
     AppState, SessionDek,
 };
 
@@ -150,8 +150,6 @@ pub struct WithdrawForm {
 #[derive(Deserialize)]
 pub struct RedeemForm {
     #[serde(default)]
-    amount: String,
-    #[serde(default)]
     note: String,
     #[serde(default)]
     confirm_redeem: bool,
@@ -207,18 +205,6 @@ fn parse_amount(value: &str, label: &str) -> HandlerResult<i64> {
     (decimal * Decimal::from(100))
         .to_i64()
         .ok_or_else(|| bad_request(&format!("{label}超出范围")))
-}
-
-fn parse_redeem_amount(value: &str) -> HandlerResult<i64> {
-    let decimal = Decimal::from_str(value.trim())
-        .map_err(|_| bad_request("实际消费金额格式不正确"))?
-        .round_dp(2);
-    if decimal < Decimal::ZERO {
-        return Err(bad_request("实际消费金额不能为负数"));
-    }
-    (decimal * Decimal::from(100))
-        .to_i64()
-        .ok_or_else(|| bad_request("实际消费金额超出范围"))
 }
 
 async fn has_legacy_targets(state: &AppState, dek: &crypto::Dek) -> HandlerResult<bool> {
@@ -993,90 +979,16 @@ pub async fn redeem(
     if form.note.chars().count() > 1000 {
         return Err(bad_request("兑现说明不能超过 1000 个字符"));
     }
-    let amount = parse_redeem_amount(&form.amount)?;
-    let savings = account::Entity::find_by_id(project.account_id)
-        .one(&state.db)
-        .await
-        .map_err(err500)?
-        .ok_or_else(|| bad_request("攒钱附属账户不存在"))?;
-    let balance = super::accounts::current_balance(&state, &dek, savings.id).await?;
-    if amount > balance {
-        return Err(bad_request("实际消费金额超过攒钱账户余额"));
-    }
-    if amount > 0 {
-        super::accounts::ensure_balance_delta_allow_savings(
-            &state,
-            &dek,
-            savings.id,
-            amount
-                .checked_neg()
-                .ok_or_else(|| bad_request("金额超出范围"))?,
-        )
-        .await?;
-    }
-    let name = crypto::decrypt_string(&dek, &project.name);
     let note = form.note.trim();
     let now = chrono::Utc::now();
-    let transaction = state.db.begin().await.map_err(err500)?;
-    if amount > 0 {
-        let categories = category::Entity::find()
-            .filter(category::Column::Kind.eq("expense"))
-            .all(&transaction)
-            .await
-            .map_err(err500)?;
-        let category = if let Some(category) = categories
-            .iter()
-            .find(|item| crypto::decrypt_string(&dek, &item.name) == "攒钱兑现")
-        {
-            category.clone()
-        } else {
-            category::ActiveModel {
-                kind: Set("expense".into()),
-                name: Set(crypto::encrypt(&dek, "攒钱兑现".as_bytes())),
-                is_food: Set(false),
-                count_limit: Set(String::new()),
-                count_limit_period: Set("month".into()),
-                created_at: Set(now),
-                ..Default::default()
-            }
-            .insert(&transaction)
-            .await
-            .map_err(err500)?
-        };
-        let bill_note = if note.is_empty() {
-            format!("攒钱兑现 · {name}")
-        } else {
-            format!("攒钱兑现 · {name} · {note}")
-        };
-        bill::ActiveModel {
-            account_id: Set(savings.id),
-            kind: Set("expense".into()),
-            amount: Set(crypto::encrypt_cents(&dek, amount)),
-            category: Set(crypto::encrypt(&dek, "攒钱兑现".as_bytes())),
-            category_id: Set(Some(category.id)),
-            is_food: Set(false),
-            note: Set(crypto::encrypt(&dek, bill_note.as_bytes())),
-            happened_at: Set(now.naive_utc()),
-            created_at: Set(now),
-            ..Default::default()
-        }
-        .insert(&transaction)
-        .await
-        .map_err(err500)?;
-    }
     let mut active = project.into_active_model();
     active.status = Set("realized".into());
-    active.realized_amount = Set(if amount > 0 {
-        crypto::encrypt_cents(&dek, amount)
-    } else {
-        String::new()
-    });
+    active.realized_amount = Set(String::new());
     active.realized_at = Set(Some(now));
     active.realized_note = Set(crypto::encrypt(&dek, note.as_bytes()));
     active.auto_enabled = Set(false);
     active.next_run_at = Set(None);
-    active.update(&transaction).await.map_err(err500)?;
-    transaction.commit().await.map_err(err500)?;
+    active.update(&state.db).await.map_err(err500)?;
     Ok(Redirect::to("/savings"))
 }
 

@@ -1147,4 +1147,39 @@ async fn savings_requires_a_target_and_freezes_the_linked_account() {
         .await;
     assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
     assert_eq!(app.balance(savings).await, "CNY 50.00");
+
+    let redeemed = app
+        .post(
+            &format!("/savings/{project}/redeem"),
+            &[
+                ("note", "已购买相机".into()),
+                ("confirm_redeem", "true".into()),
+            ],
+        )
+        .await;
+    assert_eq!(redeemed.status(), StatusCode::SEE_OTHER);
+    let page = app.get("/savings").await.text().await.unwrap();
+    assert!(page.contains("已兑现，附属账户资金已全部解除冻结"));
+    assert_eq!(app.balance(savings).await, "CNY 50.00");
+
+    let spent = app
+        .post(
+            "/bills",
+            &[
+                ("account_id", savings.to_string()),
+                ("kind", "expense".into()),
+                ("amount", "10.00".into()),
+                ("category", "餐饮".into()),
+                ("note", String::new()),
+                (
+                    "happened_at",
+                    (chrono::Utc::now() - chrono::Duration::minutes(1))
+                        .format("%Y-%m-%dT%H:%M")
+                        .to_string(),
+                ),
+            ],
+        )
+        .await;
+    assert_eq!(spent.status(), StatusCode::OK);
+    assert_eq!(app.balance(savings).await, "CNY 40.00");
 }

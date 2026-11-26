@@ -43,7 +43,8 @@
       <p class="mt-1 text-xs text-gray-500">{{ project.auto_label }}{% if !project.next_run_value.is_empty() %} · 下一次 <time data-utc-time="{{ project.next_run_value }}">{{ project.next_run_value }}</time>{% endif %}</p>
       {% if project.realized %}
       <div class="mt-3 rounded border border-green-200 bg-green-50 p-2 text-xs text-green-900">
-        <p>{% if project.kind == "fund" %}资金目标已达成。{% else %}已兑现 · 实际消费 <span class="font-mono">{{ project.realized_amount }}</span>。{% endif %}</p>
+        <p>{% if project.kind == "fund" %}资金目标已达成，资金继续冻结。{% else %}已兑现，附属账户资金已全部解除冻结。{% endif %}</p>
+        {% if project.kind == "item" && !project.realized_amount.is_empty() %}<p class="mt-1">历史兑现记录：实际消费 <span class="font-mono">{{ project.realized_amount }}</span>。</p>{% endif %}
         {% if !project.realized_at.is_empty() %}<p class="mt-1 text-gray-600">时间：<time data-utc-time="{{ project.realized_at }}">{{ project.realized_at }}</time></p>{% endif %}
         {% if !project.realized_note.is_empty() %}<p class="mt-1 whitespace-pre-wrap">{{ project.realized_note }}</p>{% endif %}
       </div>
@@ -67,18 +68,14 @@
     {% if project.can_redeem %}
     <details class="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
       <summary class="cursor-pointer text-xs font-semibold text-emerald-900">兑现实体物品</summary>
-      <p class="mt-2 text-xs text-emerald-800">填写实际消费金额；会从攒钱账户生成一笔“攒钱兑现”支出并把本项目标记为已兑现。实际消费可为 0。</p>
-      <form method="post" action="/savings/{{ project.id }}/redeem" class="mt-2 space-y-2" hx-confirm="确认兑现该攒钱项目？实际消费会从攒钱账户扣除。">
+      <p class="mt-2 text-xs text-emerald-800">确认已兑现后项目直接显示“已兑现”，附属账户里的全部资金立即解除冻结，可自由使用；实际购买支出请在兑现后按普通账单记录，不再从攒钱账户自动扣款。</p>
+      <form method="post" action="/savings/{{ project.id }}/redeem" class="mt-2 space-y-2" hx-confirm="确认该实体物品已经兑现？确认后附属账户全部资金解除冻结。">
         <div>
-          <label class="mb-1 block text-xs font-medium">实际消费金额</label>
-          <input name="amount" type="number" min="0" step="0.01" required class="w-full rounded border px-2 py-1.5 text-sm font-mono">
+          <label class="mb-1 block text-xs font-medium">兑现说明（可选）</label>
+          <input name="note" maxlength="1000" placeholder="例如：已购买相机" class="w-full rounded border px-2 py-1.5 text-sm">
         </div>
-        <div>
-          <label class="mb-1 block text-xs font-medium">兑现说明</label>
-          <input name="note" maxlength="1000" placeholder="例如：购买相机、实际成交价" class="w-full rounded border px-2 py-1.5 text-sm">
-        </div>
-        <label class="flex items-start gap-2 text-xs text-emerald-900"><input type="checkbox" name="confirm_redeem" value="true" required class="mt-0.5"><span>我确认项目已兑现，实际消费金额按上方填写。</span></label>
-        <button class="rounded bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white">确认兑现</button>
+        <label class="flex items-start gap-2 text-xs text-emerald-900"><input type="checkbox" name="confirm_redeem" value="true" required class="mt-0.5"><span>我确认项目已兑现，并了解全部资金将解除冻结。</span></label>
+        <button class="rounded bg-emerald-700 px-3 py-1.5 text-sm font-semibold text-white">确认已兑现</button>
       </form>
     </details>
     {% endif %}
