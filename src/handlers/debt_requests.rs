@@ -1491,10 +1491,10 @@ pub async fn create(
         return Err(bad_request("计息本金超过原借款或该对象同币种尚欠金额"));
     }
     let paid_at = if !requires_confirmation {
-        Some(
-            NaiveDateTime::parse_from_str(form.paid_at.trim(), TIME_FMT)
-                .map_err(|_| bad_request("实际收付时间格式不正确"))?,
-        )
+        let paid_at = NaiveDateTime::parse_from_str(form.paid_at.trim(), TIME_FMT)
+            .map_err(|_| bad_request("实际收付时间格式不正确"))?;
+        super::validate_occurred_at(paid_at)?;
+        Some(paid_at)
     } else {
         None
     };
@@ -2016,6 +2016,7 @@ pub async fn submit(
     let amount_cents = parse_amount(&form.amount)?;
     let paid_at = NaiveDateTime::parse_from_str(form.paid_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("打款时间格式不正确"))?;
+    super::validate_occurred_at(paid_at)?;
     let submission = PayerSubmission {
         version: 1,
         payer_name: payer_name.into(),

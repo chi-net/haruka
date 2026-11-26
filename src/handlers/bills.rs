@@ -440,6 +440,7 @@ fn parse_form(form: BillFormData) -> HandlerResult<ParsedBill> {
     }
     let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确"))?;
+    super::validate_occurred_at(happened_at)?;
     Ok(ParsedBill {
         account_id,
         kind: form.kind,

@@ -228,6 +228,7 @@ pub async fn create(
         .ok_or_else(|| bad_request("转账本金和手续费合计超出范围"))?;
     let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确"))?;
+    super::validate_occurred_at(happened_at)?;
     let to_amount = if from_account.currency == to_account.currency {
         amount
     } else if form.to_amount.trim().is_empty() {

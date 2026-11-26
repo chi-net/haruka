@@ -410,6 +410,7 @@ pub async fn create(
     let _guard = state.balance_writes.lock().await;
     let happened_at = NaiveDateTime::parse_from_str(form.happened_at.trim(), TIME_FMT)
         .map_err(|_| bad_request("时间格式不正确（使用 UTC）"))?;
+    super::validate_occurred_at(happened_at)?;
     let tx = state.db.begin().await.map_err(err500)?;
     let from = account::Entity::find_by_id(form.from_account_id)
         .one(&tx)

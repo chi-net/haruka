@@ -271,6 +271,10 @@ window.harukaInitLocalTimes = function(root) {
       target.name = picker.name;
       picker.removeAttribute('name');
     }
+    if (target.name === 'happened_at') {
+      picker.min = '1970-01-01T00:00';
+      picker.max = window.harukaLocalDateTimeValue(new Date());
+    }
     const stored = target.value || picker.dataset.utcValue;
     const date = window.harukaUtcDate(stored);
     if (date) picker.value = window.harukaLocalDateTimeValue(date);

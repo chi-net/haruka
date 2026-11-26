@@ -517,8 +517,8 @@ async fn repayment_validation_and_insufficient_aggregate_payment_are_atomic() {
     assert_eq!(app.balance(source).await, "CNY 10.00");
     assert_eq!(app.balance(target).await, "CNY -290.00");
 
-    // Future income affects the real balance but not today's statement estimate.
-    // Never turn an estimate larger than actual debt into a second, phantom loan.
+    // Historical income can make the estimate larger than the actual debt.
+    // Never turn that estimate into a second, phantom loan.
     app.bill(other_credit, "300").await;
     assert_eq!(
         app.post(
@@ -531,7 +531,7 @@ async fn repayment_validation_and_insufficient_aggregate_payment_are_atomic() {
                 ("note", String::new()),
                 (
                     "happened_at",
-                    (chrono::Utc::now() + chrono::Duration::days(2))
+                    (chrono::Utc::now() - chrono::Duration::minutes(1))
                         .format("%Y-%m-%dT%H:%M")
                         .to_string()
                 ),
@@ -541,7 +541,7 @@ async fn repayment_validation_and_insufficient_aggregate_payment_are_atomic() {
         .status(),
         StatusCode::OK
     );
-    assert_eq!(app.options(other_credit).await["ordinary_cents"], "30000");
+    assert_eq!(app.options(other_credit).await["ordinary_cents"], "5000");
     assert_eq!(app.balance(other_credit).await, "CNY -50.00");
     let before = app.counts().await;
     assert_eq!(
@@ -1012,4 +1012,47 @@ async fn dashboard_derives_unbilled_from_debt_and_installments() {
     assert!(dashboard.contains("普通消费 CNY 895.37"));
     assert!(dashboard.contains("分期剩余本金"));
     assert!(dashboard.contains("CNY 327.61"));
+}
+
+#[tokio::test]
+async fn rejects_future_and_pre_1970_bill_times() {
+    let app = TestApp::start().await;
+    let account = app.account_with_billing("credit_card", "CNY", 1).await;
+    let base = [
+        ("account_id", account.to_string()),
+        ("kind", "expense".into()),
+        ("amount", "1.00".into()),
+        ("category", "餐饮".into()),
+        ("note", String::new()),
+    ];
+    let future = (chrono::Utc::now() + chrono::Duration::hours(1))
+        .format("%Y-%m-%dT%H:%M")
+        .to_string();
+    let mut fields = base.to_vec();
+    fields.push(("happened_at", future));
+    let response = app.post("/bills", &fields).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let old = (chrono::NaiveDate::from_ymd_opt(1969, 12, 31)
+        .unwrap()
+        .and_hms_opt(23, 59, 0)
+        .unwrap())
+    .format("%Y-%m-%dT%H:%M")
+    .to_string();
+    let mut fields = base.to_vec();
+    fields.push(("happened_at", old));
+    let response = app.post("/bills", &fields).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let mut fields = base.to_vec();
+    fields.push((
+        "happened_at",
+        (chrono::Utc::now() - chrono::Duration::minutes(1))
+            .format("%Y-%m-%dT%H:%M")
+            .to_string(),
+    ));
+    let response = app.post("/bills", &fields).await;
+    let status = response.status();
+    let body = response.text().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
 }

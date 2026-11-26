@@ -36,7 +36,27 @@ use axum::{
     response::{Html, IntoResponse, Response},
     Json,
 };
+use chrono::{NaiveDate, NaiveDateTime, Utc};
 use serde::Serialize;
+/// Business records cannot predate 1970 or use a future timestamp.
+pub(crate) fn validate_occurred_at(value: NaiveDateTime) -> Result<(), (StatusCode, String)> {
+    let minimum = NaiveDate::from_ymd_opt(1970, 1, 1)
+        .and_then(|date| date.and_hms_opt(0, 0, 0))
+        .expect("固定最小时间有效");
+    if value < minimum {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "时间不能早于 1970 年 1 月 1 日".into(),
+        ));
+    }
+    if value > Utc::now().naive_utc() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "不能记录未来时间；请等待实际发生后再添加".into(),
+        ));
+    }
+    Ok(())
+}
 
 /// 无时区数据库时间始终按 UTC 解释；仅查询和自然日聚合转换访问者的 IANA 时区。
 #[derive(Clone, Copy)]
