@@ -79,7 +79,7 @@
         <section data-credit-unbilled class="flex flex-wrap items-baseline justify-between gap-1">
           <h4 class="text-gray-700">未出账总额</h4><p class="font-mono font-semibold break-all">{{ service.unbilled_total }}</p>
         </section>
-        <p class="mt-1 text-xs text-gray-500">普通消费 {{ service.unbilled }} · 待出账分期 {{ service.unbilled_installment }}{% if service.has_unbilled_residual %} · 账面差额 {{ service.unbilled_residual }}{% endif %}</p>
+        <p class="mt-1 text-xs text-gray-500">普通消费 {{ service.unbilled }} · 待出账分期 {{ service.unbilled_installment }}</p>
         <section data-credit-installments class="mt-2">
           {% match service.next_installment %}
           {% when Some with (period) %}
