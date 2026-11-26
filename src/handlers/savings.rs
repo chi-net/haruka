@@ -16,7 +16,7 @@ use std::{collections::HashMap, str::FromStr};
 
 use crate::{
     crypto, currency,
-    entity::{account, account_detail, bill, category, savings_project, transfer},
+    entity::{account, account_detail, bill, category, meta, savings_project, transfer},
     AppState, SessionDek,
 };
 
@@ -66,6 +66,19 @@ struct SavingsTemplate {
     projects: Vec<ProjectRow>,
     funding_accounts: Vec<AccountOption>,
     has_projects: bool,
+    legacy_targets: bool,
+}
+
+#[derive(Template)]
+#[template(path = "savings_targets.html")]
+struct SavingsTargetsTemplate {
+    rows: Vec<TargetRow>,
+}
+
+struct TargetRow {
+    id: i64,
+    name: String,
+    target: String,
 }
 
 #[derive(Template)]
@@ -113,6 +126,13 @@ pub struct SavingsFormData {
 
 #[derive(Deserialize)]
 pub struct DepositForm {
+    from_account_id: i64,
+    amount: String,
+}
+
+#[derive(Deserialize)]
+pub struct QuickDepositForm {
+    project_id: i64,
     from_account_id: i64,
     amount: String,
 }
@@ -201,6 +221,71 @@ fn parse_redeem_amount(value: &str) -> HandlerResult<i64> {
         .ok_or_else(|| bad_request("实际消费金额超出范围"))
 }
 
+async fn has_legacy_targets(state: &AppState, dek: &crypto::Dek) -> HandlerResult<bool> {
+    let projects = savings_project::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let _ = dek;
+    Ok(projects
+        .iter()
+        .any(|project| crypto::decrypt_cents(dek, &project.target_amount) <= 0))
+}
+
+pub async fn targets_form(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+) -> HandlerResult<Html<String>> {
+    let projects = savings_project::Entity::find()
+        .order_by_asc(savings_project::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let rows = projects
+        .into_iter()
+        .filter(|project| crypto::decrypt_cents(&dek, &project.target_amount) <= 0)
+        .map(|project| TargetRow {
+            id: project.id,
+            name: crypto::decrypt_string(&dek, &project.name),
+            target: String::new(),
+        })
+        .collect();
+    let html = SavingsTargetsTemplate { rows }.render().map_err(err500)?;
+    Ok(Html(html))
+}
+
+pub async fn apply_targets(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Form(values): Form<HashMap<String, String>>,
+) -> HandlerResult<Redirect> {
+    let _guard = state.balance_writes.lock().await;
+    let projects = savings_project::Entity::find()
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let tx = state.db.begin().await.map_err(err500)?;
+    for project in projects {
+        if crypto::decrypt_cents(&dek, &project.target_amount) > 0 {
+            continue;
+        }
+        let value = values
+            .get(&format!("target_{}", project.id))
+            .ok_or_else(|| bad_request("请为所有历史攒钱项目填写目标金额"))?;
+        let target = parse_amount(value, "目标金额")?;
+        let mut active = project.into_active_model();
+        active.target_amount = Set(crypto::encrypt_cents(&dek, target));
+        active.update(&tx).await.map_err(err500)?;
+    }
+    if let Some(row) = meta::Entity::find_by_id(1).one(&tx).await.map_err(err500)? {
+        let mut active = row.into_active_model();
+        active.savings_target_state = Set("done".into());
+        active.update(&tx).await.map_err(err500)?;
+    }
+    tx.commit().await.map_err(err500)?;
+    Ok(Redirect::to("/savings"))
+}
+
 fn parse_kind_target(form: &SavingsFormData) -> HandlerResult<(String, i64)> {
     let kind = if form.kind.trim().is_empty() {
         "item"
@@ -208,10 +293,9 @@ fn parse_kind_target(form: &SavingsFormData) -> HandlerResult<(String, i64)> {
         form.kind.trim()
     };
     match kind {
-        "item" => Ok(("item".into(), 0)),
-        "fund" => {
-            let target = parse_amount(&form.target_amount, "资金目标金额")?;
-            Ok(("fund".into(), target))
+        "item" | "fund" => {
+            let target = parse_amount(&form.target_amount, "目标金额")?;
+            Ok((kind.to_string(), target))
         }
         _ => Err(bad_request("攒钱项目类型无效")),
     }
@@ -468,11 +552,7 @@ pub async fn list(
             account_name: names.get(&account.id).cloned().unwrap_or_default(),
             currency: account.currency.clone(),
             balance: currency::format(balance, &account.currency),
-            target: if project.kind == "fund" {
-                currency::format(target, &account.currency)
-            } else {
-                String::new()
-            },
+            target: currency::format(target, &account.currency),
             progress,
             auto_label: if project.auto_enabled {
                 format!(
@@ -517,10 +597,12 @@ pub async fn list(
         });
     }
     let accounts = account_options(&state, &dek, &savings_ids).await?;
+    let legacy_targets = has_legacy_targets(&state, &dek).await?;
     let html = SavingsTemplate {
         has_projects: !rows.is_empty(),
         projects: rows,
         funding_accounts: accounts,
+        legacy_targets,
     }
     .render()
     .map_err(err500)?;
@@ -664,7 +746,7 @@ pub async fn edit_form(
         action: format!("/savings/{id}/edit"),
         name: crypto::decrypt_string(&dek, &project.name),
         kind: project.kind.clone(),
-        target_amount: if project.kind == "fund" {
+        target_amount: if crypto::decrypt_cents(&dek, &project.target_amount) > 0 {
             super::fmt_cents(crypto::decrypt_cents(&dek, &project.target_amount))
         } else {
             String::new()
@@ -757,6 +839,48 @@ pub async fn delete(
         .exec(&state.db)
         .await
         .map_err(err500)?;
+    Ok(Redirect::to("/savings"))
+}
+
+pub async fn quick_deposit(
+    State(state): State<AppState>,
+    Extension(SessionDek(dek)): Extension<SessionDek>,
+    Form(form): Form<QuickDepositForm>,
+) -> HandlerResult<Redirect> {
+    let _guard = state.balance_writes.lock().await;
+    let project = load_project(&state, form.project_id).await?;
+    if project.status == "realized" {
+        return Err(bad_request("项目已兑现或已达成目标，不能再存入"));
+    }
+    let savings = account::Entity::find_by_id(project.account_id)
+        .one(&state.db)
+        .await
+        .map_err(err500)?
+        .ok_or_else(|| bad_request("攒钱附属账户不存在"))?;
+    let source = validate_account(&state, form.from_account_id, "资金来源账户").await?;
+    if source.id == savings.id || is_savings_account_on(&state.db, source.id).await? {
+        return Err(bad_request("资金来源账户不能是攒钱账户"));
+    }
+    if source.currency != savings.currency {
+        return Err(bad_request("资金来源账户与攒钱账户必须使用相同货币"));
+    }
+    let amount = parse_amount(&form.amount, "存入金额")?;
+    let name = crypto::decrypt_string(&dek, &project.name);
+    execute_transfer(
+        &state,
+        &dek,
+        &source,
+        &savings,
+        amount,
+        &format!("攒钱转入 · {name}"),
+        false,
+        None,
+    )
+    .await?;
+    if let Ok(mut project) = load_project(&state, project.id).await {
+        let balance = super::accounts::current_balance(&state, &dek, savings.id).await?;
+        reconcile_fund_goal(&state, &dek, &mut project, balance).await?;
+    }
     Ok(Redirect::to("/savings"))
 }
 

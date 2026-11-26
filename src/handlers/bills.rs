@@ -21,7 +21,8 @@ use crate::{
     crypto, currency,
     entity::{
         account, account_detail, balance_adjustment, bill, bill_share, category, debt_person,
-        debt_record, installment_item, installment_plan, investment_execution, transfer,
+        debt_record, installment_item, installment_plan, investment_execution, savings_project,
+        transfer,
     },
     AppState, SessionDek,
 };
@@ -107,11 +108,21 @@ struct BillsTemplate {
     time_zone: String,
 }
 
+#[derive(Clone)]
+struct SavingsQuickOption {
+    id: i64,
+    name: String,
+    currency: String,
+    account_name: String,
+}
+
 #[derive(Template)]
 #[template(path = "quick_entry_page.html")]
 struct QuickEntryPageTemplate {
     accounts: Vec<AccountOption>,
     ordinary_accounts: Vec<AccountOption>,
+    savings_projects: Vec<SavingsQuickOption>,
+    savings_funding_accounts: Vec<AccountOption>,
     transfer_source_accounts: Vec<AccountOption>,
     repayment_accounts: Vec<AccountOption>,
     categories: Vec<CategoryOption>,
@@ -1288,9 +1299,41 @@ pub async fn new_form(
             }
         }
     }
-    let ordinary_accounts = accounts
+    let ordinary_accounts: Vec<AccountOption> = accounts
         .iter()
         .filter(|a| a.kind != "credit_card" && a.kind != "credit_service")
+        .cloned()
+        .collect();
+    let savings = savings_project::Entity::find()
+        .order_by_asc(savings_project::Column::Id)
+        .all(&state.db)
+        .await
+        .map_err(err500)?;
+    let savings_ids: HashSet<i64> = savings.iter().map(|project| project.account_id).collect();
+    let account_names: HashMap<i64, String> = accounts
+        .iter()
+        .map(|account| (account.id, account.name.clone()))
+        .collect();
+    let savings_projects = savings
+        .into_iter()
+        .filter(|project| project.status != "realized")
+        .map(|project| SavingsQuickOption {
+            id: project.id,
+            name: crypto::decrypt_string(&dek, &project.name),
+            currency: account_names
+                .get(&project.account_id)
+                .and_then(|_| accounts.iter().find(|a| a.id == project.account_id))
+                .map(|a| a.currency.clone())
+                .unwrap_or_default(),
+            account_name: account_names
+                .get(&project.account_id)
+                .cloned()
+                .unwrap_or_default(),
+        })
+        .collect();
+    let savings_funding_accounts = ordinary_accounts
+        .iter()
+        .filter(|account| !savings_ids.contains(&account.id))
         .cloned()
         .collect();
     let repayment_accounts = accounts
@@ -1301,6 +1344,8 @@ pub async fn new_form(
     let html = QuickEntryPageTemplate {
         accounts,
         ordinary_accounts,
+        savings_projects,
+        savings_funding_accounts,
         transfer_source_accounts,
         repayment_accounts,
         categories: category_options(&state, &dek).await?,

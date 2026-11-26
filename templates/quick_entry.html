@@ -2,11 +2,12 @@
   <h2 class="mb-4 text-lg font-semibold">{{ quick_entry_heading }}</h2>
   <noscript>{% include "quick_entry_fallback.html" %}</noscript>
   <div id="quick-entry-enhanced" hidden>
-    <div class="mb-5 grid grid-cols-4 gap-2" role="group" aria-label="记账类型">
+    <div class="mb-5 grid grid-cols-5 gap-2" role="group" aria-label="记账类型">
       <button type="button" data-quick-mode="income" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">收入</button>
       <button type="button" data-quick-mode="expense" aria-pressed="true" class="rounded-lg border border-blue-600 bg-blue-50 px-2 py-2 text-sm font-medium text-blue-700">支出</button>
       <button type="button" data-quick-mode="transfer" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">转账</button>
       <button type="button" data-quick-mode="repayment" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">还款</button>
+      <button type="button" data-quick-mode="savings" aria-pressed="false" class="rounded-lg border border-gray-200 px-2 py-2 text-sm text-gray-600">攒钱</button>
     </div>
     <form id="quick-form" method="post" action="/bills" data-quick-form="bill" hx-boost="false" class="space-y-4">
       <input type="hidden" name="redirect_to" value="{{ quick_redirect_to }}">
@@ -40,6 +41,10 @@
         </fieldset>
         <p id="quick-repayment-preview" class="break-words text-sm text-gray-700 sm:col-span-2" aria-live="polite"></p>
         <p class="break-words text-xs text-gray-500 sm:col-span-2">仅记录已实际完成的还款，不连接银行、不发起真实扣款；分期还款额含所选期次的本金、利息和手续费。</p>
+      </fieldset>
+      <fieldset data-quick-fields="savings" disabled class="hidden grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <div><label for="quick-savings-project" class="mb-1 block text-xs text-gray-500">攒钱项目</label><select id="quick-savings-project" name="project_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for project in savings_projects %}<option value="{{ project.id }}" data-currency="{{ project.currency }}">{{ project.name }} · {{ project.account_name }} · {{ project.currency }}</option>{% endfor %}</select><p class="mt-1 text-xs text-gray-500">存入附属账户的资金会被冻结，不能直接消费；只能通过攒钱页特殊情况转出。</p></div>
+        <div><label for="quick-savings-from" class="mb-1 block text-xs text-gray-500">资金来源账户</label><select id="quick-savings-from" name="from_account_id" required class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm">{% for account in savings_funding_accounts %}<option value="{{ account.id }}" data-currency="{{ account.currency }}">{{ account.name }} · {{ account.currency }}</option>{% endfor %}</select><p class="mt-1 text-xs text-gray-500">必须是同币种普通账户，且不能是另一个攒钱账户。</p></div>
       </fieldset>
       <p id="quick-entry-unavailable" class="hidden text-sm text-amber-700" role="status"></p>
       <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -129,13 +134,17 @@
   const unavailable = document.getElementById('quick-entry-unavailable');
   const updateAvailable = () => {
     const family = form.dataset.quickForm;
-    const account = document.getElementById(({ transfer: 'quick-transfer-from', repayment: 'quick-repayment-to' })[family] || 'quick-bill-account');
+    const account = document.getElementById(({ transfer: 'quick-transfer-from', repayment: 'quick-repayment-to', savings: 'quick-savings-from' })[family] || 'quick-bill-account');
     let message = account.options.length ? '' : '请先创建可用的资金账户。';
     if (family === 'transfer') {
       if (!account.value || account.selectedOptions[0]?.disabled) message = root.dataset.transferSourceUnavailable || '请选择可用的转出账户；信用卡仅可转出现有正余额。';
       else if (!Array.from(document.getElementById('quick-transfer-to').options).some(option => !option.disabled && option.value !== account.value)) message = '需要另一个非信用资金账户作为转入账户。';
     }
     if (family === 'repayment') message = root.dataset.repaymentUnavailable || '';
+    if (family === 'savings') {
+      const project = document.getElementById('quick-savings-project');
+      if (!project || !project.options.length) message = '请先创建攒钱项目。';
+    }
     if (family === 'bill' && !Array.from(document.getElementById('quick-bill-category').options).some(option => !option.disabled)) message = '请先在“分类”页面添加对应的收支分类。';
     unavailable.textContent = message;
     unavailable.classList.toggle('hidden', !message);
@@ -146,16 +155,16 @@
     buttons.forEach(button => button.disabled = busy || (editing && !['income', 'expense'].includes(button.dataset.quickMode)));
     form.inert = busy;
     const currency = account.selectedOptions[0]?.dataset.currency || '';
-    const label = family === 'transfer' ? '转出金额' : family === 'repayment' ? (document.getElementById('quick-repayment-mode').value === 'minimum' ? '机构实际最低还款额' : '还款扣款金额') : '金额';
+    const label = family === 'transfer' ? '转出金额' : family === 'repayment' ? (document.getElementById('quick-repayment-mode').value === 'minimum' ? '机构实际最低还款额' : '还款扣款金额') : family === 'savings' ? '存入金额' : '金额';
     amountLabel.textContent = `${label}${currency ? `（${currency}）` : ''}`;
   };
   const selectMode = mode => {
-    if (root.dataset.submitting === 'true' || !['expense', 'income', 'transfer', 'repayment'].includes(mode)) return;
+    if (root.dataset.submitting === 'true' || !['expense', 'income', 'transfer', 'repayment', 'savings'].includes(mode)) return;
     if (root.dataset.editingDraft === 'true' && !['expense', 'income'].includes(mode)) return;
     const family = mode === 'expense' || mode === 'income' ? 'bill' : mode;
     root.dataset.mode = mode;
     form.dataset.quickForm = family;
-    form.action = ({ bill: '/bills', transfer: '/transfers', repayment: '/repayments' })[family];
+    form.action = ({ bill: '/bills', transfer: '/transfers', repayment: '/repayments', savings: '/savings/deposit' })[family];
     root.querySelectorAll('[data-quick-fields]').forEach(fieldset => {
       const active = fieldset.dataset.quickFields === family;
       fieldset.disabled = !active;
@@ -177,7 +186,7 @@
     });
     document.getElementById('quick-bill-tools').classList.toggle('hidden', family !== 'bill');
     batch.classList.toggle('hidden', family !== 'bill');
-    submit.textContent = ({ expense: '保存支出', income: '保存收入', transfer: '确认转账', repayment: '确认记录还款' })[mode];
+    submit.textContent = ({ expense: '保存支出', income: '保存收入', transfer: '确认转账', repayment: '确认记录还款', savings: '确认存入攒钱' })[mode];
     if (family === 'bill') {
       kind.value = mode;
       kind.dispatchEvent(new Event('change', { bubbles: true }));

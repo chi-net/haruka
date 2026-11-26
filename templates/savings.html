@@ -10,6 +10,12 @@
 </div>
 
 <div id="savings-run-status" class="hidden mb-5 rounded-lg border p-4 text-sm" role="status" aria-live="polite"></div>
+{% if legacy_targets %}
+<section class="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+  <p>有历史攒钱项目还没有目标金额。目标金额与附属账户余额独立，请补齐一次；补齐后不会再提示。</p>
+  <a href="/savings/targets" class="mt-2 inline-block font-medium text-amber-900 underline">去补齐目标金额</a>
+</section>
+{% endif %}
 
 {% if !has_projects %}
 <p class="text-sm text-gray-500">还没有攒钱项目。先新建一个项目，并把一个普通账户设为只进不出的攒钱账户。</p>
@@ -30,12 +36,10 @@
     <div class="mt-4">
       <div class="text-xs text-gray-500">当前攒钱余额</div>
       <div class="mt-1 font-mono text-2xl break-all">{{ project.balance }}</div>
-      {% if project.kind == "fund" %}
       <div class="mt-2">
         <div class="flex flex-wrap items-baseline justify-between gap-1 text-xs text-gray-600"><span>目标 <span class="font-mono">{{ project.target }}</span></span><span>{{ project.progress }}</span></div>
         <div class="mt-1 h-2 overflow-hidden rounded-full bg-gray-200"><div class="h-full bg-emerald-500" style="width: {{ project.progress }}"></div></div>
       </div>
-      {% endif %}
       <p class="mt-1 text-xs text-gray-500">{{ project.auto_label }}{% if !project.next_run_value.is_empty() %} · 下一次 <time data-utc-time="{{ project.next_run_value }}">{{ project.next_run_value }}</time>{% endif %}</p>
       {% if project.realized %}
       <div class="mt-3 rounded border border-green-200 bg-green-50 p-2 text-xs text-green-900">

@@ -552,9 +552,14 @@ async fn main() {
         )
         .route("/savings/new", get(handlers::savings::new_form))
         .route(
+            "/savings/targets",
+            get(handlers::savings::targets_form).post(handlers::savings::apply_targets),
+        )
+        .route(
             "/savings/{id}/edit",
             get(handlers::savings::edit_form).post(handlers::savings::update),
         )
+        .route("/savings/deposit", post(handlers::savings::quick_deposit))
         .route("/savings/{id}/deposit", post(handlers::savings::deposit))
         .route("/savings/{id}/withdraw", post(handlers::savings::withdraw))
         .route("/savings/{id}/redeem", post(handlers::savings::redeem))

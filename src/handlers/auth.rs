@@ -178,6 +178,7 @@ pub async fn setup(
         wrapped_dek: Set(wrapped),
         failed_password_rounds: Set(0),
         installment_reconcile_state: Set(String::new()),
+        savings_target_state: Set(String::new()),
     }
     .insert(&state.db)
     .await

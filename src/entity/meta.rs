@@ -13,6 +13,8 @@ pub struct Model {
     pub failed_password_rounds: i32,
     #[sea_orm(default_value = "")]
     pub installment_reconcile_state: String,
+    #[sea_orm(default_value = "")]
+    pub savings_target_state: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

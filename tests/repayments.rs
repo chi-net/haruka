@@ -155,6 +155,30 @@ impl TestApp {
         );
         self.scalar("SELECT MAX(id) AS value FROM accounts").await
     }
+    async fn asset_account(&self, currency: &str) -> i64 {
+        assert_eq!(
+            self.post(
+                "/accounts",
+                &[
+                    ("name", "攒钱回归账户".into()),
+                    ("account_kind", "bank".into()),
+                    ("currency", currency.into()),
+                    ("card_number", "6222000000001234".into()),
+                    ("account_username", String::new()),
+                    ("credit_limit", "0".into()),
+                    ("billing_day", "1".into()),
+                    ("repayment_day", "20".into()),
+                    ("note", String::new()),
+                    ("transfer_fee_rate", "0".into()),
+                ]
+            )
+            .await
+            .status(),
+            StatusCode::SEE_OTHER
+        );
+        self.scalar("SELECT MAX(id) AS value FROM accounts").await
+    }
+
     async fn force_balance(&self, account: i64, balance: &str) {
         assert_eq!(
             self.post(
@@ -1055,4 +1079,72 @@ async fn rejects_future_and_pre_1970_bill_times() {
     let status = response.status();
     let body = response.text().await.unwrap();
     assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn savings_requires_a_target_and_freezes_the_linked_account() {
+    let app = TestApp::start().await;
+    let source = app.asset_account("CNY").await;
+    let savings = app.asset_account("CNY").await;
+    app.force_balance(source, "100").await;
+
+    let response = app
+        .post(
+            "/savings",
+            &[
+                ("name", "相机".into()),
+                ("kind", "item".into()),
+                ("target_amount", "80".into()),
+                ("account_id", savings.to_string()),
+                ("note", String::new()),
+                ("auto_enabled", "false".into()),
+                ("source_account_id", "0".into()),
+                ("amount", String::new()),
+                ("cycle", "month".into()),
+                ("next_run_at", String::new()),
+            ],
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let project = app
+        .scalar("SELECT MAX(id) AS value FROM savings_projects")
+        .await;
+    let page = app.get("/savings").await.text().await.unwrap();
+    assert!(page.contains("相机"));
+    assert!(page.contains("目标"));
+    assert!(page.contains("CNY 80.00"));
+
+    let deposited = app
+        .post(
+            "/savings/deposit",
+            &[
+                ("project_id", project.to_string()),
+                ("from_account_id", source.to_string()),
+                ("amount", "50".into()),
+            ],
+        )
+        .await;
+    assert_eq!(deposited.status(), StatusCode::SEE_OTHER);
+    assert_eq!(app.balance(savings).await, "CNY 50.00");
+
+    let blocked = app
+        .post(
+            "/bills",
+            &[
+                ("account_id", savings.to_string()),
+                ("kind", "expense".into()),
+                ("amount", "10.00".into()),
+                ("category", "餐饮".into()),
+                ("note", String::new()),
+                (
+                    "happened_at",
+                    (chrono::Utc::now() - chrono::Duration::minutes(1))
+                        .format("%Y-%m-%dT%H:%M")
+                        .to_string(),
+                ),
+            ],
+        )
+        .await;
+    assert_eq!(blocked.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(app.balance(savings).await, "CNY 50.00");
 }
