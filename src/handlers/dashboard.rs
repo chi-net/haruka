@@ -605,7 +605,7 @@ pub async fn show(
                 limit: currency::format(limit, &account.currency),
                 unbilled: currency::format(
                     statement
-                        .unbilled
+                        .unbilled_gross
                         .checked_add(unbilled_residual)
                         .ok_or_else(|| err500("未出账金额超出范围"))?,
                     &account.currency,
@@ -616,7 +616,7 @@ pub async fn show(
                 ),
                 unbilled_total: currency::format(
                     statement
-                        .unbilled
+                        .unbilled_gross
                         .checked_add(statement.unbilled_installment)
                         .and_then(|total| total.checked_add(unbilled_residual))
                         .ok_or_else(|| err500("未出账金额超出范围"))?,
