@@ -32,9 +32,6 @@ pub(crate) struct DueAmount {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Statement {
     pub unbilled: i64,
-    /// Gross ordinary consumption in the current unbilled period, before
-    /// transfers/payments are applied. Used only for dashboard display.
-    pub unbilled_gross: i64,
     pub unbilled_installment: i64,
     pub installment_principal: i64,
     pub next_installment: Option<DueAmount>,
@@ -165,19 +162,6 @@ pub(crate) fn calculate(
                 .max(0),
             );
             continue;
-        }
-        let (gross_close, _) = statement_dates(time_zone.date(bill.happened_at), detail)?;
-        if gross_close > today
-            && !bill
-                .refund_of_bill_id
-                .is_some_and(|id| installment_bills.contains_key(&id))
-        {
-            let amount = crypto::decrypt_cents(dek, &bill.amount);
-            if bill.kind == "income" {
-                statement.unbilled_gross = sub(statement.unbilled_gross, amount)?;
-            } else {
-                statement.unbilled_gross = add(statement.unbilled_gross, amount)?;
-            }
         }
         events.push(Event {
             happened_at: bill.happened_at,
@@ -760,16 +744,6 @@ mod tests {
             vec![due("2026-10-05", 0, 30425), due("2026-11-05", 0, 20150)]
         );
         assert_eq!(overdue.installment_principal, 70000);
-    }
-
-    #[test]
-    fn unbilled_gross_keeps_purchases_before_transfer_netting() {
-        let mut f = Fixture::new(11, 5);
-        f.bill(1, "2026-11-26 06:38:00", "expense", 181697);
-        f.transfer(1, "2026-11-26 06:38:00", true, 89200, 89200);
-        let statement = f.calculate("2026-11-26").unwrap();
-        assert_eq!(statement.unbilled_gross, 181697);
-        assert_eq!(statement.unbilled, 92497);
     }
 
     #[test]
